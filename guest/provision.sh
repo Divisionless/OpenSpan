@@ -137,9 +137,15 @@ stage3_audio() {
 stage4_coexist() {
   log "STAGE 4 — coexistence"
   systemctl daemon-reload
+  # establish the lingering user bus NOW so the audio stack can come up
+  # without waiting for a reboot (enable-linger alone starts user@0 only on
+  # the next boot; a cold clone verified 0/5 audio units up pre-reboot,
+  # 5/5 after -- this closes that gap)
+  systemctl start user@0.service 2>/dev/null || true
+  sleep 2
   # best-effort bring-up of the NON-radio units now; the real validation is
-  # the clean reboot below (which establishes the linger user bus + applies
-  # the kernel cmdline). The radio-gated units (openspanble, openspan-btready)
+  # the clean reboot below (which also applies the kernel cmdline). The
+  # radio-gated units (openspanble, openspan-btready)
   # are deliberately NOT started here — they'd block ~100s on wait-hci0.sh if
   # the BT dongle isn't attached to the VM yet. The reboot brings them up.
   for u in openspan-pipewire openspan-wireplumber openspan-pipewire-pulse \

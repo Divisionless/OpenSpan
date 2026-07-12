@@ -30,28 +30,28 @@ $target  = "$User@$VmHost"
 $sshBase = @("-p", "$Port", "-i", $Key, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=8")
 $scpBase = @("-P", "$Port", "-i", $Key, "-o", "StrictHostKeyChecking=accept-new")
 
-function Ssh { param([string]$cmd) & ssh @sshBase $target $cmd; if ($LASTEXITCODE -ne 0) { throw "ssh failed: $cmd" } }
+function Invoke-Guest { param([string]$cmd) & ssh.exe @sshBase $target $cmd; if ($LASTEXITCODE -ne 0) { throw "ssh failed: $cmd" } }
 
 Write-Host "== waiting for SSH on ${target}:$Port ==" -ForegroundColor Cyan
 $up = $false
 for ($i = 0; $i -lt 30; $i++) {
-  & ssh @sshBase $target "true" 2>$null
+  & ssh.exe @sshBase $target "true" 2>$null
   if ($LASTEXITCODE -eq 0) { $up = $true; break }
   Start-Sleep -Seconds 3
 }
 if (-not $up) { throw "no SSH after 90s -- is the VM booted and is the key in root's authorized_keys?" }
 
 Write-Host "== copying guest/ + key into the VM ==" -ForegroundColor Cyan
-& scp @scpBase -r $guest "${target}:/root/"
+& scp.exe @scpBase -r $guest "${target}:/root/"
 if ($LASTEXITCODE -ne 0) { throw "scp guest failed" }
-& scp @scpBase $pub "${target}:/root/guest/id_openspan.pub"
+& scp.exe @scpBase $pub "${target}:/root/guest/id_openspan.pub"
 if ($LASTEXITCODE -ne 0) { throw "scp key failed" }
 
 Write-Host "== running provision.sh all ==" -ForegroundColor Cyan
-Ssh "cd /root/guest && bash provision.sh all"
+Invoke-Guest "cd /root/guest && bash provision.sh all"
 
 Write-Host "== verifying (non-radio) ==" -ForegroundColor Cyan
-& ssh @sshBase $target "bash /root/guest/verify-provision.sh"
+& ssh.exe @sshBase $target "bash /root/guest/verify-provision.sh"
 $verifyRc = $LASTEXITCODE
 
 Write-Host ""
