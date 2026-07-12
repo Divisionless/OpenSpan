@@ -201,6 +201,16 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   now is never truncated mid-execution.
 - Radio ownership is a "station" vs "windows" **mode** (`mode.txt`); the app only
   grabs the radio in station mode.
+- **SSH key is self-provisioning (2026-07-12).** The host↔VM key `id_openspan`
+  is gitignored (a private key must never ship), so `run_app()` calls
+  `ensure_ssh_key()` on launch: if the key is missing it generates an
+  ed25519 keypair (no passphrase — unattended loopback to a local VM) and
+  never regenerates an existing one. The public half goes into the VM via
+  `guest/install-authorized-key.sh` (installs openssh-server, appends the
+  key de-duped, sets `PermitRootLogin prohibit-password` + `PubkeyAuthentication
+  yes`, restarts sshd) — called by the provisioner or once by hand. This is
+  what lets a fresh clone reach its own bridge instead of dying on a missing
+  key.
 
 ---
 

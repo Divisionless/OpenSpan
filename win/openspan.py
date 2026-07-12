@@ -120,6 +120,39 @@ def vbox(*args, quiet=False):
         return R()
 
 
+def ensure_ssh_key():
+    """Generate the host<->VM SSH key on first run if it's missing, so a
+    fresh clone can reach its own bridge (the private key is gitignored and
+    must never ship). ed25519, no passphrase -- this is an unattended
+    loopback to a local VM. Returns True if a key exists/was made.
+
+    The PUBLIC half (id_openspan.pub) still has to land in the VM's
+    /root/.ssh/authorized_keys; that's the VM provisioner's job
+    (guest/install-authorized-key.sh) -- this only guarantees the host has
+    a key to offer. Never regenerates an existing key."""
+    if os.path.exists(KEY):
+        return True
+    try:
+        r = subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", KEY,
+             "-C", "openspan-host"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=NO_WINDOW)
+        if r.returncode == 0 and os.path.exists(KEY):
+            _emit("event", "generated a new bridge SSH key "
+                           f"({os.path.basename(KEY)}). Install its .pub in "
+                           "the VM (the provisioner does this).")
+            return True
+        _emit("err", "couldn't generate the SSH key: "
+                     + (r.stderr or "ssh-keygen failed")[:180])
+    except FileNotFoundError:
+        _emit("err", "ssh-keygen not found — install the Windows OpenSSH "
+                     "client, or drop an id_openspan key in the app folder.")
+    except Exception as e:  # noqa: BLE001
+        _emit("err", f"SSH key generation failed: {e}")
+    return False
+
+
 def ssh_guest(cmd, timeout=20, quiet=False, show_result=True):
     if not quiet:
         _emit("cmd", "ssh: " + " ".join(cmd.split())[:240])
@@ -2500,6 +2533,8 @@ def run_app():
         # window or block on a dialog
         sys.exit(0)
 
+    ensure_ssh_key()  # a fresh clone has no id_openspan; make one before
+    #                   anything tries to ssh into the VM
     root = tk.Tk()
     app = App(root)
     # X asks first (it's a FULL STOP: portal + audio + VM), and offers

@@ -116,9 +116,12 @@ The **Windows side is turnkey** (pure standard-library Python; `pycaw` is an
 optional extra for the volume slider). The **VM side currently requires manual
 setup** and is the actively-worked rough edge (see *Roadmap*). Today it means:
 create a Debian 12 VM named `OpenSpan` with xHCI USB passthrough for your
-Bluetooth radio, NAT forwards (`2222→22`, `9955→9955`, and UDP `4010→4010` for
-audio), an SSH key for the host app to reach it, and the `guest/` scripts +
-systemd units installed under `/opt/openspan`. `TECHNICAL_NOTES.md` documents
+Bluetooth radio and NAT forwards (`2222→22`, `9955→9955`, and UDP `4010→4010`
+for audio), then install the `guest/` scripts + systemd units under
+`/opt/openspan`. For SSH access, the app **generates its key (`id_openspan`)
+automatically on first launch**; install its public half in the VM with
+`guest/install-authorized-key.sh` (pass `id_openspan.pub`), which the guided
+provisioner will run for you. `TECHNICAL_NOTES.md` documents
 every piece; a guided provisioner that does this end-to-end is the next
 milestone, so a clone is **not yet a one-command install**.
 
