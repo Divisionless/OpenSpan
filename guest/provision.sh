@@ -137,14 +137,16 @@ stage3_audio() {
 stage4_coexist() {
   log "STAGE 4 — coexistence"
   systemctl daemon-reload
-  # best-effort bring-up now; the real validation is a clean reboot (below),
-  # which also establishes the linger user bus and applies the kernel cmdline
+  # best-effort bring-up of the NON-radio units now; the real validation is
+  # the clean reboot below (which establishes the linger user bus + applies
+  # the kernel cmdline). The radio-gated units (openspanble, openspan-btready)
+  # are deliberately NOT started here — they'd block ~100s on wait-hci0.sh if
+  # the BT dongle isn't attached to the VM yet. The reboot brings them up.
   for u in openspan-pipewire openspan-wireplumber openspan-pipewire-pulse \
-           openspan-udprecv openspan-agent openspanble; do
+           openspan-udprecv openspan-agent; do
     systemctl restart "$u.service" 2>/dev/null || \
-      warn "$u didn't start now — a reboot should bring it up"
+      warn "$u didn't start now — the reboot should bring it up"
   done
-  systemctl start openspan-btready.service 2>/dev/null || true
 
   log "provisioned. COLD-REBOOT the VM now to validate boot order + the"
   log "usbcore.autosuspend kernel cmdline, then (operator):"

@@ -9,4 +9,9 @@ for i in $(seq 100); do
   fi
   sleep 1
 done
+# Timed out. Exit 0 anyway (a hard-fail here would just crash-loop the daemon
+# with no better outcome), but leave a clear breadcrumb — the usual cause is
+# the USB Bluetooth radio not being passed through to the VM.
+echo "wait-hci0: hci0 never enumerated after 100s — check the VM's USB" \
+     "Bluetooth passthrough (VBoxManage list usbhost / the USB filter)." >&2
 exit 0
