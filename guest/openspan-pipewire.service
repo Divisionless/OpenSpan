@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenSpan PipeWire (system)
+After=dbus.service network.target
+Wants=dbus.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/openspan
+ExecStartPre=/bin/mkdir -p /run/openspan
+ExecStartPre=/bin/chmod 700 /run/openspan
+ExecStart=/usr/bin/pipewire
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

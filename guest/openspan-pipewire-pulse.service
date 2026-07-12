@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenSpan PipeWire Pulse (system)
+After=openspan-pipewire.service openspan-dbus.service
+Requires=openspan-pipewire.service openspan-dbus.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/openspan
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/openspan/bus
+ExecStartPre=/bin/sh -c 'for i in $(seq 40); do [ -S /run/openspan/pipewire-0 ] && exit 0; sleep 0.5; done'
+ExecStart=/usr/bin/pipewire-pulse
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

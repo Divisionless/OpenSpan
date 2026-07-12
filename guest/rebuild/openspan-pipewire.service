@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenSpan PipeWire (system daemon on the lingering user@0 bus)
+After=user@0.service sound.target
+Wants=user@0.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+ExecStartPre=/opt/openspan/wait-userbus.sh
+ExecStart=/usr/bin/pipewire
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

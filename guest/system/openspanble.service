@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenSpan BLE HID peripheral daemon
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do hciconfig hci0 up 2>/dev/null && break; sleep 1; done'
+# Enforce LE-only every start (a dual-mode adapter shows a Classic decoy
+# entry on the iPad that cannot pair). ControllerMode=le alone does not
+# clear the controller BR/EDR bit after a fresh USB re-enumeration.
+ExecStartPre=/opt/openspan/ensure-dualmode.sh
+ExecStart=/usr/bin/python3 /opt/openspan/openspan_ble.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

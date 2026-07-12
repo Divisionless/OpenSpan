@@ -1,0 +1,8 @@
+# Guest scripts run in Linux (the VM) and MUST stay LF or bash breaks.
+# Normalize everything to LF; keep Windows-only launchers CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.ico binary
+*.raw binary

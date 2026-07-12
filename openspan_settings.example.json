@@ -1,0 +1,14 @@
+{
+  "_help": [
+    "mouse_sensitivity scales pointer speed on the iPad (0.3 slow \u2026 2.5 fast).",
+    "daemon_host: 127.0.0.1 = an OpenSpan VM on THIS PC. Set it to another",
+    "  machine's LAN IP (e.g. a spare laptop) to use that machine's Bluetooth",
+    "  as the bridge, leaving this PC's radio free for headphones.",
+    "Restart the portal after changing anything here."
+  ],
+  "mouse_sensitivity": 1.0,
+  "daemon_host": "127.0.0.1",
+  "daemon_port": 9955,
+  "clipboard_port": 9966,
+  "_clipboard": "clipboard_token is minted on first launch and stays LOCAL (gitignored)"
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenSpan WirePlumber (session manager on the lingering user@0 bus)
+After=openspan-pipewire.service
+Requires=openspan-pipewire.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+ExecStartPre=/opt/openspan/wait-pw.sh
+ExecStart=/usr/bin/wireplumber
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

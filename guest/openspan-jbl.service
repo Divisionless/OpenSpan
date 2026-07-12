@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenSpan JBL earbuds keepalive
+After=openspan-audio.service bluetooth.service
+Wants=openspan-audio.service
+
+[Service]
+ExecStart=/opt/openspan/openspan-jbl.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

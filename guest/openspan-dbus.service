@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenSpan session D-Bus (for PipeWire/WirePlumber)
+After=network.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/openspan
+ExecStartPre=/bin/sh -c 'rm -f /run/openspan/bus'
+ExecStart=/usr/bin/dbus-daemon --session --address=unix:path=/run/openspan/bus --nofork --nopidfile --syslog-only
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

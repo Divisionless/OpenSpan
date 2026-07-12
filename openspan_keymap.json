@@ -1,0 +1,33 @@
+{
+  "_help": [
+    "OpenSpan keymap. Edit this file, then restart openspan_portal.py.",
+    "iPadOS uses the Command key (cmd) for system shortcuts:",
+    "  cmd+tab = app switcher,  cmd+h = Home,  cmd+space = search,",
+    "  cmd+c/v/x = copy/paste/cut,  cmd+shift+3 = screenshot.",
+    "",
+    "modifier_remap: make a Windows modifier behave as an iPad one.",
+    "  Physical (Windows) names: ctrl shift alt win",
+    "  iPad names:              ctrl shift alt cmd",
+    "  With 'alt':'cmd', holding Alt acts as Command, so Alt+Tab",
+    "  becomes Cmd+Tab (the app switcher) and holding it cycles apps.",
+    "",
+    "overrides: when the exact 'from' combo is pressed, send 'to' instead.",
+    "  Key names: a-z, 0-9, f1-f12, tab space enter esc backspace",
+    "  delete home end pageup pagedown left right up down minus equals.",
+    "  Use overrides for one-shot actions (copy, paste, find)."
+  ],
+
+  "modifier_remap": {
+    "alt": "cmd"
+  },
+
+  "overrides": [
+    { "from": ["ctrl", "c"], "to": ["cmd", "c"], "note": "Copy" },
+    { "from": ["ctrl", "v"], "to": ["cmd", "v"], "note": "Paste" },
+    { "from": ["ctrl", "x"], "to": ["cmd", "x"], "note": "Cut" },
+    { "from": ["ctrl", "a"], "to": ["cmd", "a"], "note": "Select all" },
+    { "from": ["ctrl", "z"], "to": ["cmd", "z"], "note": "Undo" },
+    { "from": ["ctrl", "f"], "to": ["cmd", "f"], "note": "Find" },
+    { "from": ["ctrl", "space"], "to": ["cmd", "space"], "note": "Spotlight" }
+  ]
+}

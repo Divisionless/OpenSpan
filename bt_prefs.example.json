@@ -1,0 +1,5 @@
+{
+  "_note": "Copied to bt_prefs.json on first run. renames = custom device names (survive re-pairing), keyed by MAC; blacklist = MACs hidden from scans. Yours is local and gitignored.",
+  "renames": {},
+  "blacklist": []
+}

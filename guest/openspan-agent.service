@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenSpan Bluetooth pairing agent (persistent, NoInputNoOutput auto-accept)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+# A single long-lived agent that stays registered so pairing always has an
+# agent present to complete the just-works handshake. This is the piece that
+# was missing -- ephemeral 'bluetoothctl agent on' calls unregister on exit.
+ExecStart=/usr/bin/bt-agent -c NoInputNoOutput
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

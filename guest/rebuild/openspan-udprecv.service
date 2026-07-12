@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenSpan UDP->sink audio bridge (Windows audio -> default sink)
+After=openspan-wireplumber.service
+Requires=openspan-wireplumber.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+ExecStartPre=/opt/openspan/wait-pw.sh
+ExecStart=/usr/bin/python3 /opt/openspan/udp_to_sink.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
