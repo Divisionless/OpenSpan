@@ -110,21 +110,27 @@ and the input portal, arranges the iPad among your monitors, and edits the
 keymap. In the portal, cross the arranged edge to control the iPad;
 **Ctrl+Alt+Q** bails out, **Ctrl+Alt+I** toggles manually.
 
-## Setup — honest status
+## Setup
 
-The **Windows side is turnkey** (pure standard-library Python; `pycaw` is an
-optional extra for the volume slider). The **VM side currently requires manual
-setup** and is the actively-worked rough edge (see *Roadmap*). Today it means:
-run `create-vm.ps1` to stand up the VM with the correct hardware — xHCI USB
-passthrough, the NAT forwards (`2222→22`, `9955→9955`, UDP `4010→4010`), and a
-USB filter for your Bluetooth radio (`powershell -ExecutionPolicy Bypass -File
-create-vm.ps1 -Iso <debian-netinst.iso>`) — install Debian 12 into it, then
-install the `guest/` scripts + systemd units under `/opt/openspan`. For SSH access, the app **generates its key (`id_openspan`)
-automatically on first launch**; install its public half in the VM with
-`guest/install-authorized-key.sh` (pass `id_openspan.pub`), which the guided
-provisioner will run for you. `TECHNICAL_NOTES.md` documents
-every piece; a guided provisioner that does this end-to-end is the next
-milestone, so a clone is **not yet a one-command install**.
+The Windows side is turnkey (pure standard-library Python; `pycaw` is an
+optional extra for the volume slider). The VM is built with the provided
+scripts — a few steps, all scripted:
+
+1. **Create the VM:** `powershell -ExecutionPolicy Bypass -File create-vm.ps1
+   -Iso <debian-12-netinst.iso>` — stands it up with the right hardware: xHCI
+   USB passthrough, the NAT forwards (`2222→22`, `9955→9955`, UDP `4010→4010`),
+   and a USB filter for your Bluetooth radio.
+2. **Install Debian 12** into it (minimal — a sudo user + the SSH-server task).
+3. **Provision it:** the app auto-generates its SSH key (`id_openspan`) on
+   first launch; get its public half into the VM, then copy `guest/` in and
+   run `sudo bash guest/provision.sh all` — this installs the packages, the
+   BLE-HID + audio stacks, every config and systemd unit — and reboot.
+
+`cold-test.ps1` automates the software half of steps 2–3 against a reachable
+VM and verifies it (`verify-provision.sh`). The Windows→VM provisioning path is
+**verified on a fresh Debian clone**; the Bluetooth radio + iPad pairing are
+the hardware step you confirm once. `PROVISION_SPEC.md` and `TECHNICAL_NOTES.md`
+document every piece.
 
 **iPad pairing:** Bluetooth ▸ tap **OpenSpan Keyboard** ▸ accept the prompt.
 It auto-reconnects after that. (`Settings ▸ General ▸ Keyboard ▸ Hardware
@@ -135,8 +141,9 @@ Keyboard` appears once bonded — a handy check.)
 - **Working & tested:** BLE keyboard + mouse, edge crossing, keymap remaps,
   Bluetooth audio routing (volume + balance), two-way clipboard, compact mode,
   auto-reconnect, single-file exe.
-- **In progress:** a reproducible VM — first-run SSH-key provisioning, a
-  create-VM script, and a full guest provisioner — so setup becomes turnkey.
+- **Reproducible VM:** `create-vm.ps1` builds the VM, `guest/provision.sh`
+  turns a fresh Debian into the working bridge, and `cold-test.ps1` provisions
+  + verifies it — the software path is verified on a fresh clone.
 - **Known limits:** BLE sends *relative* mouse motion, so the pointer can drift
   (a corner-park re-sync is planned); touch-made copies on the iPad don't
   auto-sync to the clipboard (use Ctrl+C).
