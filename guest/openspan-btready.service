@@ -1,6 +1,6 @@
 [Unit]
 Description=OpenSpan radio-ready boot helper (waits for radio, ensures bluez sees it)
-After=bluetooth.service openspan-audio.service network.target
+After=bluetooth.service network.target
 
 [Service]
 Type=oneshot
