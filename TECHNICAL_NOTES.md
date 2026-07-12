@@ -43,17 +43,17 @@ PC apps → VB-Audio Virtual Cable (default output)
   bus.** `loginctl enable-linger root` gives a durable `/run/user/0/bus`. This
   is the crux — an earlier hand-rolled `dbus-daemon` could not accept
   WirePlumber's reconnects. Do **not** hand-roll dbus.
-- **The A2DP transport must not idle-suspend — and (verified 2026-07-10) the
-  thing preventing it is the bridge's continuous silence feed, nothing else.**
-  The WirePlumber suspend config this doc used to credit
-  (`session.suspend-timeout-seconds = 0`, `node.pause-on-idle = false`,
-  `with-logind = false`) does **not exist** in the VM — there is no
-  `bluetooth.lua.d` at all, and no suspend/pause-on-idle/with-logind setting
-  anywhere in `/etc`, `/root/.config`, or `/usr/share/wireplumber`. With
-  WirePlumber defaults the sink would drop ~5 s into silence; it doesn't,
-  because `udp_to_sink.py` never stops feeding the stream. **Never remove the
-  silence feed.** (Re-applying those settings in a `bluetooth.lua.d` config
-  would be legitimate belt-and-suspenders, but is currently untested.)
+- **The A2DP transport must not idle-suspend. TWO mechanisms hold it, both
+  present (verified from the live VM 2026-07-12 via `dpkg -V`):** (1) the
+  WirePlumber bluez config `/usr/share/wireplumber/bluetooth.lua.d/50-bluez-config.lua`
+  is *modified* from stock to set `session.suspend-timeout-seconds = 0`,
+  `node.pause-on-idle = false`, `with-logind = false` (captured at
+  `guest/system/wireplumber-50-bluez-config.lua`); and (2) `udp_to_sink.py`
+  never stops feeding the stream. **Never remove the silence feed.** *(An
+  earlier note here claimed this config didn't exist and the feed was the
+  whole story — that was wrong; ground truth shows both. HFP is disabled in
+  this same file via `bluez5.hfphsp-backend = "none"`, so the repo's
+  `52-no-hfp.lua` is unused.)*
 - The stock per-login `pipewire` user service is **masked** (login-churn
   contention).
 - **Sample rate must match end-to-end.** VB-Cable's default is 48000 Hz / 2 ch;
@@ -335,7 +335,7 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A2DP drops ~5 s into silence | transport idle-suspend (no suspend config exists in the VM) | the bridge's continuous silence feed — never remove it |
+| A2DP drops ~5 s into silence | transport idle-suspend | modified `50-bluez-config.lua` (`suspend-timeout=0`, `pause-on-idle=false`, `with-logind=false`) **and** the bridge's continuous silence feed — both present, keep both |
 | Audio latency grows over a session | open-loop silence injection + hidden 64 KB stdin pipe | debounced gap-filler (100 ms) + `F_SETPIPE_SZ` 16 KB |
 | WirePlumber won't reconnect | hand-rolled dbus | linger user bus `/run/user/0/bus` |
 | Garbled / pitch-shifted audio | sample-rate mismatch | pin both ends to 48000/2 |

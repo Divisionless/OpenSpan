@@ -36,10 +36,13 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
   `/run/user/0/bus`). This was the crux. Do not hand-roll dbus.
 - **Bruise:** audio dropped ~5s into any silence. Cheap TWS earbuds fully
   disconnect when the A2DP transport idle-suspends.
-- **Fix:** the UDP bridge feeds real-time silence during gaps, so the
-  transport never idles. (Later found the WirePlumber suspend-config I
-  *thought* was holding it didn't even exist in the VM — the feed was the
-  whole story. Verify, don't assume.)
+- **Fix:** two things hold it, and it took an audit of the live VM to get
+  this right. The WirePlumber bluez config is edited to disable suspend
+  (`suspend-timeout=0`, `pause-on-idle=false`, `with-logind=false`), *and*
+  the UDP bridge feeds real-time silence during gaps so the transport never
+  idles. I'd earlier written that the config didn't exist and the feed was
+  the whole story — wrong on both counts. Verify against ground truth, don't
+  trust your own notes.
 - Contention gremlin: Debian's stock per-login PipeWire services spawned a
   competing WirePlumber on every SSH login that grabbed then dropped the
   endpoints — "it dropped the instant I typed." Masked them.
