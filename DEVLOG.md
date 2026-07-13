@@ -121,6 +121,30 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
   stale enough to tell people the *wrong* USB mode. Added SSH-key
   self-provisioning and a create-VM script.
 
+### Jul 13 — after v1.0: the volume-curve bug
+- Swapped to a second (identical) pair of earbuds mid-session; they came in
+  **ear-splitting**. First reflex was a guess — "these buds are just louder
+  hardware." Wrong — and saying it out loud, then flagging it for a human
+  check, is what saved it.
+- A five-agent adversarial review of the whole volume chain (four read-only
+  investigators + an adjudicator) refuted the guess and found **two separate
+  things**:
+  - *The hot arrival:* a Bluetooth sink WirePlumber had no saved volume for
+    came up at unity 100%. These sinks are A2DP absolute-volume
+    (`HW_VOLUME_CTRL`), so 100% *is* the earbuds' hardware max — a never-seen
+    pair starts at full. (I first mis-read it as one pair changing its MAC on
+    reset; the device list showed two physically distinct pairs. Human ground
+    truth beat the log inference.)
+  - *The real bug:* the volume slider had no usable range — everything above
+    ~25% was "too loud." The sender read the Windows master's *slider position*
+    (`GetMasterVolumeLevelScalar`, a tapered 0–1) and used it as a raw
+    amplitude. At 5% that applied −26.7 dB where the slider truly meant
+    −46.2 dB (~20 dB too hot), and linear faders pile all their range into the
+    bottom.
+- **Fix:** read the actual level in dB (`GetMasterVolumeLevel`) and apply
+  `10^(dB/20)`, so the earbuds track the same perceptual curve as the Windows
+  slider. Tagged v1.0.1.
+
 ---
 
 ## Operating principles that shaped it
@@ -205,6 +229,6 @@ tray, auto-reconnect, single-file exe. Clean repo, honest docs.
 
 Reproducible VM: `create-vm.ps1` + `guest/provision.sh` turn a fresh Debian
 into the working bridge — validated on a fresh clone (software) and confirmed
-end-to-end on the radio + iPad. Tagged v1.0.
+end-to-end on the radio + iPad. Tagged v1.0; v1.0.1 fixes the volume-slider curve.
 
 Built by Douglas Perianu Knoll, with Claude.

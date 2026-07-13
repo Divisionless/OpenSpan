@@ -94,8 +94,22 @@ def _volume_watcher():
                     iface = endpoint.Activate(
                         IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
                     vol = cast(iface, POINTER(IAudioEndpointVolume))
-                GAIN = 0.0 if vol.GetMute() else float(
-                    vol.GetMasterVolumeLevelScalar())
+                if vol.GetMute():
+                    GAIN = 0.0
+                else:
+                    # Follow the SAME perceptual (audio-taper) curve as the
+                    # Windows volume slider. GetMasterVolumeLevelScalar returns
+                    # the tapered 0..1 SLIDER POSITION; multiplying the PCM by
+                    # it directly (the old `f * scalar`) applied far less
+                    # attenuation than the slider position implied (e.g. at 5%
+                    # slider it applied -26.7 dB instead of the real -46.2 dB,
+                    # ~20 dB too hot), crushing all usable range into the
+                    # bottom ~25% of travel. GetMasterVolumeLevel gives the
+                    # ACTUAL dB the user dialed; 10^(dB/20) is the faithful
+                    # linear amplitude, so the earbuds track the slider the way
+                    # a normal Windows volume slider does.
+                    db = float(vol.GetMasterVolumeLevel())  # <= 0 dB; 0 = full
+                    GAIN = 10.0 ** (db / 20.0)
             except Exception:
                 vol = None   # re-acquire next tick (e.g. device changed)
                 GAIN = 1.0
