@@ -256,26 +256,31 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   defers. Refreshes never get swallowed mid-loop — a busy refresh queues a
   trailing rerun so a fresh CONNECTED can't be painted over by a pre-link
   snapshot.
-- **Compact mode (2026-07-11):** the header's **▣ Compact** button collapses
-  the app to a ~360×540 portrait card — status dots (VM/iPad/Audio/Portal +
-  READY dot), the connected headphones, a **Volume** slider (sets the
-  Windows master volume — the exact dial the sender's GAIN mirror follows),
-  and an **L↔R Balance** slider. Balance CANNOT use Windows channel volumes
-  (the sender's loopback capture is pre-volume — same reason the GAIN
-  mirror exists); the slider writes `audio_balance.txt` (-1..+1, gitignored)
-  which the sender polls every 150 ms and applies as per-channel gains in
-  the callback (centered = untouched fast path). Buttons: **⛶ Full app** /
-  **Send to tray**. While compact, the buds line refreshes via bt-list
-  every ~15 s (quiet — no console spam). **All volume COM lives on one
-  dedicated `_volume_thread`** (the sender's proven pattern): COM on the Tk
-  thread froze the whole UI whenever AudioSrv was busy, and a cached
-  endpoint goes stale on a default-device switch with NO error — the
-  thread re-resolves it every ~30 s. The slider hands the thread a
+- **One window: Audio panel + collapsible console (2026-07-13):** there is no
+  separate "compact" mode. The command console (right panel) collapses by
+  default so the window opens lean; the header's **Console** toggle packs/
+  unpacks it and grows/shrinks the window width to match (a width change
+  requested while maximized is deferred and re-applied on un-maximize, so it
+  can't restore wrong-sized). The header's **Send to Tray** hides the window
+  while the bridge — VM, audio, portal — keeps running; the tray icon restores
+  it. An always-visible **Audio & status** panel (in the Bluetooth column,
+  shown in both the console-open and tray-restored states) carries the
+  readiness line, VM/iPad/Audio/Portal dots, the connected headphones, a
+  **Volume** slider (sets the Windows master volume — the exact dial the
+  sender's GAIN mirror follows), and an **L↔R Balance** slider. Balance CANNOT
+  use Windows channel volumes (the sender's loopback capture is pre-volume —
+  same reason the GAIN mirror exists); the slider writes `audio_balance.txt`
+  (-1..+1, gitignored) which the sender polls every 150 ms and applies as
+  per-channel gains in the callback (centered = untouched fast path). **All
+  volume COM lives on one dedicated `_volume_thread`** (the sender's proven
+  pattern): COM on the Tk thread froze the whole UI whenever AudioSrv was busy,
+  and a cached endpoint goes stale on a default-device switch with NO error —
+  the thread re-resolves it every ~30 s. The slider hands the thread a
   latest-wins target; pycaw missing → slider disabled, audio unaffected.
-  Balance writes are atomic (`.new` + `os.replace`) — a truncate-then-
-  write raced the sender's 150 ms poll into audible one-tick recenters
-  mid-drag — and both readers treat non-finite values ('nan'/'inf', which
-  PARSE fine) as centered rather than letting the clamp hard-pan them.
+  Balance writes are atomic (`.new` + `os.replace`) — a truncate-then-write
+  raced the sender's 150 ms poll into audible one-tick recenters mid-drag —
+  and both readers treat non-finite values ('nan'/'inf', which PARSE fine) as
+  centered rather than letting the clamp hard-pan them.
 - **Auto-reconnect (2026-07-10, hardened by adversarial review):** the buds
   page the adapter during the ~90 s VM boot, give up before the stack is
   READY, and never retry — so the app retries for them.

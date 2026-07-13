@@ -47,10 +47,12 @@ clean — see `TECHNICAL_NOTES.md`.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync
   (via Apple Shortcuts + a tiny token-guarded LAN relay). See
   `CLIPBOARD_SETUP.md`.
-- **Compact mode** — collapse to a small always-handy panel (status, volume,
-  balance) or the system tray.
-- **One-click connect + auto-reconnect** — the app retries a stubborn pairing
-  and brings the earbuds back on its own after the bridge boots.
+- **Lean window + tray** — the command console tucks away by default for a
+  compact window; **Send to Tray** keeps the bridge (VM, audio, portal) running
+  in the background.
+- **Fast pairing + auto-reconnect** — one click frees the whole radio for a
+  full-power broadcast so the iPad finds the keyboard quickly, auto-starts the
+  bridge the moment it bonds, then brings the earbuds back on their own.
 - **Single-file build** — packages to one `OpenSpan.exe` (see `BUILD.md`).
 
 ## Hard-won facts (read before you "fix" something)
@@ -139,8 +141,8 @@ Keyboard` appears once bonded — a handy check.)
 ## Roadmap
 
 - **Working & tested:** BLE keyboard + mouse, edge crossing, keymap remaps,
-  Bluetooth audio routing (volume + balance), two-way clipboard, compact mode,
-  auto-reconnect, single-file exe.
+  Bluetooth audio routing (volume + balance), two-way clipboard, fast pairing,
+  collapsible console + tray, auto-reconnect, single-file exe.
 - **Reproducible VM:** `create-vm.ps1` builds the VM, `guest/provision.sh`
   turns a fresh Debian into the working bridge, and `cold-test.ps1` provisions
   + verifies it — the software path is verified on a fresh clone.

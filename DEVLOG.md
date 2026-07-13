@@ -199,11 +199,12 @@ is not "passes as an exe."
 ## Status
 
 Working & tested: BLE keyboard + mouse, edge crossing, keymap remaps,
-Bluetooth audio (volume + balance), two-way clipboard, compact mode,
-auto-reconnect, single-file exe. Clean repo, honest docs.
+Bluetooth audio (volume + balance), two-way clipboard, fast pairing, themed
+in-frame dialogs, a lean one-window UI with a collapsible console + system
+tray, auto-reconnect, single-file exe. Clean repo, honest docs.
 
-Remaining: a reproducible VM provisioner so a stranger can go from a fresh
-Debian install to "the mouse moves on the iPad" without hand-tweaking — the
-last chunk, and the one that still needs real cold-clone testing on hardware.
+Reproducible VM: `create-vm.ps1` + `guest/provision.sh` turn a fresh Debian
+into the working bridge — validated on a fresh clone (software) and confirmed
+end-to-end on the radio + iPad. Tagged v1.0.
 
 Built by Douglas Perianu Knoll, with Claude.
