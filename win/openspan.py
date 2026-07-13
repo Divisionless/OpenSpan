@@ -1459,8 +1459,8 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("OpenSpan")
-        root.geometry("1500x860")
-        root.minsize(1300, 640)
+        root.geometry("1120x860")   # lean: console collapsed; grows when opened
+        root.minsize(940, 600)
         root.configure(bg=BG)
         try:
             root.iconbitmap(ICON)
@@ -1488,11 +1488,10 @@ class App:
         root.after(50, self._drain_ui)
         self._theme()
 
-        # The whole full-size UI lives inside self._full so Compact mode can
-        # swap the app's face with a single pack call (and back)
-        self.compact = False
-        self._saved_geom = None
-        self._saved_zoom = False
+        # The whole UI lives inside self._full. The command console collapses to
+        # keep the default window lean; it re-opens via the header toggle.
+        self._console_open = False
+        self._was_zoomed = False   # for the un-maximize width re-sync
         self._vol_ok = None      # None = probing; set by _volume_thread
         self._vol_now = None     # last read master volume 0..1
         self._vol_target = None  # slider-requested volume (thread applies)
@@ -1506,8 +1505,8 @@ class App:
         # header/status/notebook then fill the remaining left cavity. Shows
         # every command the app runs and a big readiness banner up top.
         consf = tk.Frame(full, bg=PANEL, width=390)
-        consf.pack(side="right", fill="y")
         consf.pack_propagate(False)
+        self._consf = consf   # collapsed by default; opened via the header toggle
         self._ready_state = None
         self._ipad_conn = None
         self.ready_lbl = tk.Label(consf, text="◌  Starting…", bg=PANEL,
@@ -1542,13 +1541,17 @@ class App:
 
         head = tk.Frame(full, bg=BG)
         head.pack(fill="x", padx=16, pady=(14, 4))
+        self._cons_anchor = head   # the console packs before this when opened
         tk.Label(head, text="OpenSpan", bg=BG, fg=FG,
                  font=("Segoe UI Semibold", 18)).pack(side="left")
         tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
                  font=("Segoe UI", 10)).pack(side="left", padx=(10, 0),
                                              pady=(8, 0))
-        ttk.Button(head, text="▣  Compact", command=self._to_compact).pack(
+        ttk.Button(head, text="⤓  Send to Tray", command=self._to_tray).pack(
             side="right")
+        self._cons_btn = ttk.Button(head, text="▸  Console",
+                                    command=self._toggle_console)
+        self._cons_btn.pack(side="right", padx=(0, 8))
 
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
@@ -1573,6 +1576,7 @@ class App:
         tk.Label(bt_col, text="Bluetooth & Headphones", bg=BG, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(anchor="w",
                                                       padx=12, pady=(0, 2))
+        self._build_audio_panel(bt_col)
         self.bt_panel = BtPanel(bt_col, app=self)
         self.bt_panel.pack(fill="both", expand=True)
 
@@ -1665,8 +1669,6 @@ class App:
                  bg=BG, fg="#5b6172", font=("Segoe UI", 8)).pack(
             side="bottom", pady=6)
 
-        self._build_compact()
-
         # clipboard relay for the iPad shortcuts (CLIPBOARD_DESIGN.md);
         # fail-soft: without it everything else works, and Ctrl+Alt+V
         # typing paste is unaffected
@@ -1691,108 +1693,115 @@ class App:
         # updates the VM-side connection logic (no manual deploy, no reliance)
         self._sync_guest_scripts()
         self.root.after(120, self._dark_titlebar)
+        # re-sync the window width to the console state when un-maximized (a
+        # width change requested while zoomed is deferred, not lost)
+        self.root.bind("<Configure>", self._on_configure)
         self._tick()
 
-    # ---- Compact mode: little portrait window, full audio control --------
-    def _build_compact(self):
-        """The collapsed face: ~360x540 portrait. Status dots for VM /
-        iPad / audio / portal, the connected headphones, a volume slider
-        (drives the Windows master volume — the same dial the sender's
-        GAIN mirror follows), an L/R balance slider (written to
-        audio_balance.txt, applied per-channel inside the sender), and
-        buttons to re-expand or drop to the tray."""
-        c = tk.Frame(self.root, bg=BG)
-        self._compact = c
+    # ---- Audio & status panel (always visible) + console toggle ----------
+    def _build_audio_panel(self, parent):
+        """Audio + at-a-glance status, always on screen — this is what the tray
+        restores to and what the console-collapsed window shows. Readiness line,
+        VM / iPad / audio / portal dots, the connected headphones, a volume
+        slider (drives the Windows master volume, the same dial the sender's
+        GAIN mirror follows), and an L/R balance slider (written to
+        audio_balance.txt, applied per-channel inside the sender)."""
+        p = ttk.LabelFrame(parent, text="Audio & status", padding=8)
+        p.pack(fill="x", padx=12, pady=(0, 6))
 
-        top = tk.Frame(c, bg=BG)
-        top.pack(fill="x", padx=14, pady=(12, 4))
-        tk.Label(top, text="OpenSpan", bg=BG, fg=FG,
-                 font=("Segoe UI Semibold", 14)).pack(side="left")
-        self.c_ready = tk.Label(top, text="◌", bg=BG, fg=MUTED,
-                                font=("Segoe UI Semibold", 14))
-        self.c_ready.pack(side="right")
+        self.c_ready = tk.Label(p, text="◌  Starting…", bg=BG, fg=MUTED,
+                                font=("Segoe UI Semibold", 11), anchor="w")
+        self.c_ready.pack(fill="x")
 
-        grid = tk.Frame(c, bg=CARD)
-        grid.pack(fill="x", padx=12, pady=6)
+        dots = tk.Frame(p, bg=BG)
+        dots.pack(fill="x", pady=(4, 0))
         self.c_stat = {}
-        for i, (key, label) in enumerate([("vm", "VM"), ("ipad", "iPad"),
-                                          ("audio", "Audio"),
-                                          ("portal", "Portal")]):
-            cell = tk.Frame(grid, bg=CARD)
-            cell.grid(row=i // 2, column=i % 2, sticky="w", padx=12, pady=5)
-            dot = tk.Label(cell, text="●", bg=CARD, fg=MUTED,
-                           font=("Segoe UI", 11))
-            dot.pack(side="left")
-            tk.Label(cell, text=label, bg=CARD, fg=FG,
-                     font=("Segoe UI", 10)).pack(side="left", padx=(5, 0))
-            self.c_stat[key] = dot
-        grid.columnconfigure(0, weight=1)
-        grid.columnconfigure(1, weight=1)
+        for key, label in [("vm", "VM"), ("ipad", "iPad"),
+                           ("audio", "Audio"), ("portal", "Portal")]:
+            cell = tk.Frame(dots, bg=BG)
+            cell.pack(side="left", padx=(0, 12))
+            d = tk.Label(cell, text="●", bg=BG, fg=MUTED,
+                         font=("Segoe UI", 11))
+            d.pack(side="left")
+            tk.Label(cell, text=label, bg=BG, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+            self.c_stat[key] = d
 
-        self.c_buds = tk.Label(c, text="🎧  —", bg=BG, fg=MUTED,
+        self.c_buds = tk.Label(p, text="🎧  —", bg=BG, fg=MUTED,
                                font=("Segoe UI", 10), anchor="w")
-        self.c_buds.pack(fill="x", padx=16, pady=(4, 0))
+        self.c_buds.pack(fill="x", pady=(8, 0))
 
-        tk.Label(c, text="Volume", bg=BG, fg=MUTED,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16,
-                                                    pady=(14, 0))
         self._vol_drag = False
         self._vol_syncing = False
+        vr = tk.Frame(p, bg=BG)
+        vr.pack(fill="x", pady=(8, 0))
+        tk.Label(vr, text="Volume", bg=BG, fg=MUTED, width=9, anchor="w",
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
         self.c_vol_var = tk.DoubleVar(value=50.0)
-        self.c_vol = ttk.Scale(c, from_=0, to=100, variable=self.c_vol_var,
+        self.c_vol = ttk.Scale(vr, from_=0, to=100, variable=self.c_vol_var,
                                command=self._vol_changed)
-        self.c_vol.pack(fill="x", padx=16)
+        self.c_vol.pack(side="left", fill="x", expand=True)
         self.c_vol.bind("<ButtonPress-1>",
                         lambda e: setattr(self, "_vol_drag", True))
         self.c_vol.bind("<ButtonRelease-1>",
                         lambda e: setattr(self, "_vol_drag", False))
         # disabled later by _apply_poll if _volume_thread reports no pycaw
 
-        tk.Label(c, text="Balance   L ↔ R   (double-click to center)",
-                 bg=BG, fg=MUTED, font=("Segoe UI", 9, "bold")).pack(
-            anchor="w", padx=16, pady=(12, 0))
+        br = tk.Frame(p, bg=BG)
+        br.pack(fill="x", pady=(6, 0))
+        tk.Label(br, text="L ↔ R", bg=BG, fg=MUTED, width=9, anchor="w",
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
         self.c_bal_var = tk.DoubleVar(value=self._load_balance() * 100)
-        self.c_bal = ttk.Scale(c, from_=-100, to=100,
-                               variable=self.c_bal_var,
+        self.c_bal = ttk.Scale(br, from_=-100, to=100, variable=self.c_bal_var,
                                command=self._bal_changed)
-        self.c_bal.pack(fill="x", padx=16)
+        self.c_bal.pack(side="left", fill="x", expand=True)
         self.c_bal.bind("<Double-1>", self._bal_center)
+        tk.Label(p, text="double-click balance to center", bg=BG,
+                 fg="#5b6172", font=("Segoe UI", 8), anchor="w").pack(
+            fill="x", pady=(2, 0))
 
-        row = tk.Frame(c, bg=BG)
-        row.pack(side="bottom", fill="x", padx=14, pady=14)
-        ttk.Button(row, text="⛶  Full app",
-                   command=self._to_full).pack(side="left", expand=True,
-                                               fill="x", padx=(0, 4))
-        ttk.Button(row, text="Send to tray",
-                   command=self._to_tray).pack(side="left", expand=True,
-                                               fill="x", padx=(4, 0))
+    def _toggle_console(self):
+        """Show/hide the command console on the right. Collapsed by default so
+        the window opens lean; the window width grows/shrinks to match."""
+        if self._console_open:
+            self._consf.pack_forget()
+            self._console_open = False
+            self._cons_btn.config(text="▸  Console")
+            self._set_win_width(1120)
+        else:
+            self._consf.pack(side="right", fill="y", before=self._cons_anchor)
+            self._console_open = True
+            self._cons_btn.config(text="◂  Console")
+            self._set_win_width(1520)
 
-    def _to_compact(self):
-        if self.compact:
-            return
-        self.compact = True
-        # a maximized window ignores geometry() until un-zoomed — leave
-        # zoom first, remember it, and restore it on expand
-        self._saved_zoom = self.root.state() == "zoomed"
-        if self._saved_zoom:
-            self.root.state("normal")
-            self.root.update_idletasks()
-        self._saved_geom = self.root.geometry()
-        self._full.pack_forget()
-        self._compact.pack(fill="both", expand=True)
-        self.root.minsize(320, 470)
-        self.root.geometry("360x540")
+    def _set_win_width(self, w):
+        """Resize the window to width w, keeping height and position. No-op
+        while maximized (a zoomed window ignores geometry())."""
+        try:
+            if self.root.state() == "zoomed":
+                return
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", self.root.geometry())
+            if m:
+                _, h, x, y = m.groups()
+                self.root.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:  # noqa: BLE001
+            pass
 
-    def _to_full(self):
-        if not self.compact:
-            return
-        self.compact = False
-        self._compact.pack_forget()
-        self._full.pack(fill="both", expand=True)
-        self.root.minsize(1300, 640)
-        self.root.geometry(self._saved_geom or "1500x860")
-        if self._saved_zoom:
-            self.root.state("zoomed")
+    def _on_configure(self, e):
+        """Reconcile the window width with the console state when the window
+        leaves the maximized state. A width change requested while zoomed is a
+        no-op (Tk ignores geometry() when maximized), so re-apply it the moment
+        the window un-maximizes — otherwise it restores to the pre-maximize
+        width, which may not match the current console state."""
+        if e.widget is not self.root:
+            return  # ignore child-widget configure events
+        z = (self.root.state() == "zoomed")
+        if z == self._was_zoomed:
+            return  # no zoomed<->normal transition; nothing to reconcile
+        self._was_zoomed = z
+        if not z:  # just un-maximized -> match the current console state
+            self.root.after(10, lambda: self._set_win_width(
+                1520 if self._console_open else 1120))
 
     def _vol_changed(self, _=None):
         if not self._vol_syncing:
@@ -2506,7 +2515,7 @@ class App:
         # compact mode has no device list on screen, so keep the buds line
         # fresh with a periodic (no-scan) refresh every ~15s
         self._poll_n = getattr(self, "_poll_n", 0) + 1
-        if self.compact and running and self._poll_n % 5 == 0:
+        if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
         self.ui(lambda: self._apply_poll(running, st, on, aud))
 
@@ -2621,7 +2630,7 @@ class App:
             fg=colors[bool(st and st.get("kbd_subscribed"))])
         self.c_stat["audio"].config(fg=colors[bool(aud)])
         self.c_stat["portal"].config(fg=colors[bool(on)])
-        self.c_ready.config(text=r_txt.split()[0], fg=r_col)
+        self.c_ready.config(text=r_txt, fg=r_col)
         names = self.bt_panel._connected_names if running else []
         self.c_buds.config(
             text="🎧  " + (", ".join(names) if names
