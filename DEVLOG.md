@@ -142,6 +142,33 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
 
 ---
 
+## Fast-pair: the radio-contention lesson
+
+The iPad was slow to *see* the keyboard when pairing. The tempting story is
+"boost the advertising power." The real one: there is no separate low-power
+advertising mode — the advertisement is registered once at boot and never
+touched. What starves discovery is that the single radio time-shares BLE
+advertising with A2DP audio, and our own silence-feed (the fix that stops the
+earbuds dropping mid-song) keeps A2DP *transmitting even when nothing is
+playing*. So muting the PC does nothing; the audio link has to actually drop.
+
+Fix: pressing Pair now asks first ("briefly disconnect Bluetooth audio to pair
+fast?"), then drops the earbud link to give the broadcast the whole radio,
+auto-starts the input portal the moment the iPad bonds (no second click),
+settles the button to a check, and reconnects the earbuds on its own. Freeing
+the audio *is* full-speed advertising.
+
+The pre-hardware adversarial review (8 agents — five failure lenses, each
+finding put to a refuter) caught two bugs before they cost a radio session:
+the audio-restore on the timeout/failure paths could silently no-op if a prior
+session had hit the 3-fail reconnect pause (the fail counter wasn't reset like
+the two sibling paths), and a stale `on` snapshot mislabeled the just-started
+portal button "Start portal" for one tick — a click in that window would have
+stopped the portal it had just started. Both fixed; a headless harness now
+pins the whole flow (28 checks) so it can't silently regress.
+
+---
+
 ## Status
 
 Working & tested: BLE keyboard + mouse, edge crossing, keymap remaps,

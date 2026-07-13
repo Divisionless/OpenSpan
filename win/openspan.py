@@ -77,6 +77,99 @@ PORTAL = "#ffd43b"
 DANGER = "#e06c68"
 
 
+# ---- themed dialogs ---------------------------------------------------------
+# The native tk messagebox renders in the OS (light) theme, which clashes badly
+# with the dark app. These are drop-in dark replacements that live INSIDE the
+# app's look: dark background, themed buttons, a dark title bar, modal, centered
+# over the parent. dark_confirm mirrors messagebox.askyesno (returns bool);
+# dark_alert mirrors a single-button showwarning/showinfo.
+def _paint_dark_titlebar(win):
+    """Paint a window's Windows title bar dark (DWM immersive dark mode)."""
+    try:
+        import ctypes
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        val = ctypes.c_int(1)
+        for attr in (20, 19):  # 20 = Win11/20H1+, 19 = older Win10
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _dialog(parent, title, message, buttons):
+    """Build a dark modal dialog. `buttons` is a list of (text, value, style),
+    listed primary-first; returns the clicked button's value (or the last
+    button's value on a window-close). Centered over the parent's toplevel,
+    Enter = first button, Esc = last."""
+    top = parent.winfo_toplevel()
+    dlg = tk.Toplevel(top)
+    dlg.withdraw()  # position before showing so it never flashes at top-left
+    dlg.title(title)
+    dlg.configure(bg=BG)
+    dlg.resizable(False, False)
+    dlg.transient(top)
+    result = {"v": buttons[-1][1]}  # window-close defaults to the last button
+
+    wrap = tk.Frame(dlg, bg=BG)
+    wrap.pack(fill="both", expand=True, padx=22, pady=18)
+    tk.Label(wrap, text=title, bg=BG, fg=FG, justify="left",
+             font=("Segoe UI Semibold", 12)).pack(anchor="w")
+    if message:
+        tk.Label(wrap, text=message, bg=BG, fg=MUTED, justify="left",
+                 wraplength=370, font=("Segoe UI", 10)).pack(
+                     anchor="w", pady=(9, 0))
+    bar = tk.Frame(wrap, bg=BG)
+    bar.pack(anchor="e", pady=(18, 0))
+
+    def done(v):
+        result["v"] = v
+        try:
+            dlg.grab_release()
+        except tk.TclError:
+            pass
+        dlg.destroy()
+
+    focus_btn = None
+    for i, (text, value, style) in enumerate(buttons):
+        b = ttk.Button(bar, text=text, style=style,
+                       command=lambda v=value: done(v))
+        b.pack(side="left", padx=(0, 8) if i < len(buttons) - 1 else 0)
+        if i == 0:
+            focus_btn = b
+
+    dlg.protocol("WM_DELETE_WINDOW", lambda: done(buttons[-1][1]))
+    dlg.bind("<Return>", lambda e: done(buttons[0][1]))
+    dlg.bind("<Escape>", lambda e: done(buttons[-1][1]))
+    _paint_dark_titlebar(dlg)
+    dlg.update_idletasks()
+    try:
+        pw, ph = top.winfo_width(), top.winfo_height()
+        px, py = top.winfo_rootx(), top.winfo_rooty()
+        w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        dlg.geometry(f"+{px + max(0, (pw - w) // 2)}"
+                     f"+{py + max(0, (ph - h) // 3)}")
+    except tk.TclError:
+        pass
+    dlg.deiconify()
+    if focus_btn is not None:
+        focus_btn.focus_set()
+    dlg.grab_set()
+    top.wait_window(dlg)
+    return result["v"]
+
+
+def dark_confirm(parent, title, message, yes="Yes", no="No"):
+    """Dark drop-in for messagebox.askyesno — returns True on yes, else False."""
+    return _dialog(parent, title, message,
+                   [(yes, True, "Accent.TButton"), (no, False, "TButton")])
+
+
+def dark_alert(parent, title, message, ok="OK"):
+    """Dark drop-in for messagebox.showwarning/showinfo — single OK button."""
+    _dialog(parent, title, message, [(ok, True, "Accent.TButton")])
+
+
 # ---- console log sink -------------------------------------------------------
 # Every command the app runs (VBoxManage + ssh into the VM) is mirrored to the
 # right-hand console panel. The App installs the sink once its console exists;
@@ -1029,8 +1122,8 @@ class BtPanel(tk.Frame):
             m.grab_release()
 
     def _restart_all(self):
-        if not messagebox.askyesno(
-                "Restart audio?",
+        if not dark_confirm(
+                self, "Restart audio?",
                 "Restarts just the audio pipeline (~15s). Your iPad keyboard "
                 "is NOT affected.\n\nRestart audio now?"):
             return
@@ -1754,8 +1847,8 @@ class App:
 
     def switch_mode(self, mode):
         nice = "Station" if mode == "station" else "Windows"
-        if not messagebox.askyesno(
-                f"Switch to {nice} mode?",
+        if not dark_confirm(
+                self.root, f"Switch to {nice} mode?",
                 f"This restarts the PC and brings it back up in {nice} mode.\n\n"
                 + ("The app will own the Bluetooth radio (iPad + command "
                    "station). Windows Bluetooth/audio will be unavailable."
@@ -1766,8 +1859,8 @@ class App:
             return
         # station mode needs the boot task installed (one-time UAC)
         if mode == "station" and not ensure_boot_task():
-            messagebox.showwarning(
-                "Setup needed",
+            dark_alert(
+                self.root, "Setup needed",
                 "Couldn't install the startup task (admin was declined). "
                 "Station mode won't auto-start after reboot until it's "
                 "installed.")
@@ -1836,16 +1929,7 @@ class App:
 
     def _dark_titlebar(self):
         """Paint the Windows title bar dark (DWM immersive dark mode)."""
-        try:
-            import ctypes
-            self.root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            val = ctypes.c_int(1)
-            for attr in (20, 19):  # 20 = Win11/20H1+, 19 = older Win10
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
-        except Exception:  # noqa: BLE001
-            pass
+        _paint_dark_titlebar(self.root)
 
     def _manual_bt_begin(self):
         """Manual BT actions (Connect/Disconnect/Forget/Scan) register here
@@ -2032,9 +2116,10 @@ class App:
 
     # ---- System control (full manual control, nothing hidden) ----
     def stop_vm(self):
-        if not messagebox.askyesno(
-                "Stop VM?", "Power off the audio/keyboard VM. Audio and the "
-                "iPad keyboard stop until you start it again.\n\nStop now?"):
+        if not dark_confirm(
+                self.root, "Stop VM?",
+                "Power off the audio/keyboard VM. Audio and the iPad keyboard "
+                "stop until you start it again.\n\nStop now?"):
             return
         self.status.set("Stopping VM…")
 
@@ -2044,10 +2129,10 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def cold_restart_vm(self):
-        if not messagebox.askyesno(
-                "Cold-restart VM?", "Power-cycle the whole VM (~90s). Audio + "
-                "keyboard come back fresh; you re-pair the keyboard on the "
-                "iPad.\n\nRestart now?"):
+        if not dark_confirm(
+                self.root, "Cold-restart VM?",
+                "Power-cycle the whole VM (~90s). Audio + keyboard come back "
+                "fresh; you re-pair the keyboard on the iPad.\n\nRestart now?"):
             return
         self.status.set("Cold-restarting VM…")
         def work():
@@ -2073,10 +2158,11 @@ class App:
         self.restart_everything()
 
     def shutdown_all(self):
-        if not messagebox.askyesno(
-                "Shut down everything?", "Power off the VM and close the app. "
-                "Audio, keyboard, portal, and sender all stop — nothing keeps "
-                "running.\n\nShut down now?"):
+        if not dark_confirm(
+                self.root, "Shut down everything?",
+                "Power off the VM and close the app. Audio, keyboard, portal, "
+                "and sender all stop — nothing keeps running.\n\nShut down "
+                "now?"):
             return
         self._full_stop()
 
@@ -2201,9 +2287,9 @@ class App:
 
     def toggle_vm(self):
         if vm_running():
-            if messagebox.askyesno("Stop VM?", "Stop the bridge VM? The "
-                                   "iPad will disconnect until you start "
-                                   "it again."):
+            if dark_confirm(self.root, "Stop VM?",
+                            "Stop the bridge VM? The iPad will disconnect "
+                            "until you start it again."):
                 self.vm_btn.config(text="Stopping VM…")
                 vbox("controlvm", VM, "acpipowerbutton")
         else:
@@ -2313,6 +2399,17 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def pair(self):
+        # deliberate pairing is a conscious trade: we free the whole radio for
+        # a fast broadcast by briefly dropping the earbud audio link (our own
+        # silence-feed keeps A2DP transmitting otherwise, which starves the
+        # advertising and is why the iPad is slow to SEE the keyboard). Confirm
+        # before touching the user's audio.
+        if not dark_confirm(
+                self.root, "Pair the iPad now?",
+                "This briefly disconnects Bluetooth audio so the iPad finds "
+                "the keyboard fast — it reconnects automatically the moment "
+                "the iPad pairs."):
+            return
         # immediate visual acknowledgement (the work runs in a thread).
         # _pair_inflight is set HERE, before the worker: the openspanble
         # restart flaps :9955 (ready -> booting -> ready), and the READY
@@ -2343,6 +2440,9 @@ class App:
         # so the restart does not power-cycle the radio.)
         r = ssh_guest(
             'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
+            # free the whole radio for a fast broadcast: drop the earbud audio
+            # link now (it is reconnected automatically once the iPad pairs)
+            '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" >/dev/null 2>&1; '
             'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
             '[ "$d" = "$AUD" ] && continue; '
             'info=$(bluetoothctl info "$d" 2>/dev/null); '
@@ -2358,6 +2458,11 @@ class App:
         if r.returncode != 0:
             # be honest: the guest work failed, so we are NOT broadcasting
             self._pair_inflight = False
+            # we may have already dropped the earbud audio for the burst — the
+            # pair isn't happening, so put it back (force past the cooldown)
+            self._auto_conn_last = 0.0
+            self._auto_conn_fails = 0
+            self._auto_reconnect_audio("broadcast failed — restoring audio")
 
             def failed():
                 self.pair_btn.state(["!disabled"])
@@ -2367,13 +2472,15 @@ class App:
             self.ui(failed)
             return
         self.broadcasting = True
+        _emit("event", "radio freed (audio paused) — broadcasting at full "
+                       "power; audio returns the moment the iPad pairs.")
 
         def ok():
             self.pair_btn.state(["!disabled"])
             self.pair_btn.config(style="Accent.TButton",
                                  text="📡  Broadcasting…")
-            self.status.set("📡 Broadcasting — on the iPad, tap "
-                            "\"OpenSpan Keyboard\" to pair")
+            self.status.set("📡 Broadcasting on the full radio — on the iPad, "
+                            "tap \"OpenSpan Keyboard\" to pair")
         self.ui(ok)
 
     # ---- status tick ----
@@ -2433,15 +2540,6 @@ class App:
                 # boot, give up before the stack is up, and then just sit
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
-        try:
-            self.sys_status.set(
-                f"VM {'● up' if running else '○ down'}    "
-                f"keyboard {'● up' if st is not None else '○ down'}"
-                f"{'  (iPad subscribed)' if (st and st.get('kbd_subscribed')) else ''}"
-                f"    audio {'● on' if aud else '○ off'}"
-                f"    portal {'● on' if on else '○ off'}")
-        except Exception:  # noqa: BLE001
-            pass
         connected = bool(st and st.get("kbd_subscribed"))
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
@@ -2452,14 +2550,30 @@ class App:
                 elif st is not None:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
-        # once the iPad connects, clear the broadcasting state/button
+        # once the iPad connects: settle the button to a check, auto-start the
+        # portal (no manual click), and bring the earbuds back — full steady
+        # state without another button press. Clearing broadcasting/_pair_
+        # inflight FIRST is required: _auto_reconnect_audio early-returns while
+        # either is set.
         if connected and self.broadcasting:
             self.broadcasting = False
             self._pair_inflight = False
-            self.pair_btn.config(style="TButton", text="📡  Pair / Broadcast")
-            # iPad pairing is an LE airtime burst on the shared antenna; if
-            # it knocked the earbuds off, bring them back on their own
-            self._auto_reconnect_audio("iPad paired — checking the earbuds")
+            self.pair_btn.config(style="Accent.TButton",
+                                 text="📡  iPad ✓ paired")
+            # auto-start the portal so keyboard/mouse bridge immediately
+            if not (self.portal_proc and self.portal_proc.poll() is None):
+                self.toggle_portal()
+                _emit("event", "iPad paired — portal auto-started; "
+                               "keyboard/mouse are bridging.")
+            # the `on` snapshot predates this auto-start; refresh it so the rest
+            # of this tick renders the portal ON (dot + "Stop portal") and never
+            # invites a click that would stop what we just started
+            on = bool(self.portal_proc and self.portal_proc.poll() is None)
+            # WE deliberately dropped audio for the burst, so force the
+            # reconnect past its cooldown/backoff: steady state means audio on
+            self._auto_conn_last = 0.0
+            self._auto_conn_fails = 0
+            self._auto_reconnect_audio("iPad paired — reconnecting the earbuds")
         # an abandoned broadcast must not suppress auto-reconnect forever
         if (self.broadcasting or self._pair_inflight) and \
                 time.time() - self._broadcast_started > 300:
@@ -2468,6 +2582,25 @@ class App:
             self.pair_btn.config(style="TButton", text="📡  Pair / Broadcast")
             _emit("event", "broadcast window expired — press Pair/Broadcast "
                            "again when you're ready to pair.")
+            # the burst may have left the earbuds off and no pair ever landed —
+            # restore audio so the user isn't stranded without sound. Reset the
+            # fail counter too (not just the cooldown): if a prior session hit
+            # the 3-fail pause, _auto_reconnect_audio would otherwise no-op and
+            # leave the audio we dropped dead — same as the two sibling paths.
+            self._auto_conn_last = 0.0
+            self._auto_conn_fails = 0
+            self._auto_reconnect_audio("broadcast expired — restoring audio")
+        # secondary status readout — set AFTER the connect-edge auto-start so
+        # `on` reflects the portal we may have just started this tick
+        try:
+            self.sys_status.set(
+                f"VM {'● up' if running else '○ down'}    "
+                f"keyboard {'● up' if st is not None else '○ down'}"
+                f"{'  (iPad subscribed)' if (st and st.get('kbd_subscribed')) else ''}"
+                f"    audio {'● on' if aud else '○ off'}"
+                f"    portal {'● on' if on else '○ off'}")
+        except Exception:  # noqa: BLE001
+            pass
         # while hidden in the tray, make sure the icon still exists (an
         # explorer.exe restart wipes tray icons); if it can't be restored,
         # bring the window back — the app must never be strandable
@@ -2497,10 +2630,26 @@ class App:
             self._vol_syncing = True
             self.c_vol_var.set(round(v * 100))
             self._vol_syncing = False
+        # `on` may have been refreshed by the connect-edge auto-start above;
+        # rebuild the portal token so the status line agrees with reality
+        parts = [f"portal {'● ON' if on else '○ off'}" if p.startswith("portal")
+                 else p for p in parts]
         cur = self.status.get()
         if not self.broadcasting and not cur.startswith("Radio") \
                 and not cur.startswith("⚠"):
             self.status.set("    ".join(parts))
+        # keep the Pair button truthful when idle (never mid-broadcast): a
+        # settled check while the iPad is live, the call-to-action when it is
+        # not. Skipped while a broadcast is in flight so it can't stomp the
+        # transient "Working…"/"Broadcasting…" states.
+        if not self.broadcasting and not self._pair_inflight \
+                and "disabled" not in self.pair_btn.state():
+            if connected:
+                self.pair_btn.config(style="Accent.TButton",
+                                     text="📡  iPad ✓ paired")
+            else:
+                self.pair_btn.config(style="TButton",
+                                     text="📡  Pair / Broadcast")
         self.vm_btn.config(text="Bridge VM ✓" if running
                            else "Start Bridge VM")
         self.portal_btn.config(text="Stop portal" if on else "Start portal")
