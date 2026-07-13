@@ -106,41 +106,63 @@ def check(name, cond):
         fails.append(name)
 
 
-# === 0. the REAL dark confirm dialog: themed, modal, returns the right bool ==
-_dlg_bg = {"v": ""}
+# === 0. the REAL in-frame dialog: overlay (no Toplevel), returns right value =
+_dlg_seen = {"scrim": False}
+
+
+def _find_scrim(w):
+    for c in w.winfo_children():
+        try:
+            if isinstance(c, tk.Frame) \
+                    and str(c.cget("bg")) == str(openspan.SCRIM):
+                return c
+        except tk.TclError:
+            pass
+        r = _find_scrim(c)
+        if r is not None:
+            return r
+    return None
 
 
 def _click_dialog(style_exact):
-    """Find the open dialog and invoke the button whose ttk style == given."""
-    for tl in root.winfo_children():
-        if not isinstance(tl, tk.Toplevel):
-            continue
-        found = []
-
-        def walk(w):
-            for c in w.winfo_children():
-                if isinstance(c, ttk.Button):
-                    found.append(c)
-                walk(c)
-        walk(tl)
-        _dlg_bg["v"] = str(tl.cget("bg"))
-        for b in found:
-            if str(b.cget("style")) == style_exact:
-                b.invoke()
-                return
-        if found:
-            found[0].invoke()
+    """Find the in-frame overlay and invoke the button whose style == given."""
+    scrim = _find_scrim(root)
+    if scrim is None:
         return
+    _dlg_seen["scrim"] = True
+    found = []
+
+    def walk(w):
+        for c in w.winfo_children():
+            if isinstance(c, ttk.Button):
+                found.append(c)
+            walk(c)
+    walk(scrim)
+    for b in found:
+        if str(b.cget("style")) == style_exact:
+            b.invoke()
+            return
+    if found:
+        found[0].invoke()
 
 
-root.deiconify()  # a modal dialog needs a viewable parent for grab_set
+root.deiconify()  # the overlay grabs input; the parent must be viewable
 root.after(200, lambda: _click_dialog("Accent.TButton"))   # click Yes
 r_yes = openspan.dark_confirm(root, "T", "message body")
 check("dialog: Yes returns True", r_yes is True)
-check("dialog: background is themed (BG)", _dlg_bg["v"] == openspan.BG)
+check("dialog: rendered in-frame (overlay used, no Toplevel spawned)",
+      _dlg_seen["scrim"] is True
+      and not any(isinstance(c, tk.Toplevel) for c in root.winfo_children()))
 root.after(200, lambda: _click_dialog("TButton"))          # click No
 r_no = openspan.dark_confirm(root, "T", "message body")
 check("dialog: No returns False", r_no is False)
+# 3-button shape (the close dialog): returns the specific clicked value
+root.after(200, lambda: _click_dialog("Danger.TButton"))
+r_mid = openspan._dialog(root, "Close?", "body",
+                         [("Tray", "tray", "TButton"),
+                          ("Shut down", "shutdown", "Danger.TButton"),
+                          ("Cancel", "cancel", "TButton")])
+check("dialog: 3-button returns the clicked value", r_mid == "shutdown")
 root.withdraw()
 
 # the flow sections drive the state machine, so mock the dialog from here

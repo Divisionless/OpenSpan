@@ -75,6 +75,8 @@ IPAD_FILL = "#1f6f43"
 IPAD_LINE = "#3fdc8a"
 PORTAL = "#ffd43b"
 DANGER = "#e06c68"
+SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
+BORDER = "#39435a"  # card edge for the in-frame modal
 
 
 # ---- themed dialogs ---------------------------------------------------------
@@ -98,38 +100,54 @@ def _paint_dark_titlebar(win):
 
 
 def _dialog(parent, title, message, buttons):
-    """Build a dark modal dialog. `buttons` is a list of (text, value, style),
-    listed primary-first; returns the clicked button's value (or the last
-    button's value on a window-close). Centered over the parent's toplevel,
-    Enter = first button, Esc = last."""
+    """Show a dark modal dialog INSIDE the app window — an in-frame overlay, not
+    a separate OS window — and block until a button is chosen. `buttons` is a
+    list of (text, value, style), primary first; returns the chosen value (the
+    last button's value on Escape or a click outside the card). Enter = first
+    button. Keeps a synchronous return so callers stay unchanged."""
     top = parent.winfo_toplevel()
-    dlg = tk.Toplevel(top)
-    dlg.withdraw()  # position before showing so it never flashes at top-left
-    dlg.title(title)
-    dlg.configure(bg=BG)
-    dlg.resizable(False, False)
-    dlg.transient(top)
-    result = {"v": buttons[-1][1]}  # window-close defaults to the last button
+    # re-entrancy guard: a second trigger while a modal is open (e.g. the title
+    # X hit twice) must not stack a second overlay
+    if getattr(top, "_os_modal_open", False):
+        return buttons[-1][1]
+    top._os_modal_open = True
 
-    wrap = tk.Frame(dlg, bg=BG)
-    wrap.pack(fill="both", expand=True, padx=22, pady=18)
-    tk.Label(wrap, text=title, bg=BG, fg=FG, justify="left",
-             font=("Segoe UI Semibold", 12)).pack(anchor="w")
-    if message:
-        tk.Label(wrap, text=message, bg=BG, fg=MUTED, justify="left",
-                 wraplength=370, font=("Segoe UI", 10)).pack(
-                     anchor="w", pady=(9, 0))
-    bar = tk.Frame(wrap, bg=BG)
-    bar.pack(anchor="e", pady=(18, 0))
+    result = {"v": buttons[-1][1]}
+    done_var = tk.StringVar(master=top, value="")
 
     def done(v):
+        if done_var.get():
+            return  # first click wins; ignore the rest
         result["v"] = v
-        try:
-            dlg.grab_release()
-        except tk.TclError:
-            pass
-        dlg.destroy()
+        done_var.set("1")
 
+    # full-window scrim: dims the app and swallows clicks (modal within frame).
+    # Overhang every edge by 20px (relwidth=1 + width=40, offset -20) so no
+    # sliver of the app can peek past it regardless of borders/geometry.
+    scrim = tk.Frame(top, bg=SCRIM)
+    scrim.place(x=-20, y=-20, relwidth=1, relheight=1, width=40, height=40)
+    scrim.lift()
+    scrim.bind("<Button-1>", lambda e: done(buttons[-1][1]))
+
+    # centered card (same interior look as the app: BG panel, themed buttons)
+    card = tk.Frame(scrim, bg=BG, highlightbackground=BORDER,
+                    highlightthickness=1)
+    card.place(relx=0.5, rely=0.44, anchor="center")
+    card.bind("<Button-1>", lambda e: "break")  # a card click is not a cancel
+    inner = tk.Frame(card, bg=BG)
+    inner.pack(padx=26, pady=22)
+    tk.Label(inner, text=title, bg=BG, fg=FG, justify="left",
+             font=("Segoe UI Semibold", 13)).pack(anchor="w")
+    if message:
+        try:  # wrap to the window so a small/compact window still fits
+            wl = max(240, min(400, top.winfo_width() - 80))
+        except tk.TclError:
+            wl = 360
+        tk.Label(inner, text=message, bg=BG, fg=MUTED, justify="left",
+                 wraplength=wl, font=("Segoe UI", 10)).pack(anchor="w",
+                                                            pady=(10, 0))
+    bar = tk.Frame(inner, bg=BG)
+    bar.pack(anchor="e", pady=(20, 0))
     focus_btn = None
     for i, (text, value, style) in enumerate(buttons):
         b = ttk.Button(bar, text=text, style=style,
@@ -138,24 +156,30 @@ def _dialog(parent, title, message, buttons):
         if i == 0:
             focus_btn = b
 
-    dlg.protocol("WM_DELETE_WINDOW", lambda: done(buttons[-1][1]))
-    dlg.bind("<Return>", lambda e: done(buttons[0][1]))
-    dlg.bind("<Escape>", lambda e: done(buttons[-1][1]))
-    _paint_dark_titlebar(dlg)
-    dlg.update_idletasks()
+    prev_ret, prev_esc = top.bind("<Return>"), top.bind("<Escape>")
+    top.bind("<Return>", lambda e: done(buttons[0][1]))
+    top.bind("<Escape>", lambda e: done(buttons[-1][1]))
     try:
-        pw, ph = top.winfo_width(), top.winfo_height()
-        px, py = top.winfo_rootx(), top.winfo_rooty()
-        w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
-        dlg.geometry(f"+{px + max(0, (pw - w) // 2)}"
-                     f"+{py + max(0, (ph - h) // 3)}")
+        scrim.grab_set()  # keyboard modality; the scrim already blocks the mouse
     except tk.TclError:
         pass
-    dlg.deiconify()
     if focus_btn is not None:
         focus_btn.focus_set()
-    dlg.grab_set()
-    top.wait_window(dlg)
+    try:
+        top.wait_variable(done_var)
+    finally:
+        try:
+            scrim.grab_release()
+        except tk.TclError:
+            pass
+        top.unbind("<Return>")
+        top.unbind("<Escape>")
+        if prev_ret:
+            top.bind("<Return>", prev_ret)
+        if prev_esc:
+            top.bind("<Escape>", prev_esc)
+        scrim.destroy()
+        top._os_modal_open = False
     return result["v"]
 
 
@@ -2196,52 +2220,23 @@ class App:
         self.root.after(400, self.root.destroy)
 
     def _confirm_close(self):
-        """X handler. Closing is a full stop (portal + audio + VM), so ask —
-        with the option to keep everything running from the system tray."""
-        # a second title-bar X while the dialog is open must not stack a
-        # second dialog (grab_set doesn't block WM_DELETE_WINDOW)
-        dlg_prev = getattr(self, "_close_dlg", None)
-        if dlg_prev is not None:
-            try:
-                if dlg_prev.winfo_exists():
-                    dlg_prev.lift()
-                    dlg_prev.focus_force()
-                    return
-            except tk.TclError:
-                pass
-        dlg = tk.Toplevel(self.root)
-        self._close_dlg = dlg
-        dlg.title("Close OpenSpan?")
-        dlg.configure(bg=BG)
-        dlg.transient(self.root)
-        dlg.resizable(False, False)
-        try:
-            dlg.iconbitmap(ICON)
-        except Exception:  # noqa: BLE001
-            pass
-        tk.Label(dlg, text="Closing OpenSpan shuts EVERYTHING down — the "
-                           "input portal, the audio\nsender, and the bridge "
-                           "VM. Audio and the iPad keyboard stop.\n\n"
-                           "Send it to the system tray instead to keep the "
-                           "bridge running.",
-                 bg=BG, fg=FG, font=("Segoe UI", 10),
-                 justify="left").pack(padx=18, pady=(16, 12))
-        row = tk.Frame(dlg, bg=BG)
-        row.pack(fill="x", padx=18, pady=(0, 14))
-        ttk.Button(row, text="Send to system tray",
-                   command=lambda: (dlg.destroy(), self._to_tray())).pack(
-            side="left")
-        ttk.Button(row, text="⏻  Yes, shut it down", style="Danger.TButton",
-                   command=lambda: (dlg.destroy(), self._full_stop())).pack(
-            side="left", padx=8)
-        ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="right")
-        dlg.update_idletasks()
-        x = self.root.winfo_rootx() + \
-            (self.root.winfo_width() - dlg.winfo_reqwidth()) // 2
-        y = self.root.winfo_rooty() + \
-            (self.root.winfo_height() - dlg.winfo_reqheight()) // 3
-        dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        dlg.grab_set()
+        """X handler. Closing is a full stop (portal + audio + VM), so ask --
+        with the option to keep everything running from the system tray. Shown
+        as an in-frame overlay (not a separate window); the engine's re-entrancy
+        guard handles a second X while it's open."""
+        choice = _dialog(
+            self.root, "Close OpenSpan?",
+            "Closing OpenSpan shuts EVERYTHING down — the input portal, the "
+            "audio sender, and the bridge VM. Audio and the iPad keyboard "
+            "stop.\n\nSend it to the system tray instead to keep the bridge "
+            "running.",
+            [("Send to system tray", "tray", "TButton"),
+             ("⏻  Yes, shut it down", "shutdown", "Danger.TButton"),
+             ("Cancel", "cancel", "TButton")])
+        if choice == "tray":
+            self._to_tray()
+        elif choice == "shutdown":
+            self._full_stop()
 
     def _to_tray(self):
         """Hide to the system tray. EVERYTHING keeps running — VM, audio,
