@@ -765,23 +765,33 @@ class TrayIcon:
         _TRAY["taskbar_created"] = u32.RegisterWindowMessageW("TaskbarCreated")
 
         def proc(hwnd, msg, w, l):
-            t = _TRAY["active"]
-            if t is not None:
-                if msg == TrayIcon._WM_TRAY and l in (0x0202, 0x0203):
-                    # WM_LBUTTONUP / WM_LBUTTONDBLCLK on the icon
-                    try:
-                        t.on_restore()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return 0
-                if msg == _TRAY["taskbar_created"]:
-                    # explorer restarted and forgot every tray icon: re-add
-                    try:
-                        t._sh.Shell_NotifyIconW(0, ctypes.byref(t._nid))
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return 0
-            return u32.DefWindowProcW(hwnd, msg, w, l)
+            # This is a Win32 callback: an exception must NEVER escape it. In a
+            # windowed frozen build ctypes would try to print the traceback to
+            # a None stderr and hard-crash the process (0xc000041d in
+            # _ctypes.pyd). Swallow everything; fall back to DefWindowProc.
+            try:
+                t = _TRAY["active"]
+                if t is not None:
+                    if msg == TrayIcon._WM_TRAY and l in (0x0202, 0x0203):
+                        # WM_LBUTTONUP / WM_LBUTTONDBLCLK on the icon
+                        try:
+                            t.on_restore()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return 0
+                    if msg == _TRAY["taskbar_created"]:
+                        # explorer restarted and forgot every tray icon: re-add
+                        try:
+                            t._sh.Shell_NotifyIconW(0, ctypes.byref(t._nid))
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return 0
+            except BaseException:  # noqa: BLE001 -- a callback must not raise
+                pass
+            try:
+                return u32.DefWindowProcW(hwnd, msg, w, l)
+            except BaseException:  # noqa: BLE001
+                return 0
         _TRAY["proc"] = WNDPROC(proc)  # immortal: keeps the thunk alive
 
         class WNDCLASSW(ctypes.Structure):

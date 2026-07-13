@@ -169,6 +169,33 @@ pins the whole flow (28 checks) so it can't silently regress.
 
 ---
 
+## The tray crash: a bug only the packed exe could have
+
+Sending the app to the system tray hard-crashed the packed exe — twice, back to
+back — leaving the window gone but the audio and portal child processes still
+running (orphaned). Nothing reproduced it from source. The Windows error log had
+the answer, exact and unguessable: faulting module `_ctypes.pyd`, exception
+`0xc000041d` ("an exception occurred during a user callback").
+
+The chain: the tray uses a ctypes `WNDPROC` callback. If that callback raises,
+ctypes tries to print the traceback to `sys.stderr` — but a `--noconsole`
+PyInstaller build sets `sys.stderr = None`, and writing to `None` from inside a
+Win32 callback faults the whole process. Source never hit it because source has
+a real stderr.
+
+Two fixes plus a guard against ever shipping it blind again: the frozen launcher
+now points `stdout`/`stderr` at a real log file when they're `None`, so a
+callback exception is logged instead of fatal; the `WNDPROC` is wrapped so no
+exception can escape it at all; and a hidden `--traytest` role exercises the
+exact tray path inside the packed binary and prints OK/FAIL, so the fix was
+verified in the *frozen exe* — not just from source — before it went back.
+
+Lesson banked: a windowed frozen build is a different runtime. Any C callback
+needs a writable stderr and a body that cannot raise, and "passes from source"
+is not "passes as an exe."
+
+---
+
 ## Status
 
 Working & tested: BLE keyboard + mouse, edge crossing, keymap remaps,
