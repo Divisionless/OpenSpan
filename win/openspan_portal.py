@@ -331,9 +331,17 @@ class Portal:
             return
         self.active = False
         self.raw_keys.clear(); self.mods = 0; self.buttons = 0
-        self.send({"cmd": "kbd", "mods": 0, "keys": []})
-        self.send({"cmd": "mouse", "dx": 0, "dy": 0, "buttons": 0,
-                   "wheel": 0})
+        # Release the iPad's held keys + mouse buttons, but do it THROUGH THE
+        # QUEUE -- never call send() (blocking socket I/O) from here. leave()
+        # runs inside the low-level mouse/keyboard hook procedure; if a
+        # synchronous send() stalls (recv timeout, or _connect() looping when
+        # the daemon hiccups) the hook proc overruns Windows'
+        # LowLevelHooksTimeout (~300 ms) and Windows SILENTLY UNHOOKS it -- the
+        # portal keeps running but goes deaf, and edge crossings stop working
+        # until a restart reinstalls the hook. The sender thread owns the
+        # socket and is the only place allowed to block on it.
+        self.q.put(("k", 0, [], 0))
+        self.q.put(("b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
         # position we entered from
         if self.cur:
