@@ -15,6 +15,23 @@ keyboard.
 
 ---
 
+## Run it as administrator
+
+**If you run *any* application as administrator, you must run OpenSpan as
+administrator too.**
+
+Windows UIPI does not deliver low-level input hooks to a lower-privilege
+process while an **elevated window has focus**. OpenSpan's edge crossing is
+built on those hooks — so if, say, you keep an admin terminal open, the moment
+that window has focus the mouse simply **stops crossing to the iPad**. There is
+no error, no exception, nothing in any log, and `SetWindowsHookEx` still reports
+success. Re-installing the hook does not help. Only closing the elevated window
+(or restarting OpenSpan, which steals focus back) appears to "fix" it.
+
+It looks exactly like a bug in OpenSpan. It isn't. Run OpenSpan elevated and it
+goes away. The app warns you at launch if it isn't elevated, and the status bar
+shows `⚠ NOT ADMIN`.
+
 ## Why a VM?
 
 Windows deliberately blocks applications from publishing the Bluetooth HID

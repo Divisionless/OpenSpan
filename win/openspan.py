@@ -353,6 +353,58 @@ def daemon_status():
         return None
 
 
+def daemon_cmd(obj):
+    """Send one command to the daemon and return its reply (or None)."""
+    try:
+        s = socket.create_connection(DAEMON, 2)
+        s.sendall((json.dumps(obj) + "\n").encode())
+        s.settimeout(2)
+        data = b""
+        while b"\n" not in data and len(data) < 4096:
+            chunk = s.recv(512)
+            if not chunk:
+                break
+            data += chunk
+        s.close()
+        return json.loads(data.split(b"\n", 1)[0].decode())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def set_advertising(on):
+    """Broadcasting is OPT-IN. The daemon no longer advertises at boot, so this
+    is the ONLY thing that makes the machine visible as a Bluetooth keyboard --
+    and it is called only from Pair/Broadcast. It is switched back off the
+    moment the iPad is in, so the PC is never left beaconing and a bonded iPad
+    cannot silently reconnect on its own."""
+    r = daemon_cmd({"cmd": "adv", "on": bool(on)})
+    return bool(r and r.get("ok"))
+
+
+_ELEVATED = None
+
+
+def is_elevated():
+    """True if OpenSpan is running with administrator rights.
+
+    THIS MATTERS FAR MORE THAN IT LOOKS. Windows UIPI: a NON-elevated process's
+    low-level input hooks receive NOTHING while an ELEVATED window has focus.
+    So if you run anything as admin (an admin terminal, say), the portal goes
+    silently deaf the instant that window is focused -- the mouse just stops
+    crossing the border. No error, no exception, nothing in any log, and the
+    hooks still report as successfully installed. It cost days to find.
+
+    Rule: OpenSpan must run at least as elevated as the apps you use."""
+    global _ELEVATED
+    if _ELEVATED is None:
+        try:
+            import ctypes
+            _ELEVATED = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:  # noqa: BLE001
+            _ELEVATED = False
+    return _ELEVATED
+
+
 # ---- clipboard relay (two-way clipboard with the iPad) ---------------------
 # See CLIPBOARD_DESIGN.md. The iPad's Shortcuts app calls these endpoints
 # (triggered by FKA key combos the portal sends through the HID keyboard):
@@ -2471,6 +2523,7 @@ class App:
             timeout=40)
         if r.returncode != 0:
             # be honest: the guest work failed, so we are NOT broadcasting
+            set_advertising(False)
             self._pair_inflight = False
             # we may have already dropped the earbud audio for the burst — the
             # pair isn't happening, so put it back (force past the cooldown)
@@ -2485,8 +2538,13 @@ class App:
                 self.status.set("Broadcast failed — see console.")
             self.ui(failed)
             return
+        # NOW start advertising -- this is the only place it is ever turned on,
+        # and only because the user pressed Pair/Broadcast. (The daemon restart
+        # above comes up silent, so the radio is not beaconing until here.)
+        if not set_advertising(True):
+            _emit("err", "could not start broadcasting — see console.")
         self.broadcasting = True
-        _emit("event", "radio freed (audio paused) — broadcasting at full "
+        _emit("event", "radio freed (audio paused) — NOW BROADCASTING at full "
                        "power; audio returns the moment the iPad pairs.")
 
         def ok():
@@ -2528,6 +2586,15 @@ class App:
             parts.append("iPad ○ daemon starting")
         parts.append(f"portal {'● ON' if on else '○ off'}")
         parts.append(f"audio {'●' if aud else '○'}")
+        # Honest broadcast state, read straight from the daemon -- never a UI
+        # guess. If this says BROADCASTING, the machine really is advertising
+        # as a Bluetooth keyboard; if it says off, it really is silent.
+        if st:
+            parts.append("📡 BROADCASTING" if st.get("advertising")
+                         else "📡 not broadcasting")
+        # UIPI: without admin, input hooks die under any elevated window
+        if not is_elevated():
+            parts.append("⚠ NOT ADMIN")
         # readiness banner (only reacts on a state change, so no console spam)
         if not running:
             r_state, r_txt, r_col = "stopped", "○  Stopped", MUTED
@@ -2570,6 +2637,10 @@ class App:
         # inflight FIRST is required: _auto_reconnect_audio early-returns while
         # either is set.
         if connected and self.broadcasting:
+            # the iPad is in -- stop beaconing immediately. Nothing should be
+            # advertising as a keyboard once it has served its purpose.
+            threading.Thread(target=set_advertising, args=(False,),
+                             daemon=True).start()
             self.broadcasting = False
             self._pair_inflight = False
             self.pair_btn.config(style="Accent.TButton",
@@ -2591,6 +2662,9 @@ class App:
         # an abandoned broadcast must not suppress auto-reconnect forever
         if (self.broadcasting or self._pair_inflight) and \
                 time.time() - self._broadcast_started > 300:
+            # never leave the radio beaconing after an abandoned pair attempt
+            threading.Thread(target=set_advertising, args=(False,),
+                             daemon=True).start()
             self.broadcasting = False
             self._pair_inflight = False
             self.pair_btn.config(style="TButton", text="📡  Pair / Broadcast")
@@ -2700,10 +2774,32 @@ def run_app():
     #                   anything tries to ssh into the VM
     root = tk.Tk()
     app = App(root)
+    # UIPI: a non-elevated OpenSpan gets NO input hooks while an elevated
+    # window has focus -- the mouse silently stops crossing, with nothing in
+    # any log. Say it plainly up front instead of failing mysteriously later.
+    if not is_elevated():
+        root.after(800, lambda: _warn_not_elevated(app))
     # X asks first (it's a FULL STOP: portal + audio + VM), and offers
     # "send to system tray" to keep the bridge running instead
     root.protocol("WM_DELETE_WINDOW", app._confirm_close)
     root.mainloop()
+
+
+def _warn_not_elevated(app):
+    _emit("err", "NOT running as administrator. Windows (UIPI) will not give "
+                 "OpenSpan keyboard/mouse events while an ELEVATED window has "
+                 "focus — the mouse silently stops crossing to the iPad, with "
+                 "no error anywhere. If you run ANY app as admin, run OpenSpan "
+                 "as admin too.")
+    dark_alert(
+        app.root, "Run OpenSpan as administrator",
+        "OpenSpan is not running as administrator.\n\n"
+        "Windows blocks input hooks from a lower-privilege process. So if any "
+        "app you use runs as admin (an elevated terminal, for example), the "
+        "mouse will silently stop crossing to the iPad whenever that window "
+        "has focus — with no error shown anywhere.\n\n"
+        "If you run anything as admin, close OpenSpan and relaunch it with "
+        "\"Run as administrator\".")
 
 
 if __name__ == "__main__":

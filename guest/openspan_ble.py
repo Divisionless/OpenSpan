@@ -399,6 +399,8 @@ class OpenSpanBLE:
         self.bus = dbus.SystemBus()
         self.hid = None
         self.lock = threading.Lock()
+        self.adv = None
+        self.adv_on = False   # broadcasting is OPT-IN -- see register()
 
     def configure_adapter(self):
         props = dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
@@ -437,14 +439,52 @@ class OpenSpanBLE:
                                reply_handler=lambda: print("gatt: app registered"),
                                error_handler=lambda e: print(f"gatt error: {e}"))
 
-        adv = Advertisement(self.bus, 0)
-        self.adv = adv
-        lam = dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
-                             LE_ADV_MANAGER)
-        lam.RegisterAdvertisement(
-            adv.get_path(), {},
-            reply_handler=lambda: print("adv: registered, advertising as keyboard"),
-            error_handler=lambda e: print(f"adv error: {e}"))
+        # The LE advertisement is DELIBERATELY NOT registered here. Broadcasting
+        # is OPT-IN: the app turns it on with {"cmd":"adv","on":true} when the
+        # user presses Pair/Broadcast, and off again once the iPad is in.
+        # Registering at boot would make this machine advertise as a Bluetooth
+        # keyboard 24/7 -- and a bonded iPad would then silently reconnect on
+        # its own, with nothing in the UI ever saying so. Consent, not default.
+        self.adv = Advertisement(self.bus, 0)
+        self.adv_on = False
+        print("adv: OFF at boot -- broadcasting is opt-in (press Broadcast)")
+
+    def _adv_mgr(self):
+        return dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                              LE_ADV_MANAGER)
+
+    def start_adv(self):
+        """Begin advertising as a BLE keyboard. Only the app's Pair/Broadcast
+        calls this. D-Bus work is marshalled onto the main loop thread."""
+        if self.adv_on:
+            return
+        self.adv_on = True
+        GLib.idle_add(self._do_start_adv)
+
+    def _do_start_adv(self):
+        def failed(e):
+            self.adv_on = False
+            print(f"adv error: {e}")
+        self._adv_mgr().RegisterAdvertisement(
+            self.adv.get_path(), {},
+            reply_handler=lambda: print("adv: ON -- broadcasting as keyboard"),
+            error_handler=failed)
+        return False
+
+    def stop_adv(self):
+        """Stop advertising. Called the moment the iPad is in (and on cancel),
+        so the machine is not left beaconing as a keyboard."""
+        if not self.adv_on:
+            return
+        self.adv_on = False
+        GLib.idle_add(self._do_stop_adv)
+
+    def _do_stop_adv(self):
+        self._adv_mgr().UnregisterAdvertisement(
+            self.adv.get_path(),
+            reply_handler=lambda: print("adv: OFF -- not broadcasting"),
+            error_handler=lambda e: print(f"adv stop error: {e}"))
+        return False
 
     # ---- input helpers ----
     def send_keys(self, mods, keys):
@@ -506,7 +546,15 @@ class OpenSpanBLE:
         if cmd == "status":
             return {"ok": True,
                     "kbd_subscribed": bool(self.hid.kbd.notifying),
-                    "mouse_subscribed": bool(self.hid.mouse.notifying)}
+                    "mouse_subscribed": bool(self.hid.mouse.notifying),
+                    "advertising": bool(self.adv_on)}
+        if cmd == "adv":
+            # explicit, user-driven broadcasting: on only via Pair/Broadcast
+            if msg.get("on"):
+                self.start_adv()
+            else:
+                self.stop_adv()
+            return {"ok": True, "advertising": bool(self.adv_on)}
         if cmd == "text":
             threading.Thread(target=self.type_text, args=(msg["text"],),
                              daemon=True).start()

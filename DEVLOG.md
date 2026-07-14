@@ -145,6 +145,50 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
   `10^(dB/20)`, so the earbuds track the same perceptual curve as the Windows
   slider. Tagged v1.0.1.
 
+### Jul 14 — the copy that killed the mouse (and wasn't our bug)
+
+The worst bug in the project, and the most instructive.
+
+- **Symptom:** copy anything in Windows → the mouse silently stops crossing to
+  the iPad. The iPad still shows connected. Restarting the portal fixes it,
+  every single time.
+- **I shipped three fixes. All three were wrong.** (1) `leave()` did a blocking
+  socket send inside the hook proc — real hygiene problem, not this bug.
+  (2) Re-install the hook when it goes deaf. (3) Run the hooks on a replaceable
+  thread. Each one was aimed at the hook code, and each one failed.
+- **So I stopped guessing and instrumented it.** A heartbeat, a callback
+  counter, exception capture, per-call timing. The data was brutal and
+  unambiguous: the hook procs **never blocked**, **never threw**,
+  `SetWindowsHookEx` kept returning **valid handles** — and delivered **zero
+  callbacks** while the cursor was provably moving. Six re-installs in a row:
+  nothing. Brand-new threads: nothing. Only a **new process** ever restored it.
+- **The answer was Windows, not us. UIPI:** a non-elevated process receives
+  **no low-level input hooks while an elevated window has focus.** I was
+  copying inside an admin terminal. The instant it had focus, the portal went
+  deaf. "Restarting the portal fixed it" only because restarting **steals focus
+  back**.
+- **Fix:** run OpenSpan elevated. It now detects this, warns at launch, shows
+  `⚠ NOT ADMIN` in the status bar, and the README states it as a requirement.
+  **Every line of watchdog scaffolding written to chase it was deleted.**
+- **Lesson:** it looked *exactly* like a bug in our code, so I kept fixing our
+  code. The instrumentation is what ended it — not cleverness. When three fixes
+  in a row miss, stop fixing and start measuring.
+
+### Jul 14 — broadcasting is now opt-in (consent, not default)
+
+Doug caught this: the iPad was reconnecting on its own, and the app never said
+it was broadcasting. It wasn't a bug so much as a bad default — the daemon
+registered the BLE advertisement **at boot and never unregistered it**, so the
+machine advertised as a Bluetooth keyboard 24/7 and any bonded iPad would
+silently reconnect.
+
+Now: the daemon comes up **silent**. Only **Pair/Broadcast** turns advertising
+on, it turns itself **off** the moment the iPad is in (and on a failed or
+abandoned pair), and the status bar reports the **daemon's real state** —
+`📡 BROADCASTING` or `📡 not broadcasting` — never a UI guess. A bonded iPad
+now *cannot* reconnect without you asking. Headphone auto-reconnect is
+untouched.
+
 ---
 
 ## Operating principles that shaped it
@@ -223,9 +267,17 @@ is not "passes as an exe."
 ## Status
 
 Working & tested: BLE keyboard + mouse, edge crossing, keymap remaps,
-Bluetooth audio (volume + balance), two-way clipboard, fast pairing, themed
-in-frame dialogs, a lean one-window UI with a collapsible console + system
-tray, auto-reconnect, single-file exe. Clean repo, honest docs.
+Bluetooth audio (volume + balance), fast pairing, themed in-frame dialogs, a
+lean one-window UI with a collapsible console + system tray, opt-in
+broadcasting, headphone auto-reconnect, single-file exe. Clean repo, honest
+docs.
+
+**Still in progress — the two-way clipboard.** The plumbing works (FKA chords →
+Apple Shortcuts → a token-guarded LAN relay), but it is *not* finished: the
+iPad Shortcut's token can drift out of sync with the relay's and paste then
+returns a "bad token" error instead of your text, and the setup is not yet
+documented well enough for anyone else to reproduce reliably. Treat clipboard
+sync as experimental until that's sorted.
 
 Reproducible VM: `create-vm.ps1` + `guest/provision.sh` turn a fresh Debian
 into the working bridge — validated on a fresh clone (software) and confirmed
