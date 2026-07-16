@@ -1521,6 +1521,8 @@ class App:
         self.portal_proc = None
         self.audio_proc = None
         self._tray = None
+        self._chromeless_on = False   # frameless custom-chrome window
+        self._min_pending = False     # minimize in flight (see _on_restore)
         self._audio_logf = None
         self._portal_logf = None
         self._audio_lock = threading.Lock()  # serialize sender (re)launch so
@@ -1538,6 +1540,7 @@ class App:
         self._pair_inflight = False    # Broadcast pressed, iPad not yet in
         self._broadcast_started = 0.0
         root.after(50, self._drain_ui)
+        root.bind("<Map>", self._on_restore)  # re-arm frameless after minimize
         self._theme()
 
         # The whole UI lives inside self._full. The command console collapses to
@@ -1592,18 +1595,38 @@ class App:
         self.log("event", "OpenSpan started.")
 
         head = tk.Frame(full, bg=BG)
-        head.pack(fill="x", padx=16, pady=(14, 4))
+        head.pack(fill="x", padx=16, pady=(12, 4))
         self._cons_anchor = head   # the console packs before this when opened
-        tk.Label(head, text="OpenSpan", bg=BG, fg=FG,
-                 font=("Segoe UI Semibold", 18)).pack(side="left")
-        tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
-                 font=("Segoe UI", 10)).pack(side="left", padx=(10, 0),
-                                             pady=(8, 0))
+        _t1 = tk.Label(head, text="OpenSpan", bg=BG, fg=FG,
+                       font=("Segoe UI Semibold", 18))
+        _t1.pack(side="left")
+        _t2 = tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
+                       font=("Segoe UI", 10))
+        _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
+        # custom window chrome: the native title bar is gone, so THIS row is
+        # the title bar -- close + minimize on the right, drag anywhere on it.
+        _close = tk.Button(head, text="✕", command=self._confirm_close,
+                           bg=BG, fg=MUTED, bd=0, relief="flat", width=3,
+                           font=("Segoe UI", 12), activebackground=DANGER,
+                           activeforeground="#ffffff", cursor="hand2")
+        _close.pack(side="right", padx=(6, 0))
+        _close.bind("<Enter>", lambda e: _close.config(bg=DANGER, fg="#ffffff"))
+        _close.bind("<Leave>", lambda e: _close.config(bg=BG, fg=MUTED))
+        _min = tk.Button(head, text="—", command=self._minimize,
+                         bg=BG, fg=MUTED, bd=0, relief="flat", width=3,
+                         font=("Segoe UI", 11), activebackground=PANEL,
+                         activeforeground=FG, cursor="hand2")
+        _min.pack(side="right")
+        _min.bind("<Enter>", lambda e: _min.config(bg=PANEL, fg=FG))
+        _min.bind("<Leave>", lambda e: _min.config(bg=BG, fg=MUTED))
         ttk.Button(head, text="⤓  Send to Tray", command=self._to_tray).pack(
-            side="right")
+            side="right", padx=(0, 12))
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
+        for _w in (head, _t1, _t2):   # drag the header to move the window
+            _w.bind("<Button-1>", self._start_drag)
+            _w.bind("<B1-Motion>", self._on_drag)
 
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
@@ -2023,8 +2046,65 @@ class App:
                foreground=[("selected", "#eafff3")])
 
     def _dark_titlebar(self):
-        """Paint the Windows title bar dark (DWM immersive dark mode)."""
-        _paint_dark_titlebar(self.root)
+        """The app is frameless now: no native Windows title bar. Its own
+        header row is the title bar (draggable, with minimize + close)."""
+        self._chromeless()
+
+    def _chromeless(self):
+        """Drop the native window chrome for a modern borderless look."""
+        root = self.root
+        try:
+            root.overrideredirect(True)
+            self._chromeless_on = True
+        except tk.TclError:
+            self._chromeless_on = False
+            return
+        root.update_idletasks()
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            hwnd = u.GetAncestor(root.winfo_id(), 2) or root.winfo_id()  # GA_ROOT
+            GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW = -20, 0x40000, 0x80
+            ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            u.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                             (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW)
+            pref = ctypes.c_int(2)   # DWMWCP_ROUND: rounded corners (Win11)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+            root.withdraw()
+            root.deiconify()   # re-map so the taskbar registers the new style
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _start_drag(self, e):
+        self._drag_ox, self._drag_oy = e.x_root, e.y_root
+        m = re.match(r"[\dx]+\+(-?\d+)\+(-?\d+)", self.root.geometry())
+        self._drag_wx = int(m.group(1)) if m else self.root.winfo_x()
+        self._drag_wy = int(m.group(2)) if m else self.root.winfo_y()
+
+    def _on_drag(self, e):
+        self.root.geometry(
+            f"+{self._drag_wx + e.x_root - self._drag_ox}"
+            f"+{self._drag_wy + e.y_root - self._drag_oy}")
+
+    def _minimize(self):
+        # overrideredirect windows can't iconify directly: drop the flag, then
+        # iconify. _on_restore re-applies it on un-minimize; this path also
+        # keeps a working taskbar button.
+        try:
+            self._min_pending = True
+            self.root.overrideredirect(False)
+            self.root.iconify()
+        except tk.TclError:
+            self._min_pending = False
+
+    def _on_restore(self, _e=None):
+        if self._min_pending and self.root.state() == "normal":
+            self._min_pending = False
+            try:
+                self.root.overrideredirect(True)
+            except tk.TclError:
+                pass
 
     def _manual_bt_begin(self):
         """Manual BT actions (Connect/Disconnect/Forget/Scan) register here
