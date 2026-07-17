@@ -1726,6 +1726,9 @@ class App:
                         variable=self.invert_scroll,
                         command=self._on_invert_scroll).grid(
             row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
+        ttk.Button(ctl, text="↻  Re-pair iPad  (reset a stale bond)",
+                   command=lambda: self.pair(reset=True)).grid(
+            row=3, column=0, columnspan=3, sticky="ew", padx=3, pady=(0, 3))
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -2583,17 +2586,23 @@ class App:
                     pass
         threading.Thread(target=work, daemon=True).start()
 
-    def pair(self):
-        # deliberate pairing is a conscious trade: we free the whole radio for
-        # a fast broadcast by briefly dropping the earbud audio link (our own
-        # silence-feed keeps A2DP transmitting otherwise, which starves the
-        # advertising and is why the iPad is slow to SEE the keyboard). Confirm
-        # before touching the user's audio.
-        if not dark_confirm(
-                self.root, "Pair the iPad now?",
-                "This briefly disconnects Bluetooth audio so the iPad finds "
-                "the keyboard fast — it reconnects automatically the moment "
-                "the iPad pairs."):
+    def pair(self, reset=False):
+        # Broadcast frees the radio (drops the earbud link briefly) so the iPad
+        # connects fast. Default KEEPS the bond -> a good iPad RECONNECTS.
+        # reset=True FORGETS the iPad's stale bond first, for a clean re-pair
+        # when a kept bond has gone bad (iPad forgotten / key mismatch).
+        if reset:
+            title = "Reset and re-pair the iPad?"
+            body = ("Use this only when the iPad won't connect. It FORGETS the "
+                    "iPad's saved pairing on this side so you can pair from "
+                    "scratch (you'll re-add \"OpenSpan Keyboard\" on the iPad). "
+                    "Earbuds are untouched. Audio drops briefly, then returns.")
+        else:
+            title = "Pair the iPad now?"
+            body = ("This briefly disconnects Bluetooth audio so the iPad "
+                    "finds the keyboard fast — it reconnects automatically the "
+                    "moment the iPad pairs.")
+        if not dark_confirm(self.root, title, body):
             return
         # immediate visual acknowledgement (the work runs in a thread).
         # _pair_inflight is set HERE, before the worker: the openspanble
@@ -2604,37 +2613,40 @@ class App:
         self.pair_btn.config(text="📡  Working…")
         self.pair_btn.state(["disabled"])
         self.status.set("Preparing to broadcast…")
-        threading.Thread(target=self._pair_worker, daemon=True).start()
+        threading.Thread(target=self._pair_worker, args=(reset,),
+                         daemon=True).start()
 
-    def _pair_worker(self):
+    def _pair_worker(self, reset=False):
         if not vm_running():
             start_vm_clean()
             for _ in range(45):
                 if daemon_status() is not None:
                     break
                 threading.Event().wait(2)
-        # Restart the keyboard daemon so the iPad pairs to a FRESH GATT server
-        # (a stale CCCD/subscription from a prior restart is why a "connected"
-        # keyboard silently delivers no input). Bond cleanup is FAIL-CLOSED:
-        # a device is removed only when bluetoothctl info EXPLICITLY shows
-        # "Connected: no" AND it is not an audio device AND it is not the
-        # last audio device on record -- if info comes back empty (busy
-        # bluetoothd), the device is KEPT. The old fail-open version could
-        # remove the PLAYING earbuds' bond on an empty info, which force-
-        # disconnects them mid-song. (ExecStartPre is conditional dual-mode,
-        # so the restart does not power-cycle the radio.)
+        # Restart the keyboard daemon so the iPad gets a FRESH GATT server (a
+        # stale CCCD/subscription is why a "connected" keyboard can silently
+        # deliver no input). We now KEEP every bond: the old code wiped every
+        # disconnected non-audio device right here, which nuked the iPad's OWN
+        # bond on every Broadcast and forced a full re-pair each session -- the
+        # single worst UX bug in the app. The fresh GATT from the restart is
+        # enough on its own; a bonded iPad now RECONNECTS and re-subscribes
+        # instead of re-pairing. (If a bond ever goes genuinely stale, Forget
+        # it from the device list -- an explicit, user-driven wipe, not this
+        # blanket one.) ExecStartPre is conditional dual-mode, so the restart
+        # does not power-cycle the radio.
+        # reset=True only: forget every disconnected non-audio bond (the iPad)
+        # so it re-pairs clean. Earbuds ("Icon: audio") are always exempt.
+        wipe = ('for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
+                '[ "$d" = "$AUD" ] && continue; '
+                'info=$(bluetoothctl info "$d" 2>/dev/null); '
+                'echo "$info" | grep -q "Connected: no" || continue; '
+                'echo "$info" | grep -qi "Icon: audio" && continue; '
+                'bluetoothctl remove "$d" >/dev/null 2>&1; '
+                'done; ') if reset else ''
         r = ssh_guest(
             'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-            # free the whole radio for a fast broadcast: drop the earbud audio
-            # link now (it is reconnected automatically once the iPad pairs)
             '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" >/dev/null 2>&1; '
-            'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
-            '[ "$d" = "$AUD" ] && continue; '
-            'info=$(bluetoothctl info "$d" 2>/dev/null); '
-            'echo "$info" | grep -q "Connected: no" || continue; '
-            'echo "$info" | grep -qi "Icon: audio" && continue; '
-            'bluetoothctl remove "$d" >/dev/null 2>&1; '
-            'done; '
+            + wipe +
             'systemctl restart openspanble; '
             'for i in $(seq 20); do ss -ltn 2>/dev/null | grep -q ":9955" '
             '&& break; sleep 1; done; sleep 1; '
