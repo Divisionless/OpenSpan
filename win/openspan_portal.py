@@ -72,6 +72,21 @@ MOUSE_SENS = float(_SETTINGS.get("mouse_sensitivity", 1.0))
 DAEMON = (_SETTINGS.get("daemon_host", "127.0.0.1"),
           int(_SETTINGS.get("daemon_port", 9955)))
 
+# Scroll-wheel direction. Read LIVE from openspan_settings.json so the app's
+# "Invert scroll" toggle applies without restarting the portal. A tiny watcher
+# thread refreshes it off the hook thread (never file I/O inside a hook proc).
+SCROLL_INVERT = bool(_SETTINGS.get("scroll_invert", False))
+
+
+def _scroll_watcher():
+    global SCROLL_INVERT
+    while True:
+        try:
+            SCROLL_INVERT = bool(_load_settings().get("scroll_invert", False))
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.4)
+
 
 def get_clipboard_text():
     """Read Unicode text from the Windows clipboard (stdlib ctypes)."""
@@ -414,6 +429,8 @@ class Portal:
                     self.q.put(("b", 0, 0, 0)); return 1
                 elif wParam == WM_MOUSEWHEEL:
                     delta = ctypes.c_short(ms.mouseData >> 16).value // 120
+                    if SCROLL_INVERT:
+                        delta = -delta
                     self.q.put(("w", 0, 0, delta)); return 1
         return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
@@ -634,6 +651,7 @@ class Portal:
             print("[portal] WARNING: no portals in config — only "
                   "Ctrl+Alt+I toggle will work. Run openspan_setup.py.")
         threading.Thread(target=self.sender, daemon=True).start()
+        threading.Thread(target=_scroll_watcher, daemon=True).start()
         self.mouse_hook = user32.SetWindowsHookExW(
             WH_MOUSE_LL, self._mcb, kernel32.GetModuleHandleW(None), 0)
         self.kbd_hook = user32.SetWindowsHookExW(

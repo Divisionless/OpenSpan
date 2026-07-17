@@ -413,6 +413,33 @@ def is_elevated():
 # Token-gated: the clipboard carries passwords, and any LAN device can
 # reach the port. Text only (CF_UNICODETEXT), UTF-8 on the wire.
 SETTINGS = os.path.join(ROOT, "openspan_settings.json")
+
+
+def load_setting(key, default=None):
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            return json.load(f).get(key, default)
+    except (OSError, ValueError):
+        return default
+
+
+def save_setting(key, value):
+    """Persist one key into openspan_settings.json atomically, without
+    destroying the rest of the user's settings."""
+    cfg = {}
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        pass
+    cfg[key] = value
+    try:
+        tmp = SETTINGS + ".new"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, SETTINGS)
+    except OSError:
+        pass
 CLIP_MAX = 10 * 1024 * 1024  # 10 MB cap on inbound clipboard payloads
 BAL_FILE = os.path.join(ROOT, "audio_balance.txt")  # -1 (L) .. +1 (R); the
 #   audio sender polls this every 150ms and applies it as channel gains
@@ -1693,6 +1720,12 @@ class App:
         ttk.Button(ctl, text="Edit keymap",
                    command=lambda: os.startfile(KEYMAP)).grid(
             row=1, column=0, columnspan=3, sticky="ew", padx=3, pady=3)
+        self.invert_scroll = tk.BooleanVar(
+            value=bool(load_setting("scroll_invert", False)))
+        ttk.Checkbutton(ctl, text="⇅  Invert scroll wheel",
+                        variable=self.invert_scroll,
+                        command=self._on_invert_scroll).grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -2105,6 +2138,12 @@ class App:
                 self.root.overrideredirect(True)
             except tk.TclError:
                 pass
+
+    def _on_invert_scroll(self):
+        on = bool(self.invert_scroll.get())
+        save_setting("scroll_invert", on)
+        _emit("event", f"scroll wheel {'INVERTED' if on else 'normal'} — "
+                       "applies live, no restart.")
 
     def _manual_bt_begin(self):
         """Manual BT actions (Connect/Disconnect/Forget/Scan) register here
