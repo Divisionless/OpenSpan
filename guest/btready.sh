@@ -9,7 +9,21 @@
 source /opt/openspan/env.sh
 /opt/openspan/wait-hci0.sh
 sleep 3
-# If bluez has no controller registered, restart bluetoothd so it detects hci0.
+# Restart bluetoothd now that the radio is up. TWO boot-races to defeat:
+#  1) bluez may have started before the USB radio enumerated -> NO controller
+#     registered ('Index list with 0');
+#  2) EVEN WITH a controller, bluez arms LE address resolution at startup
+#     against a not-yet-ready radio and gets 'Failed to set privacy: Rejected
+#     (0x0b)'. Resolution then stays OFF the whole session, so a bonded iPad's
+#     resolvable-private-address is never matched to its stored bond on
+#     reconnect -> encryption can't start -> the link drops ('security
+#     requested but not available'). Fresh pairing dodges it; reconnect dies on
+#     it. Restarting against the now-ready radio arms resolution and makes
+#     bonded reconnect actually stick. (Known BlueZ bug; the documented fix is
+#     exactly this restart-after-settle.)
+systemctl restart bluetooth
+sleep 6
+# belt-and-suspenders: if the controller STILL isn't registered, keep trying
 for try in 1 2 3; do
   if btmgmt info 2>/dev/null | grep -q 'Index list with 0'; then
     systemctl restart bluetooth
