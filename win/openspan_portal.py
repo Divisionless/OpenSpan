@@ -8,7 +8,7 @@ streamed to the iPad over BLE; cross back to return control to the PC.
 
   Cross the portal edge   -> control the iPad
   Move back across it, or -> control the PC
-  press Ctrl+Alt+Q        -> panic exit
+  press Esc 3x in a row   -> panic exit (Ctrl+Alt+Q kept as backup)
   press Ctrl+Alt+I        -> toggle manually (ignores geometry)
 
 Pure ctypes; closing this console unhooks everything (safety net).
@@ -261,6 +261,8 @@ class Portal:
         self._chord_until = 0.0   # passthrough reports are dropped until
         #                           then, so they can't clobber an FKA chord
         self._hot_down = set()    # clipboard-hotkey VKs currently held
+        self._esc_hist = []       # timestamps of consecutive Esc presses
+                                  # (panic bail: Esc x3 within 2s)
         #                           (typematic autorepeat must not re-fire)
         self._last_chord = 0.0    # plus a hard min-interval between chords
         self._last_sync_seq = None  # Windows clipboard seq at last iPad sync
@@ -318,6 +320,13 @@ class Portal:
             except socket.timeout:
                 pass
         except OSError:
+            # NEVER hold the mouse hostage while forwarding is failing: if
+            # the link dies mid-capture, hand control back to the PC FIRST,
+            # then worry about reconnecting. (leave() is non-blocking.)
+            if self.active:
+                print("[portal] link lost while captured — releasing the "
+                      "mouse to the PC")
+                self.leave()
             print("[portal] link lost; reconnecting...")
             self._connect()
 
@@ -329,7 +338,7 @@ class Portal:
         self.perp = ENTER_MARGIN
         user32.SetCursorPos(self.cx, self.cy)
         print(f"[portal] >>> iPad mode ON via {portal['axis']}"
-              f"={portal['line']}  (Ctrl+Alt+Q to exit)")
+              f"={portal['line']}  (Esc x3 to bail)")
         # UNIFIED CLIPBOARD, entry half: if the Windows clipboard changed
         # since the last sync, hand it to the iPad now (fires the iPad's
         # "Paste from PC" shortcut) -- so a plain Ctrl(=Cmd)+V on the iPad
@@ -441,11 +450,29 @@ class Portal:
             vk = kb.vkCode
             down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
             up = wParam in (WM_KEYUP, WM_SYSKEYUP)
+            # ---- PANIC BAIL: Esc x3 in a row while captured --------------
+            # Must work when EVERYTHING else is broken: no sockets, no other
+            # thread, no reliance on our tracked-modifier state (which is
+            # exactly what can be desynced in a bad state). Three plain Esc
+            # presses within 2s always hand the mouse back to the PC.
+            if down and self.active:
+                if vk == 0x1B:                                 # Esc
+                    now = time.time()
+                    self._esc_hist = [t for t in self._esc_hist
+                                      if now - t < 2.0] + [now]
+                    if len(self._esc_hist) >= 3:
+                        self._esc_hist.clear()
+                        print("[portal] PANIC BAIL (Esc x3) — iPad mode OFF, "
+                              "control back on PC")
+                        self.leave()
+                        return 1
+                else:
+                    self._esc_hist.clear()
             ctrl = self.mods & 0x11
             alt = self.mods & 0x44
             if down and vk == 0x51 and ctrl and alt:      # Ctrl+Alt+Q
-                if self.active:
-                    self.leave()
+                if self.active:                           # legacy bail, kept
+                    self.leave()                          # as a backup
                 return 1
             if down and vk == 0x49 and ctrl and alt:      # Ctrl+Alt+I
                 if self.active:
@@ -660,7 +687,7 @@ class Portal:
             print("[portal] ERROR: failed to install hooks")
             return
         print(f"[portal] ready — {len(self.portals)} portal(s) loaded. "
-              "Cross the edge to control the iPad; Ctrl+Alt+Q to bail.")
+              "Cross the edge to control the iPad; tap Esc 3x to bail.")
         msg = wt.MSG()
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
             user32.TranslateMessage(ctypes.byref(msg))

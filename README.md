@@ -127,7 +127,7 @@ reputation gate may block a raw `pythonw.exe`; `BUILD.md` explains the packaged
 exe and the interpreter workaround. The control app starts/stops the bridge VM
 and the input portal, arranges the iPad among your monitors, and edits the
 keymap. In the portal, cross the arranged edge to control the iPad;
-**Ctrl+Alt+Q** bails out, **Ctrl+Alt+I** toggles manually.
+**Esc pressed 3× in a row** is the panic bail — it always returns the mouse to the PC, even if the bridge is broken. (**Ctrl+Alt+Q** still works as a backup; **Ctrl+Alt+I** toggles manually.)
 
 ## Setup
 
