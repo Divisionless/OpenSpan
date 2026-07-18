@@ -358,6 +358,12 @@ class Advertisement(dbus.service.Object):
             "Appearance": dbus.UInt16(0x03C1),  # HID Keyboard
             "Discoverable": dbus.Boolean(True),
             "IncludeTxPower": dbus.Boolean(True),
+            # Advertise FAST (ms) so the iPad discovers us quickly instead of
+            # buried behind neighbours' beacons. 20-152ms is the "fast connect"
+            # band. If a controller rejects these, RegisterAdvertisement fails
+            # and the app's honest Broadcast surfaces it -- then drop these two.
+            "MinInterval": dbus.UInt32(100),
+            "MaxInterval": dbus.UInt32(152),
         }
 
     @dbus.service.method(LE_ADVERTISEMENT_IFACE)
@@ -650,6 +656,24 @@ class OpenSpanBLE:
             else:
                 self.stop_adv()
             return {"ok": True, "advertising": bool(self.adv_on)}
+        if cmd == "disconnect":
+            # disconnect the connected HID host (the iPad); NEVER an audio
+            # device (the earbuds share this radio).
+            n = 0
+            try:
+                om = dbus.Interface(self.bus.get_object(BLUEZ, "/"), DBUS_OM)
+                for p, ifaces in om.GetManagedObjects().items():
+                    d = ifaces.get("org.bluez.Device1")
+                    if not d or not d.get("Connected"):
+                        continue
+                    if str(d.get("Icon", "")).startswith("audio"):
+                        continue
+                    dbus.Interface(self.bus.get_object(BLUEZ, p),
+                                   "org.bluez.Device1").Disconnect()
+                    n += 1
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)}
+            return {"ok": True, "disconnected": n}
         if cmd == "text":
             threading.Thread(target=self.type_text, args=(msg["text"],),
                              daemon=True).start()

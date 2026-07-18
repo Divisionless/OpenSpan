@@ -1651,9 +1651,8 @@ class App:
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
-        for _w in (head, _t1, _t2):   # drag the header to move the window
+        for _w in (head, _t1, _t2):   # drag the header (native Windows move)
             _w.bind("<Button-1>", self._start_drag)
-            _w.bind("<B1-Motion>", self._on_drag)
 
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
@@ -1729,6 +1728,14 @@ class App:
         ttk.Button(ctl, text="↻  Re-pair iPad  (reset a stale bond)",
                    command=lambda: self.pair(reset=True)).grid(
             row=3, column=0, columnspan=3, sticky="ew", padx=3, pady=(0, 3))
+        self._disc_btn = ttk.Button(ctl, text="⏏  Disconnect iPad",
+                                    command=self._disconnect_ipad)
+        self._disc_btn.grid(row=4, column=0, columnspan=3, sticky="ew",
+                            padx=3, pady=(0, 3))
+        # start gated: Broadcast until the daemon is up, Disconnect until the
+        # iPad is actually connected (kept in sync by _apply_poll)
+        self.pair_btn.state(["disabled"])
+        self._disc_btn.state(["disabled"])
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -2082,64 +2089,81 @@ class App:
                foreground=[("selected", "#eafff3")])
 
     def _dark_titlebar(self):
-        """The app is frameless now: no native Windows title bar. Its own
-        header row is the title bar (draggable, with minimize + close)."""
+        """Apply the frameless custom-chrome look -- the SAFE way (a normal,
+        taskbar-backed window with the caption stripped; never the invisible-
+        ghost overrideredirect). See _chromeless / _strip_caption."""
         self._chromeless()
 
     def _chromeless(self):
-        """Drop the native window chrome for a modern borderless look."""
-        root = self.root
+        """Modern frameless window done SAFELY. NO overrideredirect -- that made
+        an invisible, unrecoverable ghost on minimize/tray (no window, no
+        taskbar, no tray). This stays a NORMAL top-level window (real taskbar
+        button, native minimize, Alt-Tab) and just strips the caption via
+        window styles, so it can never vanish. The header row is the title bar."""
+        self.root.update_idletasks()
         try:
-            root.overrideredirect(True)
+            self._strip_caption()
             self._chromeless_on = True
-        except tk.TclError:
+        except Exception:  # noqa: BLE001
             self._chromeless_on = False
-            return
-        root.update_idletasks()
-        try:
-            import ctypes
-            u = ctypes.windll.user32
-            hwnd = u.GetAncestor(root.winfo_id(), 2) or root.winfo_id()  # GA_ROOT
-            GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW = -20, 0x40000, 0x80
-            ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            u.SetWindowLongW(hwnd, GWL_EXSTYLE,
-                             (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW)
-            pref = ctypes.c_int(2)   # DWMWCP_ROUND: rounded corners (Win11)
+
+    def _strip_caption(self):
+        """Remove the caption + resize border via window styles while KEEPING a
+        normal, taskbar-backed top-level window. Idempotent -- safe to re-apply
+        after a restore, in case Windows re-adds the caption."""
+        import ctypes
+        u = ctypes.windll.user32
+        hwnd = u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+        self._hwnd = hwnd
+        GWL_STYLE, GWL_EXSTYLE = -16, -20
+        WS_CAPTION, WS_THICKFRAME = 0x00C00000, 0x00040000
+        WS_MINIMIZEBOX, WS_MAXIMIZEBOX, WS_SYSMENU = 0x20000, 0x10000, 0x80000
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW = 0x40000, 0x80
+        SWP = 0x0027  # FRAMECHANGED | NOSIZE | NOMOVE | NOZORDER
+        st = u.GetWindowLongW(hwnd, GWL_STYLE)
+        st = (st & ~WS_CAPTION & ~WS_THICKFRAME) \
+            | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
+        u.SetWindowLongW(hwnd, GWL_STYLE, st)
+        ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        u.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                         (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW)
+        u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP)
+        try:  # Win11 rounded corners (harmless on Win10)
+            pref = ctypes.c_int(2)  # DWMWCP_ROUND
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
-            root.withdraw()
-            root.deiconify()   # re-map so the taskbar registers the new style
         except Exception:  # noqa: BLE001
             pass
 
     def _start_drag(self, e):
-        self._drag_ox, self._drag_oy = e.x_root, e.y_root
-        m = re.match(r"[\dx]+\+(-?\d+)\+(-?\d+)", self.root.geometry())
-        self._drag_wx = int(m.group(1)) if m else self.root.winfo_x()
-        self._drag_wy = int(m.group(2)) if m else self.root.winfo_y()
-
-    def _on_drag(self, e):
-        self.root.geometry(
-            f"+{self._drag_wx + e.x_root - self._drag_ox}"
-            f"+{self._drag_wy + e.y_root - self._drag_oy}")
+        # Hand the move to Windows' NATIVE title-bar drag loop -- smooth, with
+        # Aero Snap -- instead of jittery per-motion geometry updates in Tk.
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            hwnd = getattr(self, "_hwnd", None) or \
+                u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+            u.ReleaseCapture()
+            u.SendMessageW(hwnd, 0xA1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
+        except Exception:  # noqa: BLE001
+            pass
 
     def _minimize(self):
-        # overrideredirect windows can't iconify directly: drop the flag, then
-        # iconify. _on_restore re-applies it on un-minimize; this path also
-        # keeps a working taskbar button.
+        # normal window -> native minimize straight to the taskbar; it always
+        # comes back from the taskbar (no overrideredirect games = no ghost).
         try:
-            self._min_pending = True
-            self.root.overrideredirect(False)
             self.root.iconify()
         except tk.TclError:
-            self._min_pending = False
+            pass
 
     def _on_restore(self, _e=None):
-        if self._min_pending and self.root.state() == "normal":
-            self._min_pending = False
+        # a restore/deiconify can let Windows re-add the caption -- re-strip it.
+        # (A normal window keeps its taskbar button regardless, so this is only
+        # cosmetic belt-and-suspenders, never a recoverability requirement.)
+        if self._chromeless_on and self.root.state() == "normal":
             try:
-                self.root.overrideredirect(True)
-            except tk.TclError:
+                self._strip_caption()
+            except Exception:  # noqa: BLE001
                 pass
 
     def _on_invert_scroll(self):
@@ -2726,6 +2750,18 @@ class App:
                             "tap \"OpenSpan Keyboard\" to pair")
         self.ui(ok)
 
+    def _disconnect_ipad(self):
+        """Manually drop the iPad's BLE link (the bond stays, so the next
+        Broadcast reconnects). Runs off the UI thread."""
+        def work():
+            r = daemon_cmd({"cmd": "disconnect"})
+            if r and r.get("ok"):
+                _emit("event", f"disconnected the iPad "
+                               f"({r.get('disconnected', 0)} link).")
+            else:
+                _emit("err", "couldn't disconnect the iPad — see console.")
+        threading.Thread(target=work, daemon=True).start()
+
     # ---- status tick ----
     def _tick(self):
         threading.Thread(target=self._poll, daemon=True).start()
@@ -2793,6 +2829,13 @@ class App:
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
         connected = bool(st and st.get("kbd_subscribed"))
+        # gate the action buttons: Broadcast only once the daemon is up, and
+        # Disconnect only while the iPad is connected. The pair flow owns the
+        # button while it works, so never fight it mid-broadcast.
+        if not self._pair_inflight and not self.broadcasting:
+            self.pair_btn.state(["!disabled"] if st is not None
+                                else ["disabled"])
+        self._disc_btn.state(["!disabled"] if connected else ["disabled"])
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
             if self._ipad_conn is not None or connected:
