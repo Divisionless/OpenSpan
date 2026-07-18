@@ -2413,18 +2413,22 @@ class App:
         self.root.after(400, self.root.destroy)
 
     def _confirm_close(self):
-        """X handler. Closing is a full stop (portal + audio + VM), so ask --
-        with the option to keep everything running from the system tray. Shown
-        as an in-frame overlay (not a separate window); the engine's re-entrancy
-        guard handles a second X while it's open."""
+        """X handler. The recommended close is KEEP THE BRIDGE WARM (tray):
+        a full shutdown powers off the VM, and a fresh VM makes the bonded
+        iPad reconnect to 'connected but no input' until it is re-paired. So
+        tray is the default and shutdown is the deliberate, warned choice.
+        Shown as an in-frame overlay; the re-entrancy guard handles a second
+        X while it's open."""
         choice = _dialog(
-            self.root, "Close OpenSpan?",
-            "Closing OpenSpan shuts EVERYTHING down — the input portal, the "
-            "audio sender, and the bridge VM. Audio and the iPad keyboard "
-            "stop.\n\nSend it to the system tray instead to keep the bridge "
-            "running.",
-            [("Send to system tray", "tray", "TButton"),
-             ("⏻  Yes, shut it down", "shutdown", "Danger.TButton"),
+            self.root, "Keep OpenSpan running?",
+            "Send it to the tray and the bridge stays warm — the iPad keeps "
+            "working and reconnects with NO re-pairing.\n\nA full shut down "
+            "powers off the VM. Next launch the iPad reconnects but won't "
+            "accept input until you re-pair it (the ↻ Re-pair / reset "
+            "button). Only shut down if you're done for a while.",
+            [("⤓  Send to tray  (keeps the iPad working)", "tray", "TButton"),
+             ("⏻  Shut down — needs a re-pair next time", "shutdown",
+              "Danger.TButton"),
              ("Cancel", "cancel", "TButton")])
         if choice == "tray":
             self._to_tray()
@@ -2623,35 +2627,46 @@ class App:
                 if daemon_status() is not None:
                     break
                 threading.Event().wait(2)
-        # Restart the keyboard daemon so the iPad gets a FRESH GATT server (a
-        # stale CCCD/subscription is why a "connected" keyboard can silently
-        # deliver no input). We now KEEP every bond: the old code wiped every
-        # disconnected non-audio device right here, which nuked the iPad's OWN
-        # bond on every Broadcast and forced a full re-pair each session -- the
-        # single worst UX bug in the app. The fresh GATT from the restart is
-        # enough on its own; a bonded iPad now RECONNECTS and re-subscribes
-        # instead of re-pairing. (If a bond ever goes genuinely stale, Forget
-        # it from the device list -- an explicit, user-driven wipe, not this
-        # blanket one.) ExecStartPre is conditional dual-mode, so the restart
-        # does not power-cycle the radio.
-        # reset=True only: forget every disconnected non-audio bond (the iPad)
-        # so it re-pairs clean. Earbuds ("Icon: audio") are always exempt.
-        wipe = ('for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
+        # The daemon restart is FRESH-PAIR-ONLY. Restarting it on a plain
+        # Broadcast was the reconnect input-killer: it wiped the daemon's
+        # GATT subscription state at the exact moment the kept-bond iPad
+        # reconnects -- and a bonded iPad does NOT re-subscribe (per BLE
+        # spec it assumes the peripheral persisted its CCCD), so the link
+        # came up with nobody notifying = "connected but no input". The
+        # restart also killed the running portal's daemon socket mid-
+        # session (its sender then loops in _connect forever). This restart
+        # is very likely the ORIGINAL cause of the old no-input ghost that
+        # the blanket bond-wipe was papering over.
+        if reset:
+            # fresh pair: forget every disconnected non-audio bond (the
+            # iPad) so it re-pairs clean -- earbuds ("Icon: audio") always
+            # exempt -- then restart for a truly fresh GATT server.
+            r = ssh_guest(
+                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
+                '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" '
+                '>/dev/null 2>&1; '
+                'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
                 '[ "$d" = "$AUD" ] && continue; '
                 'info=$(bluetoothctl info "$d" 2>/dev/null); '
                 'echo "$info" | grep -q "Connected: no" || continue; '
                 'echo "$info" | grep -qi "Icon: audio" && continue; '
                 'bluetoothctl remove "$d" >/dev/null 2>&1; '
-                'done; ') if reset else ''
-        r = ssh_guest(
-            'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-            '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" >/dev/null 2>&1; '
-            + wipe +
-            'systemctl restart openspanble; '
-            'for i in $(seq 20); do ss -ltn 2>/dev/null | grep -q ":9955" '
-            '&& break; sleep 1; done; sleep 1; '
-            'bluetoothctl pairable on',
-            timeout=40)
+                'done; '
+                'systemctl restart openspanble; '
+                'for i in $(seq 20); do ss -ltn 2>/dev/null | grep -q ":9955" '
+                '&& break; sleep 1; done; sleep 1; '
+                'bluetoothctl pairable on',
+                timeout=40)
+        else:
+            # reconnect: daemon left RUNNING (portal socket + GATT
+            # subscription continuity stay intact) -- just free the radio
+            # and let the bonded iPad back in.
+            r = ssh_guest(
+                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
+                '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" '
+                '>/dev/null 2>&1; '
+                'bluetoothctl pairable on',
+                timeout=40)
         if r.returncode != 0:
             # be honest: the guest work failed, so we are NOT broadcasting
             set_advertising(False)
@@ -2669,14 +2684,39 @@ class App:
                 self.status.set("Broadcast failed — see console.")
             self.ui(failed)
             return
-        # NOW start advertising -- this is the only place it is ever turned on,
-        # and only because the user pressed Pair/Broadcast. (The daemon restart
-        # above comes up silent, so the radio is not beaconing until here.)
-        if not set_advertising(True):
-            _emit("err", "could not start broadcasting — see console.")
+        # NOW start advertising. The button goes green ONLY if the daemon
+        # CONFIRMS it is advertising -- a silent failure can never masquerade as
+        # "Broadcasting" again. Every step is logged to the console so a failure
+        # is visible + reportable, not hidden behind a green button.
+        _emit("event", "guest ready (audio paused) — telling the daemon to "
+                       "broadcast…")
+        adv_ok = set_advertising(True)
+        st = daemon_status()
+        really_adv = bool(st and st.get("advertising"))
+        _emit("event", f"broadcast command: daemon ack={adv_ok}, daemon now "
+                       f"reports advertising={really_adv}")
+        if not adv_ok or not really_adv:
+            _emit("err", "BROADCAST DID NOT START. The daemon didn't accept the "
+                  "adv command (or isn't reachable on :9955). Nothing is "
+                  "advertising, so the iPad can't connect. Press Pair/Broadcast "
+                  "again; if it keeps failing, tell me this line.")
+            self.broadcasting = False
+            self._pair_inflight = False
+            self._auto_conn_last = 0.0
+            self._auto_conn_fails = 0
+            self._auto_reconnect_audio("broadcast didn't start — restoring audio")
+
+            def advfail():
+                self.pair_btn.state(["!disabled"])
+                self.pair_btn.config(style="TButton",
+                                     text="📡  Pair / Broadcast")
+                self.status.set("Broadcast didn't start — see console.")
+            self.ui(advfail)
+            return
         self.broadcasting = True
-        _emit("event", "radio freed (audio paused) — NOW BROADCASTING at full "
-                       "power; audio returns the moment the iPad pairs.")
+        _emit("event", "✅ NOW BROADCASTING at full power (daemon confirmed) — "
+                       "on the iPad, tap \"OpenSpan Keyboard\". Audio returns "
+                       "when it pairs.")
 
         def ok():
             self.pair_btn.state(["!disabled"])

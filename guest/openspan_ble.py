@@ -318,6 +318,24 @@ class BatteryService(Service):
         self.add_characteristic(c)
 
 
+class LayoutSaltService(Service):
+    """Throwaway service whose UUID and characteristic COUNT change on every
+    (re)registration, so the local GATT layout + Database Hash (0x2B2A) differ.
+    Added to the application FIRST so its handles shift the HID Report handles
+    too. Re-registering it WHILE the iPad is connected makes BlueZ flag that
+    central change-unaware (Robust Caching) + indicate Service Changed, forcing
+    the iPad to re-discover and re-subscribe -> StartNotify fires -> input flows
+    again after a cold-boot reconnect. iOS ignores the extra unknown service."""
+    def __init__(self, bus, index, gen):
+        g = gen & 0xffff
+        super().__init__(bus, index,
+                         f"6f70656e-7370-616e-{g:04x}-000000000001", True)
+        for i in range(1 + (gen % 4)):
+            self.add_characteristic(ReadOnlyChrc(
+                bus, i, f"6f70656e-7370-616e-{g:04x}-0000000000{i:02x}",
+                self, [gen & 0xff], flags=["read"]))
+
+
 # ---- Advertisement -----------------------------------------------------
 class Advertisement(dbus.service.Object):
     def __init__(self, bus, index):
@@ -401,6 +419,9 @@ class OpenSpanBLE:
         self.lock = threading.Lock()
         self.adv = None
         self.adv_on = False   # broadcasting is OPT-IN -- see register()
+        self._gen = int(time.time()) & 0xffff  # GATT layout salt; differs each boot
+        self._exported = []     # every exported GATT dbus obj, for clean teardown
+        self._resub_tries = {}  # iPad device path -> re-subscribe nudge count (cap 2)
 
     def configure_adapter(self):
         props = dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
@@ -424,30 +445,104 @@ class OpenSpanBLE:
         self._agent = agent
 
     def register(self):
-        app = Application(self.bus)
-        dev = DeviceInfoService(self.bus, 0)
-        bat = BatteryService(self.bus, 1)
-        self.hid = HidService(self.bus, 2)
-        app.add_service(dev)
-        app.add_service(bat)
-        app.add_service(self.hid)
-        self.app = app
-
-        gm = dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
-                            GATT_MANAGER)
-        gm.RegisterApplication(app.get_path(), {},
-                               reply_handler=lambda: print("gatt: app registered"),
-                               error_handler=lambda e: print(f"gatt error: {e}"))
-
-        # The LE advertisement is DELIBERATELY NOT registered here. Broadcasting
-        # is OPT-IN: the app turns it on with {"cmd":"adv","on":true} when the
-        # user presses Pair/Broadcast, and off again once the iPad is in.
-        # Registering at boot would make this machine advertise as a Bluetooth
-        # keyboard 24/7 -- and a bonded iPad would then silently reconnect on
-        # its own, with nothing in the UI ever saying so. Consent, not default.
+        self._build_and_register()
+        # LE advertisement stays OPT-IN (unchanged): the app turns it on via
+        # {"cmd":"adv","on":true} on Pair/Broadcast and off once the iPad is in.
+        # Consent, not default -- no 24/7 keyboard beacon.
         self.adv = Advertisement(self.bus, 0)
         self.adv_on = False
         print("adv: OFF at boot -- broadcasting is opt-in (press Broadcast)")
+        # Watch for the bonded iPad reconnecting: a FRESH daemon (post cold
+        # boot) has no CCC state, and a GATT-caching iPad won't re-subscribe on
+        # its own, so input silently dies. _check_resub forces the re-subscribe.
+        self.bus.add_signal_receiver(
+            self._on_props_changed, dbus_interface=DBUS_PROP,
+            signal_name="PropertiesChanged", arg0="org.bluez.Device1",
+            path_keyword="path")
+
+    def _build_and_register(self):
+        app = Application(self.bus)
+        salt = LayoutSaltService(self.bus, 3, self._gen)  # FIRST -> shifts HID handles
+        dev = DeviceInfoService(self.bus, 0)
+        bat = BatteryService(self.bus, 1)
+        self.hid = HidService(self.bus, 2)
+        for s in (salt, dev, bat, self.hid):
+            app.add_service(s)
+        self.app = app
+        # track every exported dbus object so _reregister tears them all down
+        self._exported = [app]
+        for s in (salt, dev, bat, self.hid):
+            self._exported.append(s)
+            for c in s.characteristics:
+                self._exported.append(c)
+                self._exported.extend(c.descriptors)
+        gm = dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                            GATT_MANAGER)
+        gm.RegisterApplication(
+            app.get_path(), {},
+            reply_handler=lambda: print(f"gatt: app registered (gen={self._gen})"),
+            error_handler=lambda e: print(f"gatt error: {e}"))
+
+    def _reregister(self):
+        """Tear down + rebuild the GATT app with a new layout, WHILE the iPad is
+        connected, so BlueZ flags it change-unaware (Robust Caching)."""
+        try:
+            dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
+                           GATT_MANAGER).UnregisterApplication(
+                               self.app.get_path())
+        except Exception as e:  # noqa: BLE001
+            print(f"gatt: unregister {e}")
+        for obj in self._exported:
+            try:
+                obj.remove_from_connection()
+            except Exception:  # noqa: BLE001
+                pass
+        self._exported = []
+        self._gen = (self._gen + 1) & 0xffff   # new layout => new hash + handles
+        self._build_and_register()
+        print(f"gatt: re-registered (gen={self._gen}) to invalidate iPad cache")
+        return False
+
+    def _on_props_changed(self, interface, changed, invalidated, path=None):
+        if interface == "org.bluez.Device1" and changed.get("Connected") is True:
+            GLib.timeout_add_seconds(3, self._check_resub, path)
+
+    def _check_resub(self, path):
+        if not self.hid:
+            return False
+        if self.hid.kbd.notifying:             # already delivering -> done
+            self._resub_tries.pop(path, None)
+            return False
+        # NEVER bounce an audio device (the earbuds share this one radio);
+        # only ever nudge the HID host (the iPad).
+        try:
+            icon = str(dbus.Interface(
+                self.bus.get_object(BLUEZ, path), DBUS_PROP).Get(
+                    "org.bluez.Device1", "Icon"))
+        except Exception:  # noqa: BLE001
+            return False   # can't classify -> do not risk bouncing the wrong dev
+        if icon.startswith("audio"):
+            return False
+        tries = self._resub_tries.get(path, 0)
+        if tries >= 2:
+            print(f"gatt: {path} still unsubscribed after {tries}; giving up")
+            return False
+        self._resub_tries[path] = tries + 1
+        print(f"gatt: {path} connected but not subscribed "
+              f"(try {tries + 1}) -> cache-invalidate + bounce")
+        self._reregister()
+        GLib.timeout_add_seconds(2, self._bounce, path)
+        return False
+
+    def _bounce(self, path):
+        self.start_adv()   # ensure we advertise so the bonded iPad can reconnect
+        try:
+            dbus.Interface(self.bus.get_object(BLUEZ, path),
+                           "org.bluez.Device1").Disconnect()
+            print(f"gatt: bounced {path} -- iPad should re-discover + re-subscribe")
+        except Exception as e:  # noqa: BLE001
+            print(f"gatt: bounce {e}")
+        return False
 
     def _adv_mgr(self):
         return dbus.Interface(self.bus.get_object(BLUEZ, ADAPTER_PATH),
