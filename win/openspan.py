@@ -780,11 +780,12 @@ class TrayIcon:
     receive; on that message the icon is re-added automatically."""
     _WM_TRAY = 0x8001  # WM_APP + 1
 
-    def __init__(self, tip, icon_path, on_restore):
+    def __init__(self, tip, icon_path, on_restore, on_menu=None):
         import ctypes
         import ctypes.wintypes as wt
         self._ct = ctypes
         self.on_restore = on_restore
+        self.on_menu = on_menu   # right-click -> app posts a themed Tk menu
         u32 = ctypes.windll.user32
         k32 = ctypes.windll.kernel32
         sh = ctypes.windll.shell32
@@ -855,6 +856,13 @@ class TrayIcon:
                         # WM_LBUTTONUP / WM_LBUTTONDBLCLK on the icon
                         try:
                             t.on_restore()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return 0
+                    if msg == TrayIcon._WM_TRAY and l == 0x0205 \
+                            and t.on_menu:            # WM_RBUTTONUP on the icon
+                        try:
+                            t.on_menu()
                         except Exception:  # noqa: BLE001
                             pass
                         return 0
@@ -1633,6 +1641,18 @@ class App:
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
 
+        # per-indicator status row -- each token coloured by ITS OWN state
+        # (green = live, grey = off/waiting), so the iPad token greys out when
+        # it is not actually connected instead of always reading green.
+        indrow = tk.Frame(full, bg=BG)
+        indrow.pack(fill="x", padx=16, pady=(0, 1))
+        self._ind = {}
+        for _k in ("vm", "ipad", "portal", "audio", "bcast", "admin"):
+            _lb = tk.Label(indrow, text="", bg=BG, fg=MUTED,
+                           font=("Consolas", 10))
+            _lb.pack(side="left", padx=(0, 14))
+            self._ind[_k] = _lb
+        # transient / call-to-action line (Broadcasting…, errors, hints)
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
                  font=("Consolas", 10), anchor="w").pack(
@@ -1790,6 +1810,7 @@ class App:
         # updates the VM-side connection logic (no manual deploy, no reliance)
         self._sync_guest_scripts()
         self.root.after(120, self._dark_titlebar)
+        self.root.after(500, self._ensure_tray)  # persistent tray from startup
         # re-sync the window width to the console state when un-maximized (a
         # width change requested while zoomed is deferred, not lost)
         self.root.bind("<Configure>", self._on_configure)
@@ -2068,11 +2089,30 @@ class App:
                foreground=[("selected", "#eafff3")])
 
     def _dark_titlebar(self):
-        """Paint the native Windows title bar dark. (The frameless custom-chrome
-        window was REMOVED -- it caused an invisible ghost, a jittery drag, and
-        a crash on move; a plain native window is rock-solid: always visible,
-        native drag/minimize/close.)"""
-        _paint_dark_titlebar(self.root)
+        """Modern look the SAFE way: dark + tinted + rounded NATIVE title bar via
+        DWM attributes ONLY -- single DwmSetWindowAttribute calls, no window-
+        style manipulation, so it cannot storm Tk with messages the way the
+        removed frameless chrome did (that was the crash). On Win10 the tint and
+        corners are silent no-ops; the dark caption applies. A fully-frameless
+        window is a separate, scoped WM_NCCALCSIZE task -- not a hunch."""
+        _paint_dark_titlebar(self.root)   # DWMWA_USE_IMMERSIVE_DARK_MODE
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            dwm = ctypes.windll.dwmapi
+
+            def seti(attr, val):
+                v = ctypes.c_int(val)
+                dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v),
+                                          ctypes.sizeof(v))
+            try:  # tint the caption to the app bg (Win11 DWMWA_CAPTION_COLOR=35)
+                r, g, b = (int(BG[i:i + 2], 16) for i in (1, 3, 5))
+                seti(35, (b << 16) | (g << 8) | r)
+            except Exception:  # noqa: BLE001
+                pass
+            seti(33, 2)   # DWMWA_WINDOW_CORNER_PREFERENCE = ROUND (Win11)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_invert_scroll(self):
         on = bool(self.invert_scroll.get())
@@ -2273,7 +2313,7 @@ class App:
         self.status.set("Stopping VM…")
 
         def work():
-            ssh_guest("journalctl --sync", timeout=6, quiet=True)
+            ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
             vbox("controlvm", VM, "poweroff")
         threading.Thread(target=work, daemon=True).start()
 
@@ -2286,7 +2326,7 @@ class App:
         self.status.set("Cold-restarting VM…")
         def work():
             if vm_running():
-                ssh_guest("journalctl --sync", timeout=6, quiet=True)
+                ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
                 vbox("controlvm", VM, "poweroff")
                 for _ in range(30):
                     if not vm_running():
@@ -2324,7 +2364,7 @@ class App:
             self.clip_server.stop()  # clipboard offline before teardown
         # best-effort: flush the guest journal to disk before the hard power
         # cut, so the last minutes of Bluetooth events survive for post-mortem
-        ssh_guest("journalctl --sync", timeout=6, quiet=True)
+        ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
         if self._tray:
             self._tray.destroy()
             self._tray = None
@@ -2367,31 +2407,34 @@ class App:
         elif choice == "shutdown":
             self._full_stop()
 
+    def _ensure_tray(self):
+        """Create the PERSISTENT tray icon: left-click opens the window,
+        right-click posts the full control menu. Always present -- it is the
+        normal-ops surface; the big window is for setup."""
+        if self._tray is not None:
+            return
+        try:
+            self._tray = TrayIcon(
+                "OpenSpan — click to open, right-click for controls", ICON,
+                self._from_tray, on_menu=self._show_tray_menu)
+        except Exception:  # noqa: BLE001
+            self._tray = None
+
     def _to_tray(self):
-        """Hide to the system tray. EVERYTHING keeps running — VM, audio,
-        portal, watchdog ticks. Click the tray icon to bring it back."""
+        """Hide the WINDOW to the tray. Everything keeps running; the tray icon
+        stays put (persistent)."""
+        self._ensure_tray()
         if self._tray is None:
-            try:
-                self._tray = TrayIcon("OpenSpan — bridge running", ICON,
-                                      self._from_tray)
-            except Exception:  # noqa: BLE001
-                self._tray = None
-        if self._tray is None:
-            # tray unavailable -> minimize instead; never strand the app
-            # somewhere it can't be brought back from
-            self.root.iconify()
+            self.root.iconify()   # tray unavailable -> never strand the app
             return
         self.root.withdraw()
-        _emit("event", "sent to the system tray — everything keeps running. "
-                       "Click the tray icon to bring OpenSpan back.")
+        _emit("event", "sent to the tray — everything keeps running. Click the "
+                       "tray icon to reopen, or right-click it for controls.")
 
     def _from_tray(self):
-        # the tray callback already arrives on the Tk thread (its hidden
-        # window shares this thread's message pump) — marshal anyway
+        # arrives on the Tk thread (the tray window shares this thread's pump);
+        # marshal anyway. The tray icon is PERSISTENT -- not destroyed here.
         def show():
-            if self._tray:
-                self._tray.destroy()
-                self._tray = None
             self.root.deiconify()
             self.root.lift()
             try:
@@ -2399,6 +2442,54 @@ class App:
             except tk.TclError:
                 pass
         self.ui(show)
+
+    def _show_tray_menu(self):
+        # Called from the tray's ctypes WndProc (inside Windows message
+        # dispatch). Do NOT touch Tk here: tk_popup runs a NESTED Tk event loop,
+        # and running it reentrantly inside message dispatch is the ucrtbase
+        # 0xC0000409 fail-fast we kept hitting (same signature I wrongly blamed
+        # on the frameless). Defer the whole menu onto the UI queue, which the Tk
+        # thread drains OUTSIDE any reentrant context -- the proven-safe path.
+        self.ui(self._post_tray_menu)
+
+    def _post_tray_menu(self):
+        """Build + post the tray menu -- runs on the Tk thread via self.ui, never
+        reentrantly. State comes from the last poll so nothing blocks. Dialog
+        actions bypass their confirm or raise the window (never pop into hiding)."""
+        try:
+            c = getattr(self, "_cache", {})
+            run = bool(c.get("running"))
+            m = tk.Menu(self.root, tearoff=0, bg=CARD, fg=FG, bd=0,
+                        activebackground=ACCENT_DIM, activeforeground="#eafff3",
+                        font=("Segoe UI", 10))
+            m.add_command(label="Open OpenSpan", command=self._from_tray)
+            m.add_separator()
+            m.add_command(label="📡  Pair / Broadcast iPad",
+                          command=lambda: self.pair(confirm=False),
+                          state=("normal" if run else "disabled"))
+            m.add_command(label="⏏  Disconnect iPad",
+                          command=self._disconnect_ipad,
+                          state=("normal" if c.get("connected") else "disabled"))
+            m.add_command(
+                label=("■  Stop portal" if c.get("on") else "▶  Start portal"),
+                command=self.toggle_portal,
+                state=("normal" if run else "disabled"))
+            m.add_command(label="🎧  Reconnect headphones",
+                          command=lambda: self._auto_reconnect_audio(
+                              "tray reconnect"),
+                          state=("normal" if run else "disabled"))
+            m.add_separator()
+            m.add_command(
+                label="⏻  Shut down everything",
+                command=lambda: (self._from_tray(),
+                                 self.root.after(250, self._confirm_close)))
+            x, y = self.root.winfo_pointerxy()
+            try:
+                m.tk_popup(x, y)
+            finally:
+                m.grab_release()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _pick_model(self, *_):
         w, h = IPAD_PRESETS[self.model.get()]
@@ -2522,7 +2613,7 @@ class App:
                     pass
         threading.Thread(target=work, daemon=True).start()
 
-    def pair(self, reset=False):
+    def pair(self, reset=False, confirm=True):
         # Broadcast frees the radio (drops the earbud link briefly) so the iPad
         # connects fast. Default KEEPS the bond -> a good iPad RECONNECTS.
         # reset=True FORGETS the iPad's stale bond first, for a clean re-pair
@@ -2538,7 +2629,7 @@ class App:
             body = ("This briefly disconnects Bluetooth audio so the iPad "
                     "finds the keyboard fast — it reconnects automatically the "
                     "moment the iPad pairs.")
-        if not dark_confirm(self.root, title, body):
+        if confirm and not dark_confirm(self.root, title, body):
             return
         # immediate visual acknowledgement (the work runs in a thread).
         # _pair_inflight is set HERE, before the worker: the openspanble
@@ -2693,23 +2784,29 @@ class App:
         self.ui(lambda: self._apply_poll(running, st, on, aud))
 
     def _apply_poll(self, running, st, on, aud):
-        parts = [f"VM {'●' if running else '○'}"]
+        # per-indicator status row: each token coloured by ITS OWN live state.
+        def setind(key, text, good):
+            self._ind[key].config(text=text, fg=(ACCENT if good else MUTED))
+        setind("vm", f"VM {'●' if running else '○'}", running)
         if st:
-            parts.append("iPad ● connected" if st.get("kbd_subscribed")
-                         else "iPad ○ waiting")
+            _c = bool(st.get("kbd_subscribed"))
+            setind("ipad", f"iPad {'● connected' if _c else '○ waiting'}", _c)
         elif running:
-            parts.append("iPad ○ daemon starting")
-        parts.append(f"portal {'● ON' if on else '○ off'}")
-        parts.append(f"audio {'●' if aud else '○'}")
+            setind("ipad", "iPad ○ daemon starting", False)
+        else:
+            setind("ipad", "iPad ○ off", False)
+        setind("portal", f"portal {'● ON' if on else '○ off'}", on)
+        setind("audio", f"audio {'●' if aud else '○'}", aud)
         # Honest broadcast state, read straight from the daemon -- never a UI
-        # guess. If this says BROADCASTING, the machine really is advertising
-        # as a Bluetooth keyboard; if it says off, it really is silent.
-        if st:
-            parts.append("📡 BROADCASTING" if st.get("advertising")
-                         else "📡 not broadcasting")
+        # guess: if it says BROADCASTING the machine really is advertising.
+        _adv = bool(st and st.get("advertising"))
+        setind("bcast", ("📡 BROADCASTING" if _adv else "📡 not broadcasting")
+               if st else "", _adv)
         # UIPI: without admin, input hooks die under any elevated window
-        if not is_elevated():
-            parts.append("⚠ NOT ADMIN")
+        if is_elevated():
+            self._ind["admin"].config(text="")
+        else:
+            self._ind["admin"].config(text="⚠ NOT ADMIN", fg=DANGER)
         # readiness banner (only reacts on a state change, so no console spam)
         if not running:
             r_state, r_txt, r_col = "stopped", "○  Stopped", MUTED
@@ -2737,6 +2834,9 @@ class App:
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
         connected = bool(st and st.get("kbd_subscribed"))
+        # snapshot for the tray menu (built on the Tk thread; must never block)
+        self._cache = {"running": running, "connected": connected,
+                       "on": on, "aud": aud}
         # gate the action buttons: Broadcast only once the daemon is up, and
         # Disconnect only while the iPad is connected. The pair flow owns the
         # button while it works, so never fight it mid-broadcast.
@@ -2750,6 +2850,12 @@ class App:
                 if connected:
                     _emit("event", "iPad CONNECTED — keyboard/mouse subscribed "
                           "and live.")
+                    # flush the VM disk now so a fresh bond survives an unclean
+                    # poweroff/crash (BlueZ writes bonds to /var/lib/bluetooth;
+                    # they can otherwise sit unflushed and be lost on restart)
+                    threading.Thread(
+                        target=lambda: ssh_guest("sync", timeout=8, quiet=True),
+                        daemon=True).start()
                 elif st is not None:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
@@ -2840,14 +2946,24 @@ class App:
             self._vol_syncing = True
             self.c_vol_var.set(round(v * 100))
             self._vol_syncing = False
-        # `on` may have been refreshed by the connect-edge auto-start above;
-        # rebuild the portal token so the status line agrees with reality
-        parts = [f"portal {'● ON' if on else '○ off'}" if p.startswith("portal")
-                 else p for p in parts]
+        # `on` may have been refreshed by the connect-edge auto-start above; the
+        # coloured portal token already reflects it. Keep self.status for the
+        # transient line: don't stomp an in-flight broadcast or a failure
+        # message; otherwise show a plain call-to-action for the current state.
+        self._ind["portal"].config(text=f"portal {'● ON' if on else '○ off'}",
+                                   fg=(ACCENT if on else MUTED))
         cur = self.status.get()
-        if not self.broadcasting and not cur.startswith("Radio") \
-                and not cur.startswith("⚠"):
-            self.status.set("    ".join(parts))
+        if not self.broadcasting and not self._pair_inflight \
+                and "fail" not in cur.lower() and "didn't" not in cur:
+            if not running:
+                self.status.set("Bridge stopped — click Bridge VM to start.")
+            elif st is None:
+                self.status.set("Booting the bridge… (~90s)")
+            elif connected:
+                self.status.set("iPad connected — keyboard & mouse bridging.")
+            else:
+                self.status.set("Ready — press Pair / Broadcast to connect "
+                                "the iPad.")
         # keep the Pair button truthful when idle (never mid-broadcast): a
         # settled check while the iPad is live, the call-to-action when it is
         # not. Skipped while a broadcast is in flight so it can't stomp the
