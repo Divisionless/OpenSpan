@@ -1548,8 +1548,6 @@ class App:
         self.portal_proc = None
         self.audio_proc = None
         self._tray = None
-        self._chromeless_on = False   # frameless custom-chrome window
-        self._min_pending = False     # minimize in flight (see _on_restore)
         self._audio_logf = None
         self._portal_logf = None
         self._audio_lock = threading.Lock()  # serialize sender (re)launch so
@@ -1567,7 +1565,6 @@ class App:
         self._pair_inflight = False    # Broadcast pressed, iPad not yet in
         self._broadcast_started = 0.0
         root.after(50, self._drain_ui)
-        root.bind("<Map>", self._on_restore)  # re-arm frameless after minimize
         self._theme()
 
         # The whole UI lives inside self._full. The command console collapses to
@@ -1630,29 +1627,11 @@ class App:
         _t2 = tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
                        font=("Segoe UI", 10))
         _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
-        # custom window chrome: the native title bar is gone, so THIS row is
-        # the title bar -- close + minimize on the right, drag anywhere on it.
-        _close = tk.Button(head, text="✕", command=self._confirm_close,
-                           bg=BG, fg=MUTED, bd=0, relief="flat", width=3,
-                           font=("Segoe UI", 12), activebackground=DANGER,
-                           activeforeground="#ffffff", cursor="hand2")
-        _close.pack(side="right", padx=(6, 0))
-        _close.bind("<Enter>", lambda e: _close.config(bg=DANGER, fg="#ffffff"))
-        _close.bind("<Leave>", lambda e: _close.config(bg=BG, fg=MUTED))
-        _min = tk.Button(head, text="—", command=self._minimize,
-                         bg=BG, fg=MUTED, bd=0, relief="flat", width=3,
-                         font=("Segoe UI", 11), activebackground=PANEL,
-                         activeforeground=FG, cursor="hand2")
-        _min.pack(side="right")
-        _min.bind("<Enter>", lambda e: _min.config(bg=PANEL, fg=FG))
-        _min.bind("<Leave>", lambda e: _min.config(bg=BG, fg=MUTED))
         ttk.Button(head, text="⤓  Send to Tray", command=self._to_tray).pack(
             side="right", padx=(0, 12))
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
-        for _w in (head, _t1, _t2):   # drag the header (native Windows move)
-            _w.bind("<Button-1>", self._start_drag)
 
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
@@ -2089,82 +2068,11 @@ class App:
                foreground=[("selected", "#eafff3")])
 
     def _dark_titlebar(self):
-        """Apply the frameless custom-chrome look -- the SAFE way (a normal,
-        taskbar-backed window with the caption stripped; never the invisible-
-        ghost overrideredirect). See _chromeless / _strip_caption."""
-        self._chromeless()
-
-    def _chromeless(self):
-        """Modern frameless window done SAFELY. NO overrideredirect -- that made
-        an invisible, unrecoverable ghost on minimize/tray (no window, no
-        taskbar, no tray). This stays a NORMAL top-level window (real taskbar
-        button, native minimize, Alt-Tab) and just strips the caption via
-        window styles, so it can never vanish. The header row is the title bar."""
-        self.root.update_idletasks()
-        try:
-            self._strip_caption()
-            self._chromeless_on = True
-        except Exception:  # noqa: BLE001
-            self._chromeless_on = False
-
-    def _strip_caption(self):
-        """Remove the caption + resize border via window styles while KEEPING a
-        normal, taskbar-backed top-level window. Idempotent -- safe to re-apply
-        after a restore, in case Windows re-adds the caption."""
-        import ctypes
-        u = ctypes.windll.user32
-        hwnd = u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
-        self._hwnd = hwnd
-        GWL_STYLE, GWL_EXSTYLE = -16, -20
-        WS_CAPTION, WS_THICKFRAME = 0x00C00000, 0x00040000
-        WS_MINIMIZEBOX, WS_MAXIMIZEBOX, WS_SYSMENU = 0x20000, 0x10000, 0x80000
-        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW = 0x40000, 0x80
-        SWP = 0x0027  # FRAMECHANGED | NOSIZE | NOMOVE | NOZORDER
-        st = u.GetWindowLongW(hwnd, GWL_STYLE)
-        st = (st & ~WS_CAPTION & ~WS_THICKFRAME) \
-            | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU
-        u.SetWindowLongW(hwnd, GWL_STYLE, st)
-        ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        u.SetWindowLongW(hwnd, GWL_EXSTYLE,
-                         (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW)
-        u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP)
-        try:  # Win11 rounded corners (harmless on Win10)
-            pref = ctypes.c_int(2)  # DWMWCP_ROUND
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _start_drag(self, e):
-        # Hand the move to Windows' NATIVE title-bar drag loop -- smooth, with
-        # Aero Snap -- instead of jittery per-motion geometry updates in Tk.
-        try:
-            import ctypes
-            u = ctypes.windll.user32
-            hwnd = getattr(self, "_hwnd", None) or \
-                u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
-            u.ReleaseCapture()
-            u.SendMessageW(hwnd, 0xA1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _minimize(self):
-        # normal window -> native minimize straight to the taskbar; it always
-        # comes back from the taskbar (no overrideredirect games = no ghost).
-        try:
-            self.root.iconify()
-        except tk.TclError:
-            pass
-
-    def _on_restore(self, _e=None):
-        # a restore/deiconify can let Windows re-add the caption -- re-strip it.
-        # (A normal window keeps its taskbar button regardless, so this is only
-        # cosmetic belt-and-suspenders, never a recoverability requirement.)
-        if self._chromeless_on and self.root.state() == "normal":
-            try:
-                self._strip_caption()
-            except Exception:  # noqa: BLE001
-                pass
+        """Paint the native Windows title bar dark. (The frameless custom-chrome
+        window was REMOVED -- it caused an invisible ghost, a jittery drag, and
+        a crash on move; a plain native window is rock-solid: always visible,
+        native drag/minimize/close.)"""
+        _paint_dark_titlebar(self.root)
 
     def _on_invert_scroll(self):
         on = bool(self.invert_scroll.get())
