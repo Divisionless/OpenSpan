@@ -69,10 +69,15 @@ FG = "#dfe4ee"
 MUTED = "#8b93a7"
 ACCENT = "#3fdc8a"
 ACCENT_DIM = "#1f6f43"
+WARN = "#f5c451"   # amber: connected but idle (portal off)
 MON_FILL = "#26324c"
 MON_LINE = "#4a6ea8"
 IPAD_FILL = "#1f6f43"
 IPAD_LINE = "#3fdc8a"
+IPAD_OFF_FILL = "#2b313d"   # iPad box when NOT connected -> muted grey
+IPAD_OFF_LINE = "#4a5468"
+IPAD_IDLE_FILL = "#413615"  # connected but portal OFF -> amber (idle/paused)
+IPAD_IDLE_LINE = "#f5c451"
 PORTAL = "#ffd43b"
 DANGER = "#e06c68"
 SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
@@ -952,6 +957,7 @@ class ArrangeCanvas(tk.Canvas):
         self._load()
         self.dragging = False
         self.drag_off = (0, 0)
+        self.ipad_state = "off"  # off=grey / idle=amber / live=green (by poll)
         self._world_bounds()
         self.bind("<Configure>", lambda e: self.redraw())
         self.bind("<ButtonPress-1>", self._press)
@@ -975,6 +981,15 @@ class ArrangeCanvas(tk.Canvas):
     def set_ipad_size(self, w, h):
         self.ipad.update(w=w, h=h, res_w=w, res_h=h)
         self.redraw()
+
+    def set_ipad_state(self, live, paired):
+        """iPad link state from _apply_poll: GREEN when live (connected AND
+        routing input), AMBER when merely paired (bonded, not driving), GREY
+        when not paired. Redraw only on change."""
+        state = "live" if live else ("idle" if paired else "off")
+        if state != self.ipad_state:
+            self.ipad_state = state
+            self.redraw()
 
     def rotate(self):
         i = self.ipad
@@ -1023,11 +1038,20 @@ class ArrangeCanvas(tk.Canvas):
         ix0, iy0 = self.w2c(self.ipad["x"], self.ipad["y"])
         ix1, iy1 = self.w2c(self.ipad["x"] + self.ipad["w"],
                             self.ipad["y"] + self.ipad["h"])
-        self.create_rectangle(ix0, iy0, ix1, iy1, fill=IPAD_FILL,
-                              outline=IPAD_LINE, width=3)
+        # Colour reflects the real link: GREEN when live (connected + routing),
+        # AMBER when paired but not driving, GREY when not paired. Kept in sync
+        # by _apply_poll -> set_ipad_state.
+        if self.ipad_state == "live":
+            _fill, _line, _txt = IPAD_FILL, IPAD_LINE, "#d6ffe9"
+        elif self.ipad_state == "idle":
+            _fill, _line, _txt = IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"
+        else:
+            _fill, _line, _txt = IPAD_OFF_FILL, IPAD_OFF_LINE, MUTED
+        self.create_rectangle(ix0, iy0, ix1, iy1, fill=_fill,
+                              outline=_line, width=3)
         self.create_text((ix0 + ix1) / 2, (iy0 + iy1) / 2,
                          text=f"iPad\n{self.ipad['w']}x{self.ipad['h']}",
-                         fill="#d6ffe9", justify="center",
+                         fill=_txt, justify="center",
                          font=("Segoe UI", 9, "bold"))
         for edge, m, lo, hi in self._portals():
             if edge in ("ipad-left", "ipad-right"):
@@ -1572,6 +1596,9 @@ class App:
         self._bt_ops_lock = threading.Lock()
         self._pair_inflight = False    # Broadcast pressed, iPad not yet in
         self._broadcast_started = 0.0
+        self._ipad_paired = False      # iPad (non-audio) bonded? -> Connect/Unpair
+        self._paired_gen = 0           # generation token: newest read wins
+        self._pair_lock = threading.Lock()  # atomic pair-commit vs cancel-clear
         root.after(50, self._drain_ui)
         self._theme()
 
@@ -1635,11 +1662,36 @@ class App:
         _t2 = tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
                        font=("Segoe UI", 10))
         _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
+        # window controls: the caption is removed (frameless), so THIS row is the
+        # title bar. These are Tk buttons -> commands run on the Tk thread (R1-
+        # safe); the DRAG is native via WM_NCHITTEST HTCAPTION (Windows drives
+        # the move -- no geometry jitter, no SendMessage modal loop).
+        _cl = tk.Button(head, text="✕", command=self._confirm_close, bg=BG,
+                        fg=MUTED, bd=0, relief="flat", width=3, cursor="hand2",
+                        font=("Segoe UI", 12), activebackground=DANGER,
+                        activeforeground="#ffffff")
+        _cl.pack(side="right", padx=(6, 0))
+        _cl.bind("<Enter>", lambda e: _cl.config(bg=DANGER, fg="#ffffff"))
+        _cl.bind("<Leave>", lambda e: _cl.config(bg=BG, fg=MUTED))
+        _mn = tk.Button(head, text="—", command=self._minimize, bg=BG, fg=MUTED,
+                        bd=0, relief="flat", width=3, cursor="hand2",
+                        font=("Segoe UI", 11), activebackground=PANEL,
+                        activeforeground=FG)
+        _mn.pack(side="right")
+        _mn.bind("<Enter>", lambda e: _mn.config(bg=PANEL, fg=FG))
+        _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
         ttk.Button(head, text="⤓  Send to Tray", command=self._to_tray).pack(
             side="right", padx=(0, 12))
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
+        # DRAG the window by the header. Native HTCAPTION doesn't fire here (Tk's
+        # content window covers the subclassed frame), so we move it ourselves --
+        # via a raw pure-move SetWindowPos (blit, no repaint) in _drag_move, which
+        # is tear-free AND R1-safe (a plain Tk binding, no ctypes modal loop).
+        for _w in (head, _t1, _t2):
+            _w.bind("<ButtonPress-1>", self._drag_start)
+            _w.bind("<B1-Motion>", self._drag_move)
 
         # per-indicator status row -- each token coloured by ITS OWN state
         # (green = live, grey = off/waiting), so the iPad token greys out when
@@ -1702,40 +1754,49 @@ class App:
         ttk.Button(row, text="Rotate",
                    command=self.canvas.rotate).pack(side="left")
 
-        # controls (Bridge tab)
+        # controls (Bridge tab) -- the iPad is managed like a normal Bluetooth
+        # device: Pair / Connect / Disconnect / Unpair on top. Portal (input
+        # routing) folds into Connect/Disconnect. The VM + keymap + reset are a
+        # secondary "troubleshooting" row, there only if the four verbs can't
+        # finish the job.
         ctl = tk.Frame(bridge, bg=BG)
         ctl.pack(fill="x", padx=16, pady=(2, 4))
-        self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
-        self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
-        self.portal_btn = ttk.Button(ctl, text="Start portal",
-                                     command=self.toggle_portal)
-        self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
-        self.pair_btn = ttk.Button(ctl, text="📡  Pair / Broadcast",
-                                   command=self.pair)
-        self.pair_btn.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
+        self.pair_btn = ttk.Button(ctl, text="Pair", command=self.pair)
+        self.pair_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        self.conn_btn = ttk.Button(ctl, text="Connect",
+                                   command=self._connect_ipad)
+        self.conn_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
+        self._disc_btn = ttk.Button(ctl, text="Disconnect",
+                                    command=self._disconnect_ipad)
+        self._disc_btn.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
+        self.unpair_btn = ttk.Button(ctl, text="Unpair",
+                                     command=self._unpair_ipad)
+        self.unpair_btn.grid(row=0, column=3, sticky="ew", padx=3, pady=3)
         self.broadcasting = False
 
+        # secondary / troubleshooting row
+        self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
+        self.vm_btn.grid(row=1, column=0, sticky="ew", padx=3, pady=(8, 3))
+        self.portal_btn = ttk.Button(ctl, text="Start portal",
+                                     command=self.toggle_portal)
+        self.portal_btn.grid(row=1, column=1, sticky="ew", padx=3, pady=(8, 3))
         ttk.Button(ctl, text="Edit keymap",
                    command=lambda: os.startfile(KEYMAP)).grid(
-            row=1, column=0, columnspan=3, sticky="ew", padx=3, pady=3)
+            row=1, column=2, sticky="ew", padx=3, pady=(8, 3))
+        ttk.Button(ctl, text="↻ Re-pair (reset bond)",
+                   command=lambda: self.pair(reset=True)).grid(
+            row=1, column=3, sticky="ew", padx=3, pady=(8, 3))
         self.invert_scroll = tk.BooleanVar(
             value=bool(load_setting("scroll_invert", False)))
         ttk.Checkbutton(ctl, text="⇅  Invert scroll wheel",
                         variable=self.invert_scroll,
                         command=self._on_invert_scroll).grid(
-            row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
-        ttk.Button(ctl, text="↻  Re-pair iPad  (reset a stale bond)",
-                   command=lambda: self.pair(reset=True)).grid(
-            row=3, column=0, columnspan=3, sticky="ew", padx=3, pady=(0, 3))
-        self._disc_btn = ttk.Button(ctl, text="⏏  Disconnect iPad",
-                                    command=self._disconnect_ipad)
-        self._disc_btn.grid(row=4, column=0, columnspan=3, sticky="ew",
-                            padx=3, pady=(0, 3))
-        # start gated: Broadcast until the daemon is up, Disconnect until the
-        # iPad is actually connected (kept in sync by _apply_poll)
-        self.pair_btn.state(["disabled"])
-        self._disc_btn.state(["disabled"])
-        for c in range(3):
+            row=2, column=0, columnspan=4, sticky="w", padx=5, pady=(2, 3))
+        # start gated; _apply_poll manages enable/disable by real state
+        for _b in (self.pair_btn, self.conn_btn, self._disc_btn,
+                   self.unpair_btn):
+            _b.state(["disabled"])
+        for c in range(4):
             ctl.columnconfigure(c, weight=1)
 
         # ---- System control: every backend action, nothing hidden ----
@@ -2088,29 +2149,135 @@ class App:
         st.map("Treeview", background=[("selected", ACCENT_DIM)],
                foreground=[("selected", "#eafff3")])
 
-    def _dark_titlebar(self):
-        """Modern look the SAFE way: dark + tinted + rounded NATIVE title bar via
-        DWM attributes ONLY -- single DwmSetWindowAttribute calls, no window-
-        style manipulation, so it cannot storm Tk with messages the way the
-        removed frameless chrome did (that was the crash). On Win10 the tint and
-        corners are silent no-ops; the dark caption applies. A fully-frameless
-        window is a separate, scoped WM_NCCALCSIZE task -- not a hunch."""
-        _paint_dark_titlebar(self.root)   # DWMWA_USE_IMMERSIVE_DARK_MODE
+    def _minimize(self):
+        # normal window -> native minimize to the taskbar; always restorable.
+        try:
+            self.root.iconify()
+        except tk.TclError:
+            pass
+
+    def _drag_start(self, e):
+        # Offset in Tk/screen space (same space as e.x_root). winfo_x stays live
+        # -- our subclass forwards WM_WINDOWPOSCHANGED to Tk's proc -- so it's
+        # correct even after prior raw-SetWindowPos drags. No Tk<->physical mixing.
+        self._dx = e.x_root - self.root.winfo_x()
+        self._dy = e.y_root - self.root.winfo_y()
+        # Resolve the top-level WRAPPER hwnd (the same handle _dark_titlebar
+        # subclasses) ONCE per drag so _drag_move never re-resolves mid-flood.
+        # argtypes are REQUIRED: without them ctypes truncates the 64-bit HWND.
         try:
             import ctypes
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            dwm = ctypes.windll.dwmapi
+            import ctypes.wintypes as wt
+            u = ctypes.windll.user32
+            u.SetWindowPos.restype = wt.BOOL
+            u.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_uint]
+            u.GetAncestor.restype = wt.HWND
+            u.GetAncestor.argtypes = [wt.HWND, ctypes.c_uint]
+            self._drag_u = u
+            hwnd = u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+            # Never raw-move a maximized/snapped window: a size-free move keeps it
+            # WS_MAXIMIZE while displacing it (broken inset, no restore). Rare --
+            # no maximize affordance -- so fall back to Tk geometry() (below),
+            # which un-maximizes and moves correctly. hwnd=None selects that path.
+            self._drag_hwnd = None if u.IsZoomed(hwnd) else hwnd
+        except Exception:  # noqa: BLE001 -- any ctypes failure -> Tk geometry drag
+            self._drag_hwnd = None
 
-            def seti(attr, val):
-                v = ctypes.c_int(val)
-                dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v),
-                                          ctypes.sizeof(v))
-            try:  # tint the caption to the app bg (Win11 DWMWA_CAPTION_COLOR=35)
-                r, g, b = (int(BG[i:i + 2], 16) for i in (1, 3, 5))
-                seti(35, (b << 16) | (g << 8) | r)
+    def _drag_move(self, e):
+        x, y = e.x_root - self._dx, e.y_root - self._dy
+        h = getattr(self, "_drag_hwnd", None)
+        if h:
+            # Pure MOVE: SWP_NOSIZE|NOZORDER|NOACTIVATE = 0x0015. A size-free move
+            # does NO client invalidation -- Windows/DWM blits the existing window
+            # pixels to the new spot -- so no WM_PAINT is queued and there is
+            # nothing for the <B1-Motion> flood to starve => tear-free. NOT
+            # SWP_NOREDRAW: the default copy-bits blit IS the fast path. R1-safe:
+            # a synchronous Win32 call from a normal Tk callback on the main thread
+            # -- NOT inside a WNDPROC, and it starts NO modal move loop (returns at
+            # once), unlike the old ReleaseCapture+WM_NCLBUTTONDOWN(HTCAPTION) that
+            # crashed. Tk's position cache stays live via the subclass forwarding
+            # WM_WINDOWPOSCHANGED, so no release resync (and its repaint flash).
+            self._drag_u.SetWindowPos(h, 0, x, y, 0, 0, 0x0015)
+        else:
+            # Fallback (maximized, or ctypes unavailable): the original Tk move.
+            self.root.geometry(f"+{x}+{y}")
+
+    def _dark_titlebar(self):
+        """Fully FRAMELESS, the SAFE way (rule R1). NO overrideredirect, NO style
+        flip, NO SendMessage modal drag -- every one of those crashed. The window
+        stays a NORMAL top-level (native taskbar / minimize / maximize / snap /
+        Alt-Tab intact). We subclass its window-proc only to (a) drop the caption
+        via WM_NCCALCSIZE and (b) drive drag+resize via WM_NCHITTEST -> HTCAPTION
+        / HTLEFT / ... . Windows performs the move/resize itself, so there is NO
+        modal loop in our process -> no reentrancy. The proc does PURE Win32 math
+        and NEVER touches Tk (R1). The header row above is the title bar."""
+        import ctypes
+        import ctypes.wintypes as wt
+        try:
+            u = ctypes.windll.user32
+            self.root.update_idletasks()
+            hwnd = u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+            u.CallWindowProcW.restype = ctypes.c_ssize_t
+            u.CallWindowProcW.argtypes = [ctypes.c_void_p, wt.HWND,
+                                          ctypes.c_uint, wt.WPARAM, wt.LPARAM]
+            u.SetWindowLongPtrW.restype = ctypes.c_void_p
+            u.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int,
+                                            ctypes.c_void_p]
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+            WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND,
+                                         ctypes.c_uint, wt.WPARAM, wt.LPARAM)
+            old = [0]
+            B, HDR, BTN = 6, 46, 340  # resize grip / header height / button strip
+
+            def proc(h, msg, wp, lp):
+                # R1: ctypes callback INSIDE Windows message dispatch -- PURE
+                # Win32 math only, NEVER a Tk call.
+                try:
+                    if msg == 0x0083 and wp:      # WM_NCCALCSIZE, wParam TRUE
+                        if u.IsZoomed(h):         # maximized: stay off the taskbar
+                            p = ctypes.cast(lp, ctypes.POINTER(RECT)).contents
+                            fx = u.GetSystemMetrics(32) + u.GetSystemMetrics(92)
+                            fy = u.GetSystemMetrics(33) + u.GetSystemMetrics(92)
+                            p.left += fx; p.top += fy
+                            p.right -= fx; p.bottom -= fy
+                        return 0                  # else client = whole window
+                    if msg == 0x0084:             # WM_NCHITTEST
+                        x = ctypes.c_short(lp & 0xFFFF).value
+                        y = ctypes.c_short((lp >> 16) & 0xFFFF).value
+                        rc = RECT(); u.GetWindowRect(h, ctypes.byref(rc))
+                        rx, ry = x - rc.left, y - rc.top
+                        w, ht = rc.right - rc.left, rc.bottom - rc.top
+                        lf, rg = rx < B, rx > w - B
+                        tp, bt = ry < B, ry > ht - B
+                        if tp and lf: return 13
+                        if tp and rg: return 14
+                        if bt and lf: return 16
+                        if bt and rg: return 17
+                        if lf: return 10
+                        if rg: return 11
+                        if tp: return 12
+                        if bt: return 15
+                        if ry < HDR and rx < w - BTN:  # header, left of buttons
+                            return 2              # HTCAPTION -> native drag
+                        return 1                  # HTCLIENT -> Tk handles it
+                except Exception:  # noqa: BLE001
+                    pass
+                return u.CallWindowProcW(old[0], h, msg, wp, lp)
+
+            self._fl_proc = WNDPROC(proc)   # keep the thunk alive for app life
+            old[0] = u.SetWindowLongPtrW(hwnd, -4, self._fl_proc)  # GWLP_WNDPROC
+            u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x27)  # FRAMECHANGED|NOSIZE|MOVE|ZORDER
+            try:  # rounded corners (Win11; harmless no-op on Win10)
+                pref = ctypes.c_int(2)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
             except Exception:  # noqa: BLE001
                 pass
-            seti(33, 2)   # DWMWA_WINDOW_CORNER_PREFERENCE = ROUND (Win11)
         except Exception:  # noqa: BLE001
             pass
 
@@ -2464,12 +2631,23 @@ class App:
                         font=("Segoe UI", 10))
             m.add_command(label="Open OpenSpan", command=self._from_tray)
             m.add_separator()
-            m.add_command(label="📡  Pair / Broadcast iPad",
+            m.add_command(label="Pair iPad",
                           command=lambda: self.pair(confirm=False),
-                          state=("normal" if run else "disabled"))
-            m.add_command(label="⏏  Disconnect iPad",
+                          state=("normal" if (run and not c.get("connected"))
+                                 else "disabled"))
+            m.add_command(label="Connect iPad",
+                          command=self._connect_ipad,
+                          state=("normal" if (run and c.get("paired")
+                                 and not c.get("connected")) else "disabled"))
+            m.add_command(label="Disconnect iPad",
                           command=self._disconnect_ipad,
-                          state=("normal" if c.get("connected") else "disabled"))
+                          state=("normal" if (c.get("connected")
+                                 or c.get("busy")) else "disabled"))
+            m.add_command(label="Unpair iPad",
+                          command=lambda: (self._from_tray(), self.root.after(
+                              250, self._unpair_ipad)),
+                          state=("normal" if (run and c.get("paired"))
+                                 else "disabled"))
             m.add_command(
                 label=("■  Stop portal" if c.get("on") else "▶  Start portal"),
                 command=self.toggle_portal,
@@ -2618,6 +2796,10 @@ class App:
         # connects fast. Default KEEPS the bond -> a good iPad RECONNECTS.
         # reset=True FORGETS the iPad's stale bond first, for a clean re-pair
         # when a kept bond has gone bad (iPad forgotten / key mismatch).
+        # already pairing/broadcasting? ignore re-entry (tray Pair/Connect, a
+        # double-click, or Re-pair mid-flight) -- one radio op at a time.
+        if self._pair_inflight or self.broadcasting:
+            return
         if reset:
             title = "Reset and re-pair the iPad?"
             body = ("Use this only when the iPad won't connect. It FORGETS the "
@@ -2637,9 +2819,12 @@ class App:
         # re-edge must not fire auto-reconnect into the middle of it.
         self._pair_inflight = True
         self._broadcast_started = time.time()
-        self.pair_btn.config(text="📡  Working…")
-        self.pair_btn.state(["disabled"])
-        self.status.set("Preparing to broadcast…")
+        # disable the connection verbs while the radio work runs; _apply_poll
+        # re-gates them by real state once _pair_inflight clears.
+        for _b in (self.pair_btn, self.conn_btn, self.unpair_btn):
+            _b.state(["disabled"])
+        self._disc_btn.state(["!disabled"])   # doubles as Cancel while working
+        self.status.set("Working — freeing the radio to (re)connect the iPad…")
         threading.Thread(target=self._pair_worker, args=(reset,),
                          daemon=True).start()
 
@@ -2694,23 +2879,25 @@ class App:
             # be honest: the guest work failed, so we are NOT broadcasting
             set_advertising(False)
             self._pair_inflight = False
+            _emit("err", "pair FAILED — the guest bluetoothctl step didn't "
+                  "complete (radio busy or the VM isn't ready). Nothing is "
+                  "advertising. Try Pair/Connect again in a moment.")
             # we may have already dropped the earbud audio for the burst — the
             # pair isn't happening, so put it back (force past the cooldown)
             self._auto_conn_last = 0.0
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("broadcast failed — restoring audio")
-
-            def failed():
-                self.pair_btn.state(["!disabled"])
-                self.pair_btn.config(style="TButton",
-                                     text="📡  Pair / Broadcast")
-                self.status.set("Broadcast failed — see console.")
-            self.ui(failed)
+            # keep the 'fail' keyword so _apply_poll's status guard won't stomp it
+            self.ui(lambda: self.status.set(
+                "iPad pair failed — see console."))
             return
         # NOW start advertising. The button goes green ONLY if the daemon
         # CONFIRMS it is advertising -- a silent failure can never masquerade as
         # "Broadcasting" again. Every step is logged to the console so a failure
         # is visible + reportable, not hidden behind a green button.
+        if not self._pair_inflight:      # cancelled while we freed the radio
+            _emit("event", "pair cancelled before advertising.")
+            return
         _emit("event", "guest ready (audio paused) — telling the daemon to "
                        "broadcast…")
         adv_ok = set_advertising(True)
@@ -2729,37 +2916,131 @@ class App:
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("broadcast didn't start — restoring audio")
 
-            def advfail():
-                self.pair_btn.state(["!disabled"])
-                self.pair_btn.config(style="TButton",
-                                     text="📡  Pair / Broadcast")
-                self.status.set("Broadcast didn't start — see console.")
-            self.ui(advfail)
+            self.ui(lambda: self.status.set(
+                "Advertising didn't start — see console."))
             return
-        self.broadcasting = True
+        # Commit broadcasting under the lock so a Disconnect (Cancel) clearing
+        # the flags can't interleave with this check-then-set: either we win and
+        # go live, or the cancel won -- we undo the advertise we enabled and bail.
+        with self._pair_lock:
+            cancelled = not self._pair_inflight
+            if not cancelled:
+                self.broadcasting = True
+        if cancelled:
+            set_advertising(False)
+            _emit("event", "pair cancelled — advertising off.")
+            return
         _emit("event", "✅ NOW BROADCASTING at full power (daemon confirmed) — "
                        "on the iPad, tap \"OpenSpan Keyboard\". Audio returns "
                        "when it pairs.")
 
-        def ok():
-            self.pair_btn.state(["!disabled"])
-            self.pair_btn.config(style="Accent.TButton",
-                                 text="📡  Broadcasting…")
-            self.status.set("📡 Broadcasting on the full radio — on the iPad, "
-                            "tap \"OpenSpan Keyboard\" to pair")
-        self.ui(ok)
+        self.ui(lambda: self.status.set(
+            "📡 Advertising — on the iPad, tap \"OpenSpan Keyboard\" to "
+            "connect."))
+
+    def _connect_ipad(self):
+        """CONNECT verb: advertise so the BONDED iPad reconnects; the input
+        portal auto-starts on the connect edge (_apply_poll). Same machinery as
+        Pair, minus the confirm dialog -- this is a return, not a first pair."""
+        self.pair(reset=False, confirm=False)
 
     def _disconnect_ipad(self):
-        """Manually drop the iPad's BLE link (the bond stays, so the next
-        Broadcast reconnects). Runs off the UI thread."""
+        """DISCONNECT verb: drop the iPad's BLE link AND stop advertising, so the
+        iPad's on-screen keyboard comes back and STAYS back (nothing left to
+        reconnect to). Stops input routing too. The bond is KEPT -> Connect
+        brings it right back. Portal stop runs on the UI thread (Tk); the radio
+        work runs off it."""
+        self._stop_portal_if_running()          # fold portal in (UI thread)
         def work():
+            # clear the flags under the lock FIRST so an in-flight pair worker's
+            # commit sees the cancel; then drop advertising + the link.
+            with self._pair_lock:
+                self.broadcasting = False
+                self._pair_inflight = False
+            set_advertising(False)               # nothing to re-attach to
             r = daemon_cmd({"cmd": "disconnect"})
             if r and r.get("ok"):
-                _emit("event", f"disconnected the iPad "
-                               f"({r.get('disconnected', 0)} link).")
+                _emit("event", f"iPad DISCONNECTED ({r.get('disconnected', 0)} "
+                               "link) — advertising off, its on-screen keyboard "
+                               "returns. Press Connect to bring it back.")
             else:
                 _emit("err", "couldn't disconnect the iPad — see console.")
+            self._refresh_paired()
+            # if this was a CANCEL of an in-flight pair, the burst dropped the
+            # earbuds -- bring them back (a no-op if they're already connected)
+            self._auto_conn_last = 0.0
+            self._auto_conn_fails = 0
+            self._auto_reconnect_audio("disconnect — restoring audio")
         threading.Thread(target=work, daemon=True).start()
+
+    def _unpair_ipad(self):
+        """UNPAIR verb: forget the iPad's bond on THIS side (+ disconnect + stop
+        advertising + stop routing). You also tap 'Forget This Device' on the
+        iPad. Earbuds (Icon: audio) are never touched."""
+        if not dark_confirm(
+                self.root, "Unpair the iPad?",
+                "This forgets the iPad's saved pairing on this side and "
+                "disconnects it — you'll also tap 'Forget This Device' on the "
+                "iPad itself. Your earbuds are not affected."):
+            return
+        self._stop_portal_if_running()
+        def work():
+            set_advertising(False)
+            self.broadcasting = False
+            self._pair_inflight = False
+            daemon_cmd({"cmd": "disconnect"})
+            # forget every bonded NON-audio device (the iPad); earbuds exempt
+            r = ssh_guest(
+                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
+                'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
+                '[ "$d" = "$AUD" ] && continue; '
+                'info=$(bluetoothctl info "$d" 2>/dev/null); '
+                'echo "$info" | grep -qi "Icon: audio" && continue; '
+                'bluetoothctl remove "$d" >/dev/null 2>&1; '
+                'done; echo done',
+                timeout=25)
+            if r.returncode == 0:
+                self._ipad_paired = False   # authoritative: the bond is gone
+                _emit("event", "iPad UNPAIRED — bond forgotten on this side. Now "
+                               "tap 'Forget This Device' on the iPad, then Pair "
+                               "to start fresh.")
+            else:
+                _emit("err", "unpair failed — see console.")
+            self._refresh_paired()   # confirm (newest generation wins)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_paired(self):
+        """Read-only: is the iPad (a NON-audio device) bonded? Cheap bluetoothctl
+        read cached in self._ipad_paired -> drives grey-vs-amber + Connect/Unpair
+        gating. Earbuds (Icon: audio) never count. Off the UI thread. Called on
+        bond-changing edges/actions AND periodically from _poll, so it self-heals
+        a guest-side Forget, an empty boot-time read, or a transient ssh failure.
+
+        The remote command ALWAYS exits 0 on a completed scan (trailing
+        'echo done'), so a NONZERO returncode means the ssh/transport itself
+        failed -- then we leave the cache untouched rather than clobber a
+        known-good value. A generation token means a stale in-flight read can't
+        overwrite a newer result (the Unpair-vs-edge race)."""
+        gen = self._paired_gen = self._paired_gen + 1
+        def work():
+            try:
+                r = ssh_guest(
+                    'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
+                    'info=$(bluetoothctl info "$d" 2>/dev/null); '
+                    'echo "$info" | grep -qi "Icon: audio" && continue; '
+                    'echo "$info" | grep -q "Paired: yes" && '
+                    '{ echo IPAD_PAIRED; break; }; done; echo done',
+                    timeout=8, quiet=True)
+                if r.returncode == 0 and gen == self._paired_gen:
+                    self._ipad_paired = "IPAD_PAIRED" in (r.stdout or "")
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _stop_portal_if_running(self):
+        """Stop the input portal if it's running (Tk-touching -> UI thread)."""
+        if self.portal_proc and self.portal_proc.poll() is None:
+            self.toggle_portal()
 
     # ---- status tick ----
     def _tick(self):
@@ -2781,6 +3062,14 @@ class App:
         self._poll_n = getattr(self, "_poll_n", 0) + 1
         if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
+            self._refresh_paired()             # keep bond state fresh; self-heals
+        if running and self._poll_n % 20 == 0:
+            # flush the VM disk every ~60s so a bond (or any state) can't be
+            # lost to an unclean poweroff/crash between the connect-edge sync
+            # and shutdown -- the recurring "have to re-pair" root cause
+            threading.Thread(
+                target=lambda: ssh_guest("sync", timeout=8, quiet=True),
+                daemon=True).start()
         self.ui(lambda: self._apply_poll(running, st, on, aud))
 
     def _apply_poll(self, running, st, on, aud):
@@ -2789,8 +3078,15 @@ class App:
             self._ind[key].config(text=text, fg=(ACCENT if good else MUTED))
         setind("vm", f"VM {'●' if running else '○'}", running)
         if st:
-            _c = bool(st.get("kbd_subscribed"))
-            setind("ipad", f"iPad {'● connected' if _c else '○ waiting'}", _c)
+            _sub = bool(st.get("kbd_subscribed"))
+            if _sub and on:
+                self._ind["ipad"].config(text="iPad ● connected", fg=ACCENT)
+            elif _sub:                       # link up but portal off -> amber
+                self._ind["ipad"].config(text="iPad ◐ portal off", fg=WARN)
+            elif self._ipad_paired:          # bonded but not connected -> amber
+                self._ind["ipad"].config(text="iPad ◐ paired", fg=WARN)
+            else:
+                self._ind["ipad"].config(text="iPad ○ not paired", fg=MUTED)
         elif running:
             setind("ipad", "iPad ○ daemon starting", False)
         else:
@@ -2827,6 +3123,11 @@ class App:
                 "ready": "READY — the bridge is fully up. Connect your "
                          "headphones.",
             }[r_state])
+            if r_state == "ready":
+                # detect a returning bond at first-ready (don't wait ~15s for the
+                # periodic tick) so Connect/Unpair light up right away; the
+                # periodic read is still the self-heal.
+                self._refresh_paired()
             if r_state == "ready" and not self.broadcasting \
                     and not self._pair_inflight:
                 # the buds try to reconnect on their own during the ~90s
@@ -2835,15 +3136,28 @@ class App:
                 self._auto_reconnect_audio("bridge is READY")
         connected = bool(st and st.get("kbd_subscribed"))
         # snapshot for the tray menu (built on the Tk thread; must never block)
-        self._cache = {"running": running, "connected": connected,
-                       "on": on, "aud": aud}
-        # gate the action buttons: Broadcast only once the daemon is up, and
-        # Disconnect only while the iPad is connected. The pair flow owns the
-        # button while it works, so never fight it mid-broadcast.
-        if not self._pair_inflight and not self.broadcasting:
-            self.pair_btn.state(["!disabled"] if st is not None
-                                else ["disabled"])
-        self._disc_btn.state(["!disabled"] if connected else ["disabled"])
+        self._cache = {"running": running, "connected": connected, "on": on,
+                       "aud": aud, "paired": self._ipad_paired,
+                       "busy": self._pair_inflight or self.broadcasting}
+        self.canvas.set_ipad_state(connected and on, self._ipad_paired)
+        # gate the four verbs by REAL state. Pair: daemon up + not mid-pair.
+        # Connect: bonded but not connected. Disconnect: connected. Unpair:
+        # bonded. Never fight the pair flow while it owns the radio.
+        busy = self._pair_inflight or self.broadcasting
+        _up = st is not None
+        self.pair_btn.state(["!disabled"] if (_up and not busy and not connected)
+                            else ["disabled"])
+        self.conn_btn.state(["!disabled"] if (_up and not busy
+                            and self._ipad_paired and not connected)
+                            else ["disabled"])
+        # Disconnect doubles as CANCEL: enabled while connected OR while a
+        # pair/connect is in flight, so an abandoned attempt is abortable at
+        # once (it clears advertising + broadcasting/_pair_inflight and restores
+        # audio) instead of a 300s lockout.
+        self._disc_btn.state(["!disabled"] if (connected or busy)
+                             else ["disabled"])
+        self.unpair_btn.state(["!disabled"] if (_up and not busy
+                              and self._ipad_paired) else ["disabled"])
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
             if self._ipad_conn is not None or connected:
@@ -2859,6 +3173,7 @@ class App:
                 elif st is not None:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
+            self._refresh_paired()   # a bond may have just formed or dropped
         # once the iPad connects: settle the button to a check, auto-start the
         # portal (no manual click), and bring the earbuds back — full steady
         # state without another button press. Clearing broadcasting/_pair_
@@ -2871,8 +3186,6 @@ class App:
                              daemon=True).start()
             self.broadcasting = False
             self._pair_inflight = False
-            self.pair_btn.config(style="Accent.TButton",
-                                 text="📡  iPad ✓ paired")
             # auto-start the portal so keyboard/mouse bridge immediately
             if not (self.portal_proc and self.portal_proc.poll() is None):
                 self.toggle_portal()
@@ -2895,9 +3208,8 @@ class App:
                              daemon=True).start()
             self.broadcasting = False
             self._pair_inflight = False
-            self.pair_btn.config(style="TButton", text="📡  Pair / Broadcast")
-            _emit("event", "broadcast window expired — press Pair/Broadcast "
-                           "again when you're ready to pair.")
+            _emit("event", "advertising window expired — press Pair or Connect "
+                           "again when you're ready.")
             # the burst may have left the earbuds off and no pair ever landed —
             # restore audio so the user isn't stranded without sound. Reset the
             # fail counter too (not just the cooldown): if a prior session hit
@@ -2962,20 +3274,10 @@ class App:
             elif connected:
                 self.status.set("iPad connected — keyboard & mouse bridging.")
             else:
-                self.status.set("Ready — press Pair / Broadcast to connect "
-                                "the iPad.")
-        # keep the Pair button truthful when idle (never mid-broadcast): a
-        # settled check while the iPad is live, the call-to-action when it is
-        # not. Skipped while a broadcast is in flight so it can't stomp the
-        # transient "Working…"/"Broadcasting…" states.
-        if not self.broadcasting and not self._pair_inflight \
-                and "disabled" not in self.pair_btn.state():
-            if connected:
-                self.pair_btn.config(style="Accent.TButton",
-                                     text="📡  iPad ✓ paired")
-            else:
-                self.pair_btn.config(style="TButton",
-                                     text="📡  Pair / Broadcast")
+                self.status.set("Ready — press Pair (new) or Connect "
+                                "(paired) for the iPad.")
+        # the Pair button stays a static "Pair"; connection state is shown by the
+        # indicator colours + which of Connect/Disconnect/Unpair are enabled.
         self.vm_btn.config(text="Bridge VM ✓" if running
                            else "Start Bridge VM")
         self.portal_btn.config(text="Stop portal" if on else "Start portal")

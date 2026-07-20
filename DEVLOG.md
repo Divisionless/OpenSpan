@@ -264,13 +264,53 @@ is not "passes as an exe."
 
 ---
 
+## The iPad as a normal Bluetooth device
+
+The pairing UI had accreted its own vocabulary — "Pair / Broadcast", a separate
+"portal" button, a "re-pair to reset the bond" escape hatch — each one a piece
+of BLE plumbing promoted to a button. It worked, but it made you think about
+advertising and GATT subscriptions instead of a keyboard.
+
+The reframe: the PC is a Bluetooth *peripheral*, so model it like any other
+Bluetooth device — **Pair, Connect, Disconnect, Unpair** — and hide the rest.
+It maps cleanly onto the radio, because for a peripheral *advertising is the
+connect/disconnect lever*. Connect = advertise so the bonded iPad reconnects;
+Disconnect = drop the link and stop advertising, so nothing can re-attach and
+the iPad's on-screen keyboard comes back and stays; Unpair = forget the bond.
+The old broadcast/bounce/portal machinery is still there — it just lives behind
+those four verbs now. Bond state is read live from BlueZ by a self-healing
+periodic read, so the buttons reflect reality and even notice a "Forget This
+Device" done on the iPad itself.
+
+Getting the concurrency right took four adversarial-review passes: a re-entry
+guard so no path can start two pair workers at once; a lock so pressing
+Disconnect to *cancel* an in-flight pair can't interleave with the worker
+committing the broadcast; and — the lesson banked — a "clever" self-latching
+bond-state cache that a review caught stranding a real bond as "not paired"
+when a startup read timed out. The fix was to stop being clever: a plain
+periodic read that self-heals beats a latch that can get stuck.
+
+## A window that doesn't tear
+
+The frameless header drag shredded — dragging left black gaps and torn strips
+until you let go. The cause wasn't lag. Driving the move through Tk's
+`geometry()` invalidated the whole client area on every mouse-move, and the
+flood of motion events starved `WM_PAINT`, so the heavy canvas never repainted
+mid-drag. The fix is to move the window with a raw `SetWindowPos` size-free blit
+instead: Windows relocates the existing pixels with no invalidation, so there is
+nothing to repaint and nothing to starve. Smooth — and still safe from the
+reentrancy rule, because it is a synchronous Win32 call from a normal callback,
+with no modal move loop.
+
+---
+
 ## Status
 
 Working & tested: BLE keyboard + mouse, edge crossing, keymap remaps,
-Bluetooth audio (volume + balance), fast pairing, themed in-frame dialogs, a
-lean one-window UI with a collapsible console + system tray, opt-in
-broadcasting, headphone auto-reconnect, single-file exe. Clean repo, honest
-docs.
+Bluetooth audio (volume + balance), the iPad managed as a normal Bluetooth
+device (Pair / Connect / Disconnect / Unpair), themed in-frame dialogs, a lean
+one-window UI with a collapsible console + system tray, a tear-free frameless
+window, headphone auto-reconnect, single-file exe. Clean repo, honest docs.
 
 **Still in progress — the two-way clipboard.** The plumbing works (FKA chords →
 Apple Shortcuts → a token-guarded LAN relay), but it is *not* finished: the
