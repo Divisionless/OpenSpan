@@ -1925,6 +1925,10 @@ class MultiArrangeCanvas(tk.Canvas):
         else:
             self.action = "move"
             self.drag_off = (world_x - x, world_y - y)
+        # Remember the rect at press so _release can tell a real drag from a
+        # bare select-click. A click that moves nothing must not snap, must not
+        # save, and must not restart the portal.
+        self._press_rect = (x, y, width, height)
         self.redraw()
 
     def _drag(self, event):
@@ -1966,6 +1970,22 @@ class MultiArrangeCanvas(tk.Canvas):
     def _release(self, _event):
         if not self.action:
             return
+        # A select-click (press+release with no movement) is not an edit: skip
+        # the snap and the save entirely. Saving here used to tear down and
+        # respawn the portal process -- dropping its hooks and sockets, and
+        # blocking the Tk thread on taskkill -- on every click, and _snap_
+        # selected could silently relocate a screen the user only meant to select.
+        item = self._lookup(self.selected) if self.selected else None
+        moved = True
+        if item is not None and getattr(self, "_press_rect", None):
+            x, y, width, height = self._rect(self.selected, item)
+            moved = (x, y, width, height) != self._press_rect
+        self._press_rect = None
+        if not moved:
+            self.action = None
+            self._resize_anchor = None
+            self.redraw()
+            return
         if self.action == "move":
             self._snap_selected()
         self.action = None
@@ -1975,10 +1995,17 @@ class MultiArrangeCanvas(tk.Canvas):
 
     def save(self):
         sync_legacy_ipad(self.config)
+        before = json.dumps([self.config.get("portals"),
+                             self.config.get("links")], sort_keys=True)
         self.config["portals"] = compute_portals(self.config)
         self.config["links"] = compute_adjacencies(self.config)
+        after = json.dumps([self.config["portals"], self.config["links"]],
+                           sort_keys=True)
         self._persist()
-        if self.on_change:
+        # on_change restarts the portal process to reload geometry -- only worth
+        # doing when the geometry the portal actually reads (portals/links) is
+        # different. Persisting cosmetic edits no longer drops its hooks.
+        if self.on_change and after != before:
             self.on_change(bool(self.config["portals"]))
 
     def _persist(self):

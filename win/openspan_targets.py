@@ -189,6 +189,19 @@ def normalize_config(raw, live_monitors):
         ]
         if not displays:
             continue
+        # Display ids MUST be unique within a target: the portal keys its
+        # geometry on (target, display_id), so a duplicate silently drops one
+        # panel -- input routed against the wrong rect/scale -- and the canvas
+        # can no longer drag it. Ids arrive from disk unchecked, so enforce it
+        # here rather than trusting the writer.
+        seen_ids = set()
+        for slot, row in enumerate(displays):
+            if row["id"] in seen_ids:
+                probe = slot + 1
+                while f"{target_id}-{probe}" in seen_ids:
+                    probe += 1
+                row["id"] = f"{target_id}-{probe}"
+            seen_ids.add(row["id"])
         targets.append({
             "id": target_id,
             "name": str(target.get("name") or target_id.title()),
@@ -550,7 +563,15 @@ def validate_mac_displays(rows):
             raise ValueError(f"{name}: physical width must be 5–100 inches.")
         ident = str(raw.get("id") or f"mac-{index + 1}")
         if ident in seen:
-            ident = f"mac-{index + 1}"
+            # Find a genuinely free id. The old fallback regenerated
+            # f"mac-{index+1}", which for (mac-1, mac-3, +add -> mac-3) is the
+            # SAME colliding name -- two displays then share one id, and the
+            # portal's (target, id) dict silently drops one panel (misrouted
+            # input) while the canvas can no longer drag it.
+            probe = index + 1
+            while f"mac-{probe}" in seen:
+                probe += 1
+            ident = f"mac-{probe}"
         seen.add(ident)
         row = {
             "id": ident,

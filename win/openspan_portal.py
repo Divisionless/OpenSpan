@@ -75,6 +75,7 @@ MOUSE_SENS = float(_SETTINGS.get("mouse_sensitivity", 1.0))
 # bridge (keeps this PC's radio free for headphones).
 DAEMON_HOST = _SETTINGS.get("daemon_host", "127.0.0.1")
 DEFAULT_DAEMON_PORT = int(_SETTINGS.get("daemon_port", 9955))
+MAC_DAEMON_PORT = int(_SETTINGS.get("mac_daemon_port", 9956))
 
 # Scroll-wheel direction. Read LIVE from openspan_settings.json so the app's
 # "Invert scroll" toggle applies without restarting the portal. A tiny watcher
@@ -286,9 +287,17 @@ class Portal:
         self.active_display = None
         self.vx = 0.0
         self.vy = 0.0
+        # Settings WIN for the two known lanes. normalize_config() bakes the
+        # constant 9955/9956 into the config, so reading the port from the
+        # config alone ignored a customised daemon_port/mac_daemon_port -- the
+        # app would talk to the new port while the portal kept dialling the old
+        # one, leaving every edge shut with the UI showing "connected".
+        _lane_default = {"ipad": DEFAULT_DAEMON_PORT, "mac": MAC_DAEMON_PORT}
         self._target_ports = {
             target["id"]: int(
-                target.get("daemon_port", DEFAULT_DAEMON_PORT))
+                _lane_default.get(
+                    target["id"],
+                    target.get("daemon_port", DEFAULT_DAEMON_PORT)))
             for target in self.cfg.get("targets", [])
             if target.get("enabled", True)
         }
@@ -401,11 +410,19 @@ class Portal:
                         data += chunk
                     sock.close()
                     status = json.loads(data.split(b"\n", 1)[0].decode())
-                    ready = bool(
-                        status.get("kbd_subscribed")
-                        and status.get("mouse_subscribed"))
+                    # Gate on the KEYBOARD subscription only -- the same truth
+                    # the app and the guest daemon use. Also requiring
+                    # mouse_subscribed meant a bonded host that re-subscribed to
+                    # only the keyboard report (which per BLE spec it may) left
+                    # every edge silently shut while the UI read "connected".
+                    ready = bool(status.get("kbd_subscribed"))
                 except Exception:  # noqa: BLE001
                     ready = False
+                if ready != self.target_ready.get(target):
+                    # log the transition so a shut edge is never unexplained
+                    print(f"[portal] {target} "
+                          f"{'READY' if ready else 'not ready'} "
+                          f"(kbd_subscribed={ready})", flush=True)
                 self.target_ready[target] = ready
                 if not ready and self.active \
                         and self.active_target == target:
