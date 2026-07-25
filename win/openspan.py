@@ -4452,6 +4452,8 @@ class App:
                  "/opt/openspan/set-hid-target.sh"),
                 (os.path.join("..", "guest", "set-hid-device.sh"),
                  "/opt/openspan/set-hid-device.sh"),
+                (os.path.join("..", "guest", "bt-preflight.sh"),
+                 "/opt/openspan/bt-preflight.sh"),
                 # the per-device systemd TEMPLATE unit: without it every
                 # openspanble@<id> enable/restart fails and the lane can't pair
                 (os.path.join("..", "guest", "system", "openspanble@.service"),
@@ -4963,6 +4965,9 @@ class App:
             unit = f"openspanble@{device_id}"
             restart = f"systemctl restart {unit}; " if reset else ""
             command = (
+                # unwedge a non-answering bluetoothd first: otherwise every
+                # command below just blocks until the ssh timeout
+                "bash /opt/openspan/bt-preflight.sh; "
                 f"bash /opt/openspan/set-hid-device.sh {device_id} "
                 f"{controller} {port} {shlex.quote(adv_name)}; "
                 "python3 /opt/openspan/openspan_bt.py prepare-hid "
