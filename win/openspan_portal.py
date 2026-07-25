@@ -234,10 +234,10 @@ class Portal:
         self.cfg, self.portals = load_portals()
         self.links = compute_adjacencies(self.cfg)
         self._displays = {
-            (target["id"], display["id"]): display
+            (device["id"], display["id"]): display
             for device in self.cfg.get("devices", [])
-            if target.get("enabled", True)
-            for display in target.get("displays", [])
+            if device.get("enabled", True)
+            for display in device.get("displays", [])
         }
         self._monitors = {
             monitor["name"]: monitor

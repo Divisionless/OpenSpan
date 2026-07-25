@@ -151,14 +151,18 @@ check("main UI does not start a Core Audio COM thread",
       not _unsafe_volume_calls)
 disconnect_source = inspect.getsource(openspan.App._disconnect_ipad)
 unpair_source = inspect.getsource(openspan.App._unpair_ipad)
-mac_unpair_source = inspect.getsource(openspan.App._unpair_mac)
-check("iPad disconnect leaves the shared Mac router running",
-      "_stop_portal_if_running" not in disconnect_source)
-check("iPad unpair leaves the shared Mac router running",
-      "_stop_portal_if_running" not in unpair_source)
-check("iPad and Mac unpair commands are target-scoped",
+device_disconnect_source = inspect.getsource(openspan.App._disconnect_device)
+device_unpair_source = inspect.getsource(openspan.App._unpair_device)
+check("disconnecting one device leaves the shared router running",
+      "_stop_portal_if_running" not in disconnect_source
+      and "_stop_portal_if_running" not in device_disconnect_source)
+check("unpairing one device leaves the shared router running",
+      "_stop_portal_if_running" not in unpair_source
+      and "_stop_portal_if_running" not in device_unpair_source)
+check("unpair forgets only that device's own bond, never a global wipe",
       "--target ipad" in unpair_source
-      and "--target mac" in mac_unpair_source)
+      and "--target {device_id}" in device_unpair_source
+      and "bluetoothctl remove" not in device_unpair_source)
 
 
 # Multi-radio USB recovery is deliberately narrow: it may re-arm a shared
@@ -251,27 +255,77 @@ else:
     delattr(openspan.sys, "frozen")
 check("plain Python roles: process environment is inherited normally",
       openspan._independent_frozen_env() is None)
+# Every device is its own entrance point, so every enabled device needs its own
+# NAT lane. Nothing here is keyed to a kind of device: the ports come from the
+# config this test builds.
+_PORT = openspan.BASE_PORT
+_nat_devices = {
+    "monitors": [],
+    "devices": [
+        {"id": "device-1", "name": "Tablet", "port": _PORT,
+         "enabled": True, "displays": []},
+        {"id": "device-2", "name": "Studio", "port": _PORT + 1,
+         "enabled": True, "displays": []},
+        {"id": "device-3", "name": "Shelved", "port": _PORT + 2,
+         "enabled": False, "displays": []},
+    ],
+}
 _nat_info = (
-    'Forwarding(0)="hid,tcp,127.0.0.1,9955,,9955"\n'
-    'Forwarding(1)="mac-hid,tcp,127.0.0.1,9956,,9956"\n')
-check("managed Mac NAT forwarding is recognized",
-      openspan._has_nat_forward(_nat_info, 9956, 9956))
-check("iPad forwarding is not mistaken for the Mac lane",
-      not openspan._has_nat_forward(_nat_info, 9956, 9955))
+    f'Forwarding(0)="osp-device-1,tcp,127.0.0.1,{_PORT},,{_PORT}"\n'
+    f'Forwarding(1)="osp-device-2,tcp,127.0.0.1,{_PORT + 1},,{_PORT + 1}"\n')
+check("each enabled device gets its own daemon lane from the config",
+      openspan.target_daemons(_nat_devices) == {
+          "device-1": (openspan.DAEMON[0], _PORT),
+          "device-2": (openspan.DAEMON[0], _PORT + 1)})
+check("one device's forwarding is never mistaken for another's",
+      openspan._has_nat_forward(_nat_info, _PORT + 1, _PORT + 1)
+      and not openspan._has_nat_forward(_nat_info, _PORT + 1, _PORT)
+      and not openspan._has_nat_forward(_nat_info, _PORT + 2, _PORT + 2))
+_nat_rules = []          # only natpf rule arguments, so an unrelated
+_original_vbox = openspan.vbox   # background VBoxManage call can't skew this
+openspan.vbox = lambda *a, **k: (
+    _nat_rules.extend(str(x) for x in a if str(x).startswith("osp-"))
+    or R(0, "", ""))
+check("existing per-device forwards are recognized and left untouched",
+      openspan.ensure_device_forwards(_nat_devices, _nat_info) is True
+      and not _nat_rules)
+_partial_info = (
+    f'Forwarding(0)="osp-device-1,tcp,127.0.0.1,{_PORT},,{_PORT}"\n')
+_added_ok = openspan.ensure_device_forwards(_nat_devices, _partial_info)
+openspan.vbox = _original_vbox
+check("a missing device lane is added under its own unique rule name",
+      _added_ok is True
+      and _nat_rules
+      == [f"osp-device-2,tcp,127.0.0.1,{_PORT + 1},,{_PORT + 1}"])
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(_project_root, "create-vm.ps1"),
           encoding="utf-8") as _vm_file:
     _vm_source = _vm_file.read()
-check("new VMs expose the managed Mac daemon",
-      'mac-hid,tcp,,9956,,9956' in _vm_source)
+check("new VMs pre-expose a second daemon lane",
+      f'tcp,,{_PORT + 1},,{_PORT + 1}' in _vm_source)
 
 # Multi-radio UI is opt-in and keeps stable controller identities.
 panel = app.bt_panel
-check("radio UI: single-radio compatibility is the default",
-      panel.radio_mode.get() == "Single radio (recommended)"
-      and str(panel.hid_combo.cget("state")) == "disabled")
 _original_save_prefs = openspan.save_bt_prefs
 openspan.save_bt_prefs = lambda _prefs: None
+# Driven from prefs this test supplies -- whatever this machine happens to have
+# saved must not decide the result.
+panel.prefs = {
+    "renames": {},
+    "blacklist": set(),
+    "radio_mode": "single",
+    "radio_assignments": {},
+    "hid_radio": "",
+    "scan_radio": "",
+    "radio_labels": {},
+}
+panel.radio_mode.set("Single radio (recommended)")
+panel._radios = []
+panel._refresh_radio_choices()
+check("radio UI: single-radio compatibility is the default",
+      str(panel.hid_combo.cget("state")) == "disabled"
+      and str(panel.mac_combo.cget("state")) == "disabled"
+      and "Single-radio compatibility" in panel.radio_note.get())
 panel.prefs = {
     "renames": {},
     "blacklist": set(),
@@ -505,52 +559,105 @@ check("multi-radio pair does not use the legacy global disconnect",
       not any("bluetoothctl disconnect" in command
               for command in _multi_commands))
 
-# The managed Mac uses a second daemon/port and a distinct controller. It must
-# never reuse the iPad lane or fall through to the single-radio shell path.
-_mac_adv = {"on": False}
-openspan.load_bt_prefs = lambda: {
-    "renames": {},
-    "blacklist": set(),
-    "radio_mode": "multi",
-    "radio_assignments": {},
-    "hid_radio": "AA:BB:CC:00:00:01",
-    "mac_radio": "AA:BB:CC:00:00:02",
-    "scan_radio": "AA:BB:CC:00:00:03",
-    "radio_labels": {},
-}
-openspan.set_target_advertising = \
-    lambda target, on: (
-        _mac_adv.update(on=bool(on)) or target == "mac")
+# === 4c. an Nth device is not an Nth code path ==============================
+# Every device pairs through the SAME generic verb, which reads its radio,
+# port and advertised name from that device's own record. So this section
+# installs three devices of its own making and drives the real verbs.
+_PORT = openspan.BASE_PORT
+_devices_backup = list(app.canvas.config["devices"])
+
+
+def _fake_device(ident, name, port, radio):
+    return {"id": ident, "name": name, "port": port, "radio": radio,
+            "enabled": True, "clipboard": False, "displays": []}
+
+
+# in place: the canvas holds the SAME list object as the config
+app.canvas.config["devices"][:] = [
+    _fake_device("device-1", "Tablet", _PORT, "AA:BB:CC:00:00:01"),
+    _fake_device("device-2", "Studio", _PORT + 1, "AA:BB:CC:00:00:02"),
+    _fake_device("device-3", "Spare", _PORT + 2, ""),
+]
+_dev_adv = {}
+openspan.set_target_advertising = lambda target, on: (
+    _dev_adv.update({target: bool(on)}) or True)
 openspan.target_daemon_status = lambda target: {
     "kbd_subscribed": False,
     "mouse_subscribed": False,
-    "advertising": _mac_adv["on"],
-    "advertising_state": "on" if _mac_adv["on"] else "off",
+    "advertising": _dev_adv.get(target, False),
+    "advertising_state": "on" if _dev_adv.get(target) else "off",
     "advertising_error": "",
-} if target == "mac" else fake_daemon_status()
+}
 _multi_commands.clear()
-_original_vm_running_for_mac = openspan.vm_running
+_original_vm_running_for_device = openspan.vm_running
 openspan.vm_running = lambda: True
-app._mac_pair_inflight = True
-app.mac_broadcasting = False
-app._pair_mac_worker(False)
-check("managed Mac pair selects its independent controller",
-      any("set-hid-target.sh mac AA:BB:CC:00:00:02" in command
-          for command in _multi_commands))
-check("managed Mac pair uses controller-scoped HID preparation",
-      any("prepare-hid --controller AA:BB:CC:00:00:02 --target mac" in command
-          for command in _multi_commands))
-check("managed Mac advertises through the second daemon",
-      app.mac_broadcasting is True and _mac_adv["on"] is True)
-app._mac_pair_inflight = False
-app.mac_broadcasting = False
-_mac_adv["on"] = False
-openspan.vm_running = _original_vm_running_for_mac
-openspan.load_bt_prefs = _original_load_prefs
-openspan.ssh_guest = lambda *a, **k: R(0, "", "")
+_studio = app._dev_state("device-2")
+_studio["inflight"] = True
+_studio["broadcasting"] = False
+app._pair_device_worker("device-2")
+check("a device pairs on the radio, port and name from its OWN record",
+      any(f"set-hid-device.sh device-2 AA:BB:CC:00:00:02 {_PORT + 1} "
+          f"'OpenSpan Studio'" in command for command in _multi_commands))
+check("device pairing uses controller-scoped HID preparation",
+      any("prepare-hid --controller AA:BB:CC:00:00:02 --target device-2"
+          in command for command in _multi_commands))
+check("pairing one device never touches another device's lane",
+      _multi_commands
+      and not any("device-1" in command or "device-3" in command
+                  for command in _multi_commands))
+check("the device advertises through its own daemon",
+      _studio["broadcasting"] is True and _dev_adv.get("device-2") is True)
+
+# A lane must be unambiguous: no radio, or a radio another device already
+# holds, is refused up front rather than half-paired.
+_alerts = []
+_original_alert = openspan.dark_alert
+openspan.dark_alert = \
+    lambda parent, title, message, ok="OK": _alerts.append(title)
+app._pair_device("device-3")
+check("a device with no radio assigned is refused, never silently paired",
+      app._dev_state("device-3")["inflight"] is False
+      and any("Assign a radio" in title for title in _alerts))
+_alerts.clear()
+app.canvas.config["devices"][2]["radio"] = "AA:BB:CC:00:00:02"
+app._pair_device("device-3")
+check("a radio another device already holds is refused",
+      app._dev_state("device-3")["inflight"] is False
+      and any("already in use" in title for title in _alerts))
+openspan.dark_alert = _original_alert
+app.canvas.config["devices"][2]["radio"] = ""
+
+# The panel is generated from the device list: the Nth device needs no new UI.
+app._dev_status = {
+    device["id"]: {"kbd_subscribed": False, "mouse_subscribed": False}
+    for device in app.canvas.config["devices"]
+}
+app._apply_device_rows(False)
+drain()
+check("the device panel renders one identical row per configured device",
+      set(app._dev_rows) == {"device-1", "device-2", "device-3"})
+check("a device without a radio says so and cannot be paired",
+      "no radio assigned" in app._dev_rows["device-3"]["name"].cget("text")
+      and not enabled(app._dev_rows["device-3"]["buttons"]["pair"])
+      and enabled(app._dev_rows["device-1"]["buttons"]["pair"]))
+check("every row is labelled by name and shows its own lane",
+      f":{_PORT + 1}" in app._dev_rows["device-2"]["radio"].cget("text")
+      and "Studio" in app._dev_rows["device-2"]["name"].cget("text"))
+
+_studio["inflight"] = False
+_studio["broadcasting"] = False
 app.broadcasting = False
 app._pair_inflight = False
 _adv["on"] = False
+app._apply_poll(True, fake_daemon_status(), False, True)
+drain()
+check("the status row summarises N devices in one token",
+      app._ind["mac"].cget("text") == f"devices 0/{len(app._dev_rows)}")
+
+app.canvas.config["devices"][:] = _devices_backup
+openspan.vm_running = _original_vm_running_for_device
+openspan.load_bt_prefs = _original_load_prefs
+openspan.ssh_guest = lambda *a, **k: R(0, "", "")
 
 # === 5. failure path -> reconnect audio, button reset =======================
 _confirm["answer"] = True

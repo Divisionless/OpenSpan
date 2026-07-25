@@ -215,6 +215,10 @@ def normalize_config(raw, live_monitors):
                 "id": "device-1",
                 "name": "iPad",
                 "port": BASE_PORT,
+                # a v1 install had the clipboard bridge working -- carry the
+                # capability forward, exactly as the v2 path does, so upgrading
+                # never silently drops the feature
+                "clipboard": True,
                 "displays": [dict(raw["ipad"], id="device-1-1",
                                   name="Display 1")],
             }]
