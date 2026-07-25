@@ -40,7 +40,7 @@ stage1_base() {
     bluez bluez-tools libspa-0.2-bluetooth pipewire pipewire-pulse \
     pipewire-audio-client-libraries wireplumber dbus-user-session \
     python3-dbus python3-gi openssh-server socat rfkill alsa-utils \
-    pulseaudio-utils
+    pulseaudio-utils firmware-realtek
 
   # persistent systemd USER bus for root (/run/user/0/bus) — the audio crux
   loginctl enable-linger root
@@ -56,8 +56,9 @@ stage1_base() {
   install -d "$OPT"
   install -m 755 "$HERE/openspan_ble.py" "$OPT/openspan_ble.py"
   install -m 755 "$HERE/udp_to_sink.py"  "$OPT/udp_to_sink.py"
-  for s in bt-connect.sh bt-list.sh btready.sh ensure-dualmode.sh \
-           wait-hci0.sh install-authorized-key.sh; do
+  for s in bt-connect.sh bt-list.sh btready.sh openspan_bt.py \
+           set-hid-radio.sh set-hid-target.sh ensure-dualmode.sh wait-hci0.sh \
+           install-authorized-key.sh; do
     install -m 755 "$HERE/$s" "$OPT/$s"
   done
   install -m 644 "$HERE/rebuild/env.sh"          "$OPT/env.sh"
@@ -99,6 +100,8 @@ stage2_ble() {
   # BLE HID daemon + both drop-ins (10-wait.conf is the Broadcast-safe fix),
   # the persistent pairing agent, and the radio-ready boot helper
   install -m 644 "$HERE/system/openspanble.service" "$SD/openspanble.service"
+  install -m 644 "$HERE/system/openspanble-mac.service" \
+    "$SD/openspanble-mac.service"
   install -d "$SD/openspanble.service.d"
   install -m 644 "$HERE/system/openspanble.service.d/10-wait.conf" \
     "$SD/openspanble.service.d/10-wait.conf"

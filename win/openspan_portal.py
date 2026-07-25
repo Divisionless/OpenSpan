@@ -24,6 +24,10 @@ import threading
 import time
 import queue
 
+from openspan_targets import (
+    compute_adjacencies, compute_portals, oriented_resolution,
+)
+
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
@@ -69,8 +73,8 @@ MOUSE_SENS = float(_SETTINGS.get("mouse_sensitivity", 1.0))
 # Where the OpenSpan daemon lives. 127.0.0.1 = a VM on this PC; set
 # daemon_host to another machine's LAN IP to use ITS Bluetooth as the
 # bridge (keeps this PC's radio free for headphones).
-DAEMON = (_SETTINGS.get("daemon_host", "127.0.0.1"),
-          int(_SETTINGS.get("daemon_port", 9955)))
+DAEMON_HOST = _SETTINGS.get("daemon_host", "127.0.0.1")
+DEFAULT_DAEMON_PORT = int(_SETTINGS.get("daemon_port", 9955))
 
 # Scroll-wheel direction. Read LIVE from openspan_settings.json so the app's
 # "Invert scroll" toggle applies without restarting the portal. A tiny watcher
@@ -217,6 +221,8 @@ def load_portals():
     """
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
+    if int(cfg.get("version", 1)) >= 2 and cfg.get("targets"):
+        return cfg, compute_portals(cfg)
     ip = cfg["ipad"]
     mons = {m["name"]: m for m in cfg["monitors"]}
     portals = []
@@ -224,19 +230,27 @@ def load_portals():
         m = mons[p["monitor"]]
         edge, lo, hi = p["edge"], p["lo"], p["hi"]
         if edge == "ipad-left":       # iPad right of monitor
-            portals.append(dict(axis="x", line=m["x"] + m["w"] - 1,
+            portals.append(dict(target="ipad", target_name="iPad",
+                                daemon_port=DEFAULT_DAEMON_PORT,
+                                axis="x", line=m["x"] + m["w"] - 1,
                                 span=(lo, hi), span_axis="y", sign=+1,
                                 exit_to=(m["x"] + m["w"] - 3, None)))
         elif edge == "ipad-right":    # iPad left of monitor
-            portals.append(dict(axis="x", line=m["x"],
+            portals.append(dict(target="ipad", target_name="iPad",
+                                daemon_port=DEFAULT_DAEMON_PORT,
+                                axis="x", line=m["x"],
                                 span=(lo, hi), span_axis="y", sign=-1,
                                 exit_to=(m["x"] + 3, None)))
         elif edge == "ipad-top":      # iPad below monitor
-            portals.append(dict(axis="y", line=m["y"] + m["h"] - 1,
+            portals.append(dict(target="ipad", target_name="iPad",
+                                daemon_port=DEFAULT_DAEMON_PORT,
+                                axis="y", line=m["y"] + m["h"] - 1,
                                 span=(lo, hi), span_axis="x", sign=+1,
                                 exit_to=(None, m["y"] + m["h"] - 3)))
         elif edge == "ipad-bottom":   # iPad above monitor
-            portals.append(dict(axis="y", line=m["y"],
+            portals.append(dict(target="ipad", target_name="iPad",
+                                daemon_port=DEFAULT_DAEMON_PORT,
+                                axis="y", line=m["y"],
                                 span=(lo, hi), span_axis="x", sign=-1,
                                 exit_to=(None, m["y"] + 3)))
     return cfg, portals
@@ -245,6 +259,17 @@ def load_portals():
 class Portal:
     def __init__(self):
         self.cfg, self.portals = load_portals()
+        self.links = compute_adjacencies(self.cfg)
+        self._displays = {
+            (target["id"], display["id"]): display
+            for target in self.cfg.get("targets", [])
+            if target.get("enabled", True)
+            for display in target.get("displays", [])
+        }
+        self._monitors = {
+            monitor["name"]: monitor
+            for monitor in self.cfg.get("monitors", [])
+        }
         # primary-screen center for relative-capture re-centering
         prim = next((m for m in self.cfg["monitors"] if m["primary"]),
                     self.cfg["monitors"][0])
@@ -257,6 +282,25 @@ class Portal:
         self.raw_keys = {}     # vk -> hid usage (held non-modifier keys)
         self.mods = 0          # physical modifier byte (L/R bits)
         self.buttons = 0
+        self.active_target = None
+        self.active_display = None
+        self.vx = 0.0
+        self.vy = 0.0
+        self._target_ports = {
+            target["id"]: int(
+                target.get("daemon_port", DEFAULT_DAEMON_PORT))
+            for target in self.cfg.get("targets", [])
+            if target.get("enabled", True)
+        }
+        if not self._target_ports:
+            self._target_ports = {
+                portal.get("target", "ipad"): int(
+                    portal.get("daemon_port", DEFAULT_DAEMON_PORT))
+                for portal in self.portals
+            }
+        self.target_ready = {
+            target: False for target in self._target_ports
+        }
         self.remap, self.overrides = self._load_keymap()
         self._chord_until = 0.0   # passthrough reports are dropped until
         #                           then, so they can't clobber an FKA chord
@@ -269,8 +313,7 @@ class Portal:
         #   (None -> the first portal entry always hands the clipboard over)
         self._push_pending = False  # collapse overlapping copy-pushes
         self.q = queue.Queue()
-        self.sock = None
-        self._connect()
+        self.socks = {}
         self._mcb = HOOKPROC(self._mouse_proc)
         self._kcb = HOOKPROC(self._kbd_proc)
 
@@ -301,56 +344,280 @@ class Portal:
               f"remap={remap or 'none'}")
         return remap, overrides
 
-    def _connect(self):
-        while True:
-            try:
-                self.sock = socket.create_connection(DAEMON, 3)
-                self.sock.settimeout(2)
-                print(f"[portal] connected to daemon {DAEMON[0]}:{DAEMON[1]}")
-                return
-            except OSError as e:
-                print(f"[portal] daemon unreachable ({e}); retrying...")
-                time.sleep(2)
-
-    def send(self, obj):
+    def _connect(self, target):
+        port = self._target_ports.get(target, DEFAULT_DAEMON_PORT)
         try:
-            self.sock.sendall((json.dumps(obj) + "\n").encode())
+            sock = socket.create_connection((DAEMON_HOST, port), 3)
+            sock.settimeout(2)
+            self.socks[target] = sock
+            print(f"[portal] connected {target} to daemon "
+                  f"{DAEMON_HOST}:{port}")
+            return sock
+        except OSError as exc:
+            print(f"[portal] {target} daemon unreachable ({exc})")
+            return None
+
+    def send(self, target, obj):
+        sock = self.socks.get(target) or self._connect(target)
+        if sock is None:
+            if self.active and self.active_target == target:
+                self.leave()
+            return
+        try:
+            sock.sendall((json.dumps(obj) + "\n").encode())
             try:
-                self.sock.recv(64)
+                sock.recv(64)
             except socket.timeout:
                 pass
         except OSError:
             # NEVER hold the mouse hostage while forwarding is failing: if
             # the link dies mid-capture, hand control back to the PC FIRST,
             # then worry about reconnecting. (leave() is non-blocking.)
-            if self.active:
+            if self.active and self.active_target == target:
                 print("[portal] link lost while captured — releasing the "
                       "mouse to the PC")
                 self.leave()
-            print("[portal] link lost; reconnecting...")
-            self._connect()
+            try:
+                sock.close()
+            except OSError:
+                pass
+            self.socks.pop(target, None)
+            print(f"[portal] {target} link lost; it will reconnect on demand")
 
-    # ---- mode switch ----
+    def _status_watcher(self):
+        """Keep hook-time edge decisions local; never do I/O in a hook proc."""
+        while True:
+            for target, port in self._target_ports.items():
+                ready = False
+                try:
+                    sock = socket.create_connection((DAEMON_HOST, port), 0.5)
+                    sock.settimeout(0.5)
+                    sock.sendall(b'{"cmd":"status"}\n')
+                    data = b""
+                    while b"\n" not in data and len(data) < 4096:
+                        chunk = sock.recv(512)
+                        if not chunk:
+                            break
+                        data += chunk
+                    sock.close()
+                    status = json.loads(data.split(b"\n", 1)[0].decode())
+                    ready = bool(
+                        status.get("kbd_subscribed")
+                        and status.get("mouse_subscribed"))
+                except Exception:  # noqa: BLE001
+                    ready = False
+                self.target_ready[target] = ready
+                if not ready and self.active \
+                        and self.active_target == target:
+                    print(f"[portal] {target} disconnected while captured — "
+                          "control returning to the PC")
+                    self.leave()
+            time.sleep(0.8)
+
+    # ---- mode switch / shared-layout routing ----------------------------
+    @staticmethod
+    def _monitor_layout(monitor):
+        return (
+            int(monitor.get("layout_x", monitor["x"])),
+            int(monitor.get("layout_y", monitor["y"])),
+            int(monitor.get("layout_w", monitor["w"])),
+            int(monitor.get("layout_h", monitor["h"])),
+        )
+
+    @staticmethod
+    def _clamp(value, lo, hi):
+        return max(float(lo), min(float(hi), float(value)))
+
+    def _entry_point(self, portal, along):
+        display = self._displays.get((
+            portal.get("target", "ipad"), portal.get("target_display")))
+        if not display:
+            return 0.0, 0.0
+        x, y = float(display["x"]), float(display["y"])
+        width, height = float(display["w"]), float(display["h"])
+        monitor = self._monitors.get(portal.get("monitor"))
+        layout_along = float(along)
+        if monitor:
+            mx, my, mw, mh = self._monitor_layout(monitor)
+            if portal["axis"] == "x":
+                layout_along = my + (
+                    (float(along) - monitor["y"])
+                    / max(1.0, float(monitor["h"]))) * mh
+            else:
+                layout_along = mx + (
+                    (float(along) - monitor["x"])
+                    / max(1.0, float(monitor["w"]))) * mw
+        margin_x = min(float(ENTER_MARGIN), max(2.0, width * 0.1))
+        margin_y = min(float(ENTER_MARGIN), max(2.0, height * 0.1))
+        edge = portal.get("edge")
+        if edge == "target-left":
+            return x + margin_x, self._clamp(layout_along, y, y + height)
+        if edge == "target-right":
+            return x + width - margin_x, self._clamp(
+                layout_along, y, y + height)
+        if edge == "target-top":
+            return self._clamp(layout_along, x, x + width), y + margin_y
+        return self._clamp(
+            layout_along, x, x + width), y + height - margin_y
+
+    def _matching_link(self, side, along):
+        for link in self.links:
+            source = link["source"]
+            if source.get("kind") != "target" \
+                    or source.get("target") != self.active_target \
+                    or source.get("display") != self.active_display \
+                    or link.get("side") != side:
+                continue
+            lo, hi = link["span"]
+            if not lo <= along <= hi:
+                continue
+            destination = link["destination"]
+            if destination.get("kind") == "target" \
+                    and not self.target_ready.get(
+                        destination.get("target"), False):
+                continue
+            return link
+        return None
+
+    def _position_inside(self, destination, to_side, along):
+        display = self._displays.get((
+            destination.get("target"), destination.get("display")))
+        if not display:
+            return self.vx, self.vy
+        x, y = float(display["x"]), float(display["y"])
+        width, height = float(display["w"]), float(display["h"])
+        margin_x = min(float(ENTER_MARGIN), max(2.0, width * 0.1))
+        margin_y = min(float(ENTER_MARGIN), max(2.0, height * 0.1))
+        if to_side == "left":
+            return x + margin_x, self._clamp(along, y, y + height)
+        if to_side == "right":
+            return x + width - margin_x, self._clamp(
+                along, y, y + height)
+        if to_side == "top":
+            return self._clamp(along, x, x + width), y + margin_y
+        return self._clamp(
+            along, x, x + width), y + height - margin_y
+
+    def _local_exit_point(self, destination, to_side, along):
+        monitor = self._monitors.get(destination.get("monitor"))
+        if not monitor:
+            return self.cx, self.cy
+        mx, my, mw, mh = self._monitor_layout(monitor)
+        if to_side in ("left", "right"):
+            actual_along = monitor["y"] + (
+                (float(along) - my) / max(1.0, float(mh))) * monitor["h"]
+            x = (monitor["x"] + 3 if to_side == "left"
+                 else monitor["x"] + monitor["w"] - 3)
+            y = self._clamp(
+                actual_along, monitor["y"], monitor["y"] + monitor["h"] - 1)
+        else:
+            actual_along = monitor["x"] + (
+                (float(along) - mx) / max(1.0, float(mw))) * monitor["w"]
+            x = self._clamp(
+                actual_along, monitor["x"], monitor["x"] + monitor["w"] - 1)
+            y = (monitor["y"] + 3 if to_side == "top"
+                 else monitor["y"] + monitor["h"] - 3)
+        return int(round(x)), int(round(y))
+
+    def _switch_target(self, destination, to_side, along):
+        target = destination.get("target")
+        display = destination.get("display")
+        old_target = self.active_target
+        old_display = self.active_display
+        if target != old_target:
+            # One Windows hook broker, independent target channels. Release the
+            # old HID lane before changing sockets so no modifier can stick.
+            self.q.put((old_target, "k", 0, [], 0))
+            self.q.put((old_target, "b", 0, 0, 0))
+            self.active_target = target
+        self.active_display = display
+        self.vx, self.vy = self._position_inside(
+            destination, to_side, along)
+        if target != old_target:
+            self._emit_kbd()
+            print(f"[portal] >>> direct handoff {old_target}/{old_display} "
+                  f"-> {target}/{display}")
+
+    def _route_motion(self, dx, dy):
+        """Advance the virtual desk cursor; return True after exiting to PC."""
+        display = self._displays.get(
+            (self.active_target, self.active_display))
+        if not display:
+            # Version-1/single-target rollback compatibility: retain the proven
+            # enter/reverse-exit model when no shared-layout display exists.
+            prim = self.cur
+            if not prim:
+                return False
+            move = dx if prim["axis"] == "x" else dy
+            self.perp += move * prim["sign"]
+            if prim["span_axis"] == "y":
+                self.entry_along += dy
+            else:
+                self.entry_along += dx
+            if self.perp < 0:
+                self.leave()
+                return True
+            return False
+        res_w, res_h = oriented_resolution(display)
+        scale_x = float(display["w"]) / max(1.0, float(res_w))
+        scale_y = float(display["h"]) / max(1.0, float(res_h))
+        nx = self.vx + dx * scale_x
+        ny = self.vy + dy * scale_y
+        x, y = float(display["x"]), float(display["y"])
+        right = x + float(display["w"])
+        bottom = y + float(display["h"])
+        crossings = []
+        if nx < x:
+            crossings.append((x - nx, "left", ny))
+        if nx > right:
+            crossings.append((nx - right, "right", ny))
+        if ny < y:
+            crossings.append((y - ny, "top", nx))
+        if ny > bottom:
+            crossings.append((ny - bottom, "bottom", nx))
+        for _overshoot, side, along in sorted(crossings, reverse=True):
+            link = self._matching_link(side, along)
+            if not link:
+                continue
+            destination = link["destination"]
+            if destination.get("kind") == "local":
+                self.leave(exit_to=self._local_exit_point(
+                    destination, link["to_side"], along))
+                return True
+            # Never tear a drag across devices. The handoff re-arms as soon as
+            # the physical button is released.
+            if self.buttons:
+                break
+            self._switch_target(destination, link["to_side"], along)
+            return False
+        self.vx = self._clamp(nx, x, right)
+        self.vy = self._clamp(ny, y, bottom)
+        return False
+
     def enter(self, portal, along):
         self.active = True
         self.cur = portal
+        self.active_target = portal.get("target", "ipad")
+        self.active_display = portal.get("target_display")
         self.entry_along = along
         self.perp = ENTER_MARGIN
+        self.vx, self.vy = self._entry_point(portal, along)
         user32.SetCursorPos(self.cx, self.cy)
-        print(f"[portal] >>> iPad mode ON via {portal['axis']}"
+        name = portal.get("target_name", self.active_target)
+        print(f"[portal] >>> {name} mode ON via {portal['axis']}"
               f"={portal['line']}  (Esc x3 to bail)")
         # UNIFIED CLIPBOARD, entry half: if the Windows clipboard changed
         # since the last sync, hand it to the iPad now (fires the iPad's
         # "Paste from PC" shortcut) -- so a plain Ctrl(=Cmd)+V on the iPad
         # always pastes the newest copy from EITHER machine
         seq = _clip_seq()
-        if seq != self._last_sync_seq:
+        if self.active_target == "ipad" and seq != self._last_sync_seq:
             self._last_sync_seq = seq
             print("[portal] syncing the PC clipboard to the iPad")
             threading.Timer(
                 0.3, lambda: self._send_chord(FKA_FETCH)).start()
 
-    def leave(self):
+    def leave(self, exit_to=None):
         if not self.active:
             return
         self.active = False
@@ -364,11 +631,14 @@ class Portal:
         # portal keeps running but goes deaf, and edge crossings stop working
         # until a restart reinstalls the hook. The sender thread owns the
         # socket and is the only place allowed to block on it.
-        self.q.put(("k", 0, [], 0))
-        self.q.put(("b", 0, 0, 0))
+        target = self.active_target or "ipad"
+        self.q.put((target, "k", 0, [], 0))
+        self.q.put((target, "b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
         # position we entered from
-        if self.cur:
+        if exit_to is not None:
+            user32.SetCursorPos(int(exit_to[0]), int(exit_to[1]))
+        elif self.cur:
             ex, ey = self.cur["exit_to"]
             if ex is None:
                 ex = int(self.entry_along)
@@ -376,10 +646,15 @@ class Portal:
                 ey = int(self.entry_along)
             user32.SetCursorPos(int(ex), int(ey))
         self.cur = None
-        print("[portal] <<< iPad mode OFF (control back on PC)")
+        name = self.active_target or "target"
+        self.active_target = None
+        self.active_display = None
+        print(f"[portal] <<< {name} mode OFF (control back on PC)")
 
     def _hit_portal(self, x, y):
         for p in self.portals:
+            if not self.target_ready.get(p.get("target", "ipad"), False):
+                continue
             if p["axis"] == "x" and abs(x - p["line"]) <= 1:
                 lo, hi = p["span"]
                 if lo <= y <= hi:
@@ -409,38 +684,28 @@ class Portal:
                     dx = int((ms.pt.x - self.cx) * MOUSE_SENS)
                     dy = int((ms.pt.y - self.cy) * MOUSE_SENS)
                     if dx or dy:
-                        self.q.put(("m", dx, dy, 0))
-                        # perpendicular progress into the iPad
-                        prim = self.cur
-                        move = dx if prim["axis"] == "x" else dy
-                        self.perp += move * prim["sign"]
-                        # track entry-along for the exit drop point
-                        if prim["span_axis"] == "y":
-                            self.entry_along += dy
-                        else:
-                            self.entry_along += dx
-                        if self.perp < 0:
-                            self.leave()
+                        self.q.put((self.active_target, "m", dx, dy, 0))
+                        if self._route_motion(dx, dy):
                             return 1
                     user32.SetCursorPos(self.cx, self.cy)
                     return 1
                 elif wParam in (WM_LBUTTONDOWN, WM_LBUTTONUP):
                     self.buttons = (self.buttons | 1) if \
                         wParam == WM_LBUTTONDOWN else (self.buttons & ~1)
-                    self.q.put(("b", 0, 0, 0)); return 1
+                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
                 elif wParam in (WM_RBUTTONDOWN, WM_RBUTTONUP):
                     self.buttons = (self.buttons | 2) if \
                         wParam == WM_RBUTTONDOWN else (self.buttons & ~2)
-                    self.q.put(("b", 0, 0, 0)); return 1
+                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
                 elif wParam in (WM_MBUTTONDOWN, WM_MBUTTONUP):
                     self.buttons = (self.buttons | 4) if \
                         wParam == WM_MBUTTONDOWN else (self.buttons & ~4)
-                    self.q.put(("b", 0, 0, 0)); return 1
+                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
                 elif wParam == WM_MOUSEWHEEL:
                     delta = ctypes.c_short(ms.mouseData >> 16).value // 120
                     if SCROLL_INVERT:
                         delta = -delta
-                    self.q.put(("w", 0, 0, delta)); return 1
+                    self.q.put((self.active_target, "w", 0, 0, delta)); return 1
         return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
     def _kbd_proc(self, nCode, wParam, lParam):
@@ -477,8 +742,14 @@ class Portal:
             if down and vk == 0x49 and ctrl and alt:      # Ctrl+Alt+I
                 if self.active:
                     self.leave()
-                elif self.portals:
-                    self.enter(self.portals[0], self.cy)
+                else:
+                    ready = next(
+                        (portal for portal in self.portals
+                         if self.target_ready.get(
+                             portal.get("target", "ipad"), False)),
+                        None)
+                    if ready:
+                        self.enter(ready, self.cy)
                 return 1
             shift = self.mods & 0x22
             if up and vk in self._hot_down:
@@ -486,14 +757,14 @@ class Portal:
             if down and vk == 0x56 and ctrl and alt and shift:
                 # Ctrl+Alt+Shift+V: tell the iPad to FETCH the PC clipboard
                 # (runs its "Paste from PC" shortcut via the FKA chord)
-                if self._chord_armed(vk):
+                if self.active_target == "ipad" and self._chord_armed(vk):
                     print("[portal] asking iPad to fetch the PC clipboard")
                     self._send_chord(FKA_FETCH)
                 return 1
             if down and vk == 0x43 and ctrl and alt and shift:
                 # Ctrl+Alt+Shift+C: tell the iPad to PUSH its clipboard to
                 # the PC (runs its "Copy to PC" shortcut via the FKA chord)
-                if self._chord_armed(vk):
+                if self.active_target == "ipad" and self._chord_armed(vk):
                     print("[portal] asking iPad to push its clipboard to "
                           "the PC")
                     self._send_chord(FKA_PUSH)
@@ -504,7 +775,7 @@ class Portal:
                     print(f"[portal] pasting {len(text)} chars to iPad")
                     # through the queue: the sender thread owns the socket,
                     # so nothing else may write it concurrently
-                    self.q.put(("t", text, 0, 0))
+                    self.q.put((self.active_target, "t", text, 0, 0))
                 return 1
             # keep physical modifier byte current in every mode
             if vk in VK_MOD:
@@ -523,7 +794,8 @@ class Portal:
                 # (Ctrl+C/X, remapped to Cmd by the keymap) also pushes the
                 # iPad clipboard back to the PC, so crossing back and
                 # hitting Ctrl+V on Windows just works
-                if down and vk in (0x43, 0x58) and ctrl and not alt:
+                if self.active_target == "ipad" and down \
+                        and vk in (0x43, 0x58) and ctrl and not alt:
                     self._schedule_push()
                 return 1
         return user32.CallNextHookEx(None, nCode, wParam, lParam)
@@ -585,17 +857,18 @@ class Portal:
         mods, usage = chord
         self._last_chord = now
         self._chord_until = now + FKA_HOLD + 0.05
-        self.q.put(("k", mods, [usage], 0))
+        target = self.active_target or "ipad"
+        self.q.put((target, "k", mods, [usage], 0))
 
         def finish():
-            self.q.put(("k", 0, [], 0))
-            if self.active:
+            self.q.put((target, "k", 0, [], 0))
+            if self.active and self.active_target == target:
                 # resync the iPad with what is still physically held
                 out_mods = 0
                 for name in self._phys_mod_names():
                     tgt = self.remap.get(name, name)
                     out_mods |= IPAD_MOD_BIT.get(tgt, 0)
-                self.q.put(("k", out_mods,
+                self.q.put((target, "k", out_mods,
                             list(self.raw_keys.values())[:6], 0))
         threading.Timer(FKA_HOLD, finish).start()
 
@@ -622,56 +895,65 @@ class Portal:
             fmods = frozenset(mod_names)
             for omods, okeys in ((o[2], o[3]) for o in self.overrides
                                  if o[0] == fmods and o[1] == key_names):
-                self.q.put(("k", omods, okeys[:6], 0))
+                self.q.put((self.active_target, "k", omods, okeys[:6], 0))
                 return
         # 2) passthrough with modifier remap
         out_mods = 0
         for name in mod_names:
             tgt = self.remap.get(name, name)
             out_mods |= IPAD_MOD_BIT.get(tgt, 0)
-        self.q.put(("k", out_mods, key_usages[:6], 0))
+        self.q.put((self.active_target, "k", out_mods, key_usages[:6], 0))
 
     def sender(self):
         period = 1.0 / SEND_HZ
         while True:
             time.sleep(period)
-            adx = ady = awheel = 0
-            btn_dirty = False
-            keymsgs = []
-            texts = []
-            drained = False
+            batches = {}
             while True:
                 try:
-                    kind, a, b, c = self.q.get_nowait()
+                    target, kind, a, b, c = self.q.get_nowait()
                 except queue.Empty:
                     break
-                drained = True
+                target = target or "ipad"
+                batch = batches.setdefault(target, {
+                    "dx": 0, "dy": 0, "wheel": 0,
+                    "button": False, "keys": [], "texts": [],
+                })
                 if kind == "m":
-                    adx += a; ady += b
+                    batch["dx"] += a
+                    batch["dy"] += b
                 elif kind == "w":
-                    awheel += c
+                    batch["wheel"] += c
                 elif kind == "b":
-                    btn_dirty = True
+                    batch["button"] = True
                 elif kind == "k":
-                    keymsgs.append((a, b))
+                    batch["keys"].append((a, b))
                 elif kind == "t":
-                    texts.append(a)
-            if not drained:
+                    batch["texts"].append(a)
+            if not batches:
                 continue
-            for text in texts:
-                self.send({"cmd": "text", "text": text})
-            for mods, keys in keymsgs:
-                self.send({"cmd": "kbd", "mods": mods, "keys": keys})
-            if adx or ady or awheel:
-                while adx or ady or awheel:
-                    sx = max(-127, min(127, adx)); adx -= sx
-                    sy = max(-127, min(127, ady)); ady -= sy
-                    sw = max(-127, min(127, awheel)); awheel -= sw
-                    self.send({"cmd": "mouse", "dx": sx, "dy": sy,
-                               "buttons": self.buttons, "wheel": sw})
-            elif btn_dirty:
-                self.send({"cmd": "mouse", "dx": 0, "dy": 0,
-                           "buttons": self.buttons, "wheel": 0})
+            for target, batch in batches.items():
+                for text in batch["texts"]:
+                    self.send(target, {"cmd": "text", "text": text})
+                for mods, keys in batch["keys"]:
+                    self.send(
+                        target, {"cmd": "kbd", "mods": mods, "keys": keys})
+                adx, ady, awheel = (
+                    batch["dx"], batch["dy"], batch["wheel"])
+                if adx or ady or awheel:
+                    while adx or ady or awheel:
+                        sx = max(-127, min(127, adx)); adx -= sx
+                        sy = max(-127, min(127, ady)); ady -= sy
+                        sw = max(-127, min(127, awheel)); awheel -= sw
+                        self.send(
+                            target,
+                            {"cmd": "mouse", "dx": sx, "dy": sy,
+                             "buttons": self.buttons, "wheel": sw})
+                elif batch["button"]:
+                    self.send(
+                        target,
+                        {"cmd": "mouse", "dx": 0, "dy": 0,
+                         "buttons": self.buttons, "wheel": 0})
 
     def run(self):
         if not self.portals:
@@ -679,6 +961,7 @@ class Portal:
                   "Ctrl+Alt+I toggle will work. Run openspan_setup.py.")
         threading.Thread(target=self.sender, daemon=True).start()
         threading.Thread(target=_scroll_watcher, daemon=True).start()
+        threading.Thread(target=self._status_watcher, daemon=True).start()
         self.mouse_hook = user32.SetWindowsHookExW(
             WH_MOUSE_LL, self._mcb, kernel32.GetModuleHandleW(None), 0)
         self.kbd_hook = user32.SetWindowsHookExW(
@@ -687,7 +970,7 @@ class Portal:
             print("[portal] ERROR: failed to install hooks")
             return
         print(f"[portal] ready — {len(self.portals)} portal(s) loaded. "
-              "Cross the edge to control the iPad; tap Esc 3x to bail.")
+              "Cross an edge to control its device; tap Esc 3x to bail.")
         msg = wt.MSG()
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
             user32.TranslateMessage(ctypes.byref(msg))

@@ -40,6 +40,7 @@ audio_balance.txt
 build/
 dist/
 OpenSpan.exe
+OpenSpan-Codex*.exe
 *.spec
 
 # personal / machine-specific runtime state (never publish)

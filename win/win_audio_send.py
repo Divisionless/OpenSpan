@@ -49,6 +49,7 @@ else:
     ROOT = os.path.abspath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), ".."))
 BAL_FILE = os.path.join(ROOT, "audio_balance.txt")
+GAIN_FILE = os.path.join(ROOT, "audio_gain.txt")
 BAL = (1.0, 1.0)
 
 
@@ -65,6 +66,18 @@ def _read_balance():
         return (1.0, 1.0)
     b = max(-1.0, min(1.0, b))
     return (min(1.0, 1.0 - b), min(1.0, 1.0 + b))
+
+
+def _read_app_gain():
+    """OpenSpan's own persisted 0..1 gain; missing/invalid means full."""
+    try:
+        with open(GAIN_FILE) as f:
+            gain = float(f.read().strip())
+    except (OSError, ValueError):
+        return 1.0
+    if not math.isfinite(gain):
+        return 1.0
+    return max(0.0, min(1.0, gain))
 
 
 def _volume_watcher():
@@ -85,6 +98,7 @@ def _volume_watcher():
     vol = None
     while True:
         BAL = _read_balance()
+        app_gain = _read_app_gain()
         if has_vol:
             try:
                 if vol is None:
@@ -109,10 +123,12 @@ def _volume_watcher():
                     # linear amplitude, so the earbuds track the slider the way
                     # a normal Windows volume slider does.
                     db = float(vol.GetMasterVolumeLevel())  # <= 0 dB; 0 = full
-                    GAIN = 10.0 ** (db / 20.0)
+                    GAIN = (10.0 ** (db / 20.0)) * app_gain
             except Exception:
                 vol = None   # re-acquire next tick (e.g. device changed)
-                GAIN = 1.0
+                GAIN = app_gain
+        else:
+            GAIN = app_gain
         time.sleep(0.15)
 
 

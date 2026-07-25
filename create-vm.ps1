@@ -3,11 +3,11 @@
 #
 #   powershell -ExecutionPolicy Bypass -File create-vm.ps1 -Iso <debian-netinst.iso>
 #
-# Creates a VM named "OpenSpan" with xHCI USB passthrough, the three NAT
-# port-forwards the app uses (ssh 2222, daemon 9955, audio UDP 4010), a blank
-# disk, and a USB filter for your Bluetooth radio. Then install Debian 12 into
-# it and run the guest provisioner (see README / guest/). Requires VirtualBox
-# + the Extension Pack (xHCI needs it).
+# Creates a VM named "OpenSpan" with xHCI USB passthrough, the four NAT
+# port-forwards the app uses (ssh 2222, iPad HID 9955, Mac HID 9956, audio UDP
+# 4010), a blank disk, and a USB filter for your Bluetooth radio. Then install
+# Debian 12 into it and run the guest provisioner (see README / guest/).
+# Requires VirtualBox + the Extension Pack (xHCI needs it).
 #
 # Safe: refuses to touch an existing VM of the same name.
 [CmdletBinding()]
@@ -77,6 +77,7 @@ VBox modifyvm $Name --nic1 nat
 # NAT port-forwards the app relies on: name,proto,hostip,hostport,guestip,guestport
 VBox modifyvm $Name --natpf1 "ssh,tcp,,2222,,22"
 VBox modifyvm $Name --natpf1 "daemon,tcp,,9955,,9955"
+VBox modifyvm $Name --natpf1 "mac-hid,tcp,,9956,,9956"
 VBox modifyvm $Name --natpf1 "audio,udp,,4010,,4010"
 VBox modifyvm $Name --graphicscontroller vmsvga --vram 16
 

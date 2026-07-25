@@ -20,10 +20,11 @@ WIN = os.path.join(ROOT, "win")
 ICON = os.path.join(ROOT, "openspan.ico")
 DIST = os.path.join(ROOT, "dist")
 BUILD = os.path.join(ROOT, "build")
+NAME = os.environ.get("OPENSPAN_BUILD_NAME", "OpenSpan").strip() or "OpenSpan"
 
 args = [
     os.path.join(WIN, "openspan_launcher.py"),
-    "--name", "OpenSpan",
+    "--name", NAME,
     "--onefile",
     "--noconsole",                 # GUI app: no console window
     "--distpath", DIST,
@@ -35,6 +36,7 @@ args = [
     "--hidden-import", "openspan_portal",
     "--hidden-import", "win_audio_send",
     "--hidden-import", "openspan_setup",
+    "--hidden-import", "openspan_targets",
     # dependency trees PyInstaller can under-collect (COM codegen, native)
     "--collect-all", "pycaw",
     "--collect-all", "comtypes",
@@ -46,14 +48,14 @@ args = [
 if os.path.exists(ICON):
     args += ["--icon", ICON]
 
-print("building OpenSpan.exe …")
+print(f"building {NAME}.exe …")
 PyInstaller.__main__.run(args)
 
-built = os.path.join(DIST, "OpenSpan.exe")
+built = os.path.join(DIST, f"{NAME}.exe")
 if not os.path.exists(built):
-    sys.exit("BUILD FAILED: OpenSpan.exe not produced")
-target = os.path.join(ROOT, "OpenSpan.exe")
+    sys.exit(f"BUILD FAILED: {NAME}.exe not produced")
+target = os.path.join(ROOT, f"{NAME}.exe")
 shutil.copy2(built, target)
 size_mb = os.path.getsize(target) / (1024 * 1024)
 print(f"\nOK -> {target}  ({size_mb:.0f} MB)")
-print("Runs in place (D:\\OpenSpan already holds the data files it needs).")
+print(f"Runs in place ({ROOT} holds the data files it needs).")

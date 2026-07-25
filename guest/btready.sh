@@ -7,6 +7,20 @@
 #
 # NOTE: the retired stack (openspan-audio/hold/jbl) is intentionally NOT touched.
 source /opt/openspan/env.sh
+
+# Single-radio installs have no override and remain hci0. Multi-radio installs
+# persist the chosen HID lane in the openspanble drop-in; resolve that hciN
+# before waiting, powering, or applying mouse latency bounds.
+HCI="${OPENSPAN_ADAPTER:-}"
+RADIO_CONF=/etc/systemd/system/openspanble.service.d/20-radio.conf
+if [ -z "$HCI" ] && [ -f "$RADIO_CONF" ]; then
+  HCI=$(sed -n 's/^Environment=OPENSPAN_ADAPTER=//p' "$RADIO_CONF" | tail -n 1)
+fi
+HCI="${HCI:-hci0}"
+case "$HCI" in hci[0-9]*) ;; *) echo "invalid adapter $HCI" >&2; exit 1;; esac
+IDX="${HCI#hci}"
+export OPENSPAN_ADAPTER="$HCI"
+
 /opt/openspan/wait-hci0.sh
 sleep 3
 # Restart bluetoothd now that the radio is up. TWO boot-races to defeat:
@@ -25,14 +39,14 @@ systemctl restart bluetooth
 sleep 6
 # belt-and-suspenders: if the controller STILL isn't registered, keep trying
 for try in 1 2 3; do
-  if btmgmt info 2>/dev/null | grep -q 'Index list with 0'; then
+  if ! btmgmt --index "$IDX" info >/dev/null 2>&1; then
     systemctl restart bluetooth
     sleep 6
   else
     break
   fi
 done
-btmgmt power on >/dev/null 2>&1
+btmgmt --index "$IDX" power on >/dev/null 2>&1
 
 # LE connection-interval bounds: 15-30ms -- snappy iPad mouse but NOT so
 # aggressive it starves A2DP (7.5ms serviced the iPad ~133x/s and garbled the
@@ -40,8 +54,8 @@ btmgmt power on >/dev/null 2>&1
 # belt-and-suspenders with main.conf Min/MaxConnectionInterval in case a
 # boot-order race resets the kernel defaults. Units are raw 1.25ms; 12=15ms,
 # 24=30ms. Write min first so min<=max always holds.
-echo 12  > /sys/kernel/debug/bluetooth/hci0/conn_min_interval 2>/dev/null
-echo 24 > /sys/kernel/debug/bluetooth/hci0/conn_max_interval 2>/dev/null
+echo 12  > "/sys/kernel/debug/bluetooth/$HCI/conn_min_interval" 2>/dev/null
+echo 24 > "/sys/kernel/debug/bluetooth/$HCI/conn_max_interval" 2>/dev/null
 
 # Radio confirmed present: (re)register A2DP endpoints, then restart the bridge.
 systemctl restart openspan-wireplumber

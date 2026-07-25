@@ -1,6 +1,8 @@
 # OpenSpan
 
-**Drive your iPad from your PC — keyboard, mouse, audio, and clipboard — over Bluetooth. Free, local, no cloud, no account.**
+**Drive your iPad or managed Mac from your PC — keyboard and mouse over
+Bluetooth, with iPad audio/clipboard support. Free, local, no cloud, no
+account.**
 
 OpenSpan turns a Windows PC into a Bluetooth peripheral for a nearby iPad.
 Shove your mouse off a screen edge (Universal Control / Input Director style)
@@ -11,7 +13,8 @@ two-way clipboard in sync between the two devices.
 
 No paid software, no account, no telemetry. A small Windows app plus a headless
 Linux VM doing the one thing Windows won't: pretending to be a Bluetooth
-keyboard.
+keyboard. Multi-radio mode can publish a second, independent Bluetooth HID
+device for a managed Mac without installing software on that Mac.
 
 ---
 
@@ -48,6 +51,8 @@ Windows: openspan_portal.py ── TCP :9955 ──▶  Debian VM: openspan_ble.
                                                     ▼
                                                   iPad  (bonded BLE keyboard)
 
+Windows: the same portal ───── TCP :9956 ──▶ second HID daemon/radio ─▶ Mac
+
 PC audio ─▶ VB-Cable ─▶ WASAPI loopback ── UDP :4010 ──▶ VM: PipeWire ─▶ A2DP ─▶ earbuds
 ```
 
@@ -55,10 +60,36 @@ The single radio time-shares both jobs (BLE HID to the iPad, A2DP audio to the
 earbuds). Keeping the BLE link's airtime modest is what lets the audio stay
 clean — see `TECHNICAL_NOTES.md`.
 
+Single-radio operation remains the default and uses the original compatibility
+path. An opt-in **Multiple radios** setting exposes every controller seen by the
+VM, lets the iPad keyboard, managed Mac, and scans choose radios, and adds **Assign to radio**
+to each Bluetooth device's right-click menu. Assignments are stored by
+controller MAC address so they survive `hci0`/`hci1` renumbering. When the iPad
+and headphones use different radios, pairing the iPad leaves headphone audio
+alone.
+
+With three radios, the recommended layout is the internal controller for the
+iPad compatibility/backup lane, one external TP-Link controller for the
+managed Mac, and the other external TP-Link controller for audio/scanning.
+The iPad and Mac daemons have separate ports, advertisements, GATT state, and
+bonds. Existing VM clones are upgraded in place: the app adds the Mac daemon's
+TCP `9956` forwarding rule automatically without restarting the VM.
+
+The current three-radio development bench uses
+`configure-multiradio.ps1` once, while `OpenSpan-Codex` is powered off, to add
+the two serial-specific TP-Link USB filters alongside the existing Intel
+filter. The helper does not restart Windows or power off the VM.
+
 ## Features
 
 - **Keyboard + mouse bridge** — cross a screen edge to control the iPad; a
   keymap remaps modifiers (Alt→Cmd, Ctrl+C→Cmd+C, …).
+- **Managed Mac lane** — a second independent BLE keyboard/mouse target on its
+  own radio. Its display editor supports 1–8 screens, manual resolution,
+  refresh rate, 0°/90°/180°/270° rotation, and physical-size layout.
+- **Physical desk canvas** — drag PC, iPad, and Mac screens together. Corner
+  resizing changes only the physical drawing; configured pixel resolution and
+  refresh rate remain intact.
 - **Bluetooth audio routing** — send Windows audio to BT earbuds through the
   same radio, with the normal Windows volume slider and an in-app L/R balance.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync
@@ -94,6 +125,11 @@ These cost real debugging; they are the difference between working and not:
    Classic decoy. The LE connection interval is pinned to 15–30 ms
    (`MinConnectionInterval = 12` / `MaxConnectionInterval = 24`): tighter
    starves the audio, looser makes the mouse laggy.
+5. **Multiple radios use stable controller addresses.** Multi-radio mode is
+   opt-in; the default remains the original single-radio path. Assignments are
+   saved by controller MAC, resolved to the current Linux `hciN` on every app
+   start, and the selected HID controller receives the same 15–30 ms interval.
+   RTL8761BU/TP-Link radios also need Debian's `firmware-realtek` package.
 
 ## Layout
 
@@ -102,11 +138,13 @@ openspan/
 ├── win/                         # runs on Windows (stdlib Python + ctypes)
 │   ├── openspan.py              # control app — start here
 │   ├── openspan_portal.py       # edge-crossing keyboard/mouse router
+│   ├── openspan_targets.py      # multi-target display geometry + migration
 │   ├── win_audio_send.py        # WASAPI loopback → UDP audio sender
 │   ├── openspan_setup.py        # drag-to-arrange the iPad among your monitors
 │   └── openspan_launcher.py     # role dispatch for the packaged exe
 ├── guest/                       # runs inside the Debian VM
 │   ├── openspan_ble.py          # BLE HID GATT peripheral + :9955 command server
+│   ├── set-hid-target.sh        # independent iPad/Mac controller assignment
 │   ├── udp_to_sink.py           # UDP audio → PipeWire A2DP bridge
 │   ├── *.service                # systemd units (BLE daemon, audio stack, agent)
 │   ├── bt-list.sh / bt-connect.sh / btready.sh / env.sh …   # runtime helpers

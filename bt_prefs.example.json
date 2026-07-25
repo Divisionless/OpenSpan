@@ -1,5 +1,11 @@
 {
-  "_note": "Copied to bt_prefs.json on first run. renames = custom device names (survive re-pairing), keyed by MAC; blacklist = MACs hidden from scans. Yours is local and gitignored.",
+  "_note": "Copied to bt_prefs.json on first run. Single is the compatibility default. Multi is opt-in; device and HID assignments use stable controller MACs, not hci numbers. Yours is local and gitignored.",
   "renames": {},
-  "blacklist": []
+  "blacklist": [],
+  "radio_mode": "single",
+  "radio_assignments": {},
+  "hid_radio": "",
+  "mac_radio": "",
+  "scan_radio": "",
+  "radio_labels": {}
 }

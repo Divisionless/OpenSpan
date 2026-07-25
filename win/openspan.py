@@ -9,6 +9,7 @@ Pure standard library (tkinter + ctypes). No dependencies.
 """
 
 import json
+import math
 import os
 import queue
 import re
@@ -23,6 +24,12 @@ from tkinter import ttk, messagebox, simpledialog
 # reuse the monitor enumeration + presets from the setup module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
+from openspan_targets import (  # noqa: E402
+    compute_adjacencies, compute_portals, normalize_config,
+    oriented_resolution, rotate_display, set_layout_width,
+    snap_rect_to_neighbors, sync_legacy_ipad, target_by_id,
+    validate_mac_displays,
+)
 
 # Frozen (OpenSpan.exe) or plain-Python: either way the data files live in
 # a fixed layout — ROOT holds the configs/keys, ROOT\win the scripts. In the
@@ -35,8 +42,32 @@ else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     ROOT = os.path.abspath(os.path.join(HERE, ".."))
 VBOX = r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
-VM = "OpenSpan"
-DAEMON = ("127.0.0.1", 9955)
+SETTINGS = os.path.join(ROOT, "openspan_settings.json")
+
+
+def _load_boot_settings():
+    """Read process-wide routing before any VM/daemon helpers are defined."""
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            value = json.load(f)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_BOOT_SETTINGS = _load_boot_settings()
+VM = str(_BOOT_SETTINGS.get("vm_name", "OpenSpan")).strip() or "OpenSpan"
+APP_LABEL = (str(_BOOT_SETTINGS.get("app_label", "OpenSpan")).strip()
+             or "OpenSpan")
+DAEMON = (
+    str(_BOOT_SETTINGS.get("daemon_host", "127.0.0.1")).strip()
+    or "127.0.0.1",
+    int(_BOOT_SETTINGS.get("daemon_port", 9955)),
+)
+TARGET_DAEMONS = {
+    "ipad": DAEMON,
+    "mac": (DAEMON[0], int(_BOOT_SETTINGS.get("mac_daemon_port", 9956))),
+}
 KEY = os.path.join(ROOT, "id_openspan")
 KEYMAP = os.path.join(ROOT, "openspan_keymap.json")
 CONFIG = os.path.join(ROOT, "openspan_config.json")
@@ -199,6 +230,157 @@ def dark_alert(parent, title, message, ok="OK"):
     _dialog(parent, title, message, [(ok, True, "Accent.TButton")])
 
 
+def _theme_startup_buttons():
+    """Style the small pre-flight window without constructing the full app."""
+    st = ttk.Style()
+    try:
+        st.theme_use("clam")
+    except tk.TclError:
+        pass
+    st.configure("TButton", background=CARD, foreground=FG,
+                 bordercolor=CARD, focuscolor=CARD, relief="flat",
+                 padding=8, font=("Segoe UI", 10))
+    st.map("TButton", background=[("active", "#2d3444")])
+    st.configure("Accent.TButton", background=ACCENT_DIM,
+                 foreground="#eafff3", font=("Segoe UI Semibold", 10))
+    st.map("Accent.TButton", background=[("active", "#2a8f5c")])
+    st.configure("Danger.TButton", background="#53292a",
+                 foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
+    st.map("Danger.TButton", background=[("active", "#6e3335")])
+
+
+def _elevation_gate():
+    """Ask what to do before keys, Bluetooth, audio, or the VM are touched."""
+    root = tk.Tk()
+    try:
+        root.title(f"{APP_LABEL} — startup choice")
+        root.geometry("700x320")
+        root.minsize(640, 280)
+        root.configure(bg=BG)
+        try:
+            root.iconbitmap(ICON)
+        except Exception:  # noqa: BLE001
+            pass
+        _theme_startup_buttons()
+        root.update_idletasks()
+        _paint_dark_titlebar(root)
+        root.lift()
+        root.focus_force()
+        # Close is deliberately last: Escape or clicking outside the card must
+        # be fail-closed and must never count as permission to boot the bridge.
+        return _dialog(
+            root,
+            "OpenSpan is not running as administrator",
+            "Administrator mode keeps keyboard and mouse bridging alive while "
+            "an elevated window is focused.\n\n"
+            "Choose Restart as administrator to continue normally. Close "
+            "program exits without starting the VM or touching Bluetooth. "
+            "Ignore starts OpenSpan in normal mode for this run only.",
+            [("Restart as administrator", "restart", "Accent.TButton"),
+             ("Ignore", "ignore", "TButton"),
+             ("Close program", "close", "Danger.TButton")])
+    finally:
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+
+
+def _elevated_launch_spec():
+    """Return (program, parameters) for the same app in an elevated process."""
+    if getattr(sys, "frozen", False):
+        program = os.path.abspath(sys.executable)
+        args = list(sys.argv[1:])
+    else:
+        program = os.path.abspath(sys.executable)
+        args = [os.path.abspath(__file__), *sys.argv[1:]]
+    return program, subprocess.list2cmdline(args)
+
+
+def _independent_frozen_env():
+    """Give independently launched frozen roles their own one-file runtime.
+
+    PyInstaller 6.9+ assumes a child invocation of the same executable is a
+    worker that can reuse its parent's _MEI directory.  OpenSpan's audio,
+    portal, and elevated replacement are independent processes; sharing that
+    directory lets an exiting role race the parent's cleanup and can surface a
+    "Failed to remove temporary directory" warning.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _terminate_role_process(proc, timeout=4):
+    """Stop a spawned role and its PyInstaller one-file child.
+
+    Terminating only the Popen handle kills the one-file parent but can leave
+    the extracted --portal/--audio child alive. Repeated display saves then
+    stack low-level hook processes. Use Windows' process-tree termination for
+    frozen roles and retain the ordinary fallback for tests/plain Python.
+    """
+    if not proc or proc.poll() is not None:
+        return
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" and pid:
+        taskkill = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            "System32", "taskkill.exe")
+        try:
+            subprocess.run(
+                [taskkill, "/PID", str(int(pid)), "/T", "/F"],
+                capture_output=True, text=True, timeout=timeout,
+                creationflags=NO_WINDOW)
+            try:
+                proc.wait(timeout=timeout)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        proc.terminate()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _launch_elevated():
+    """Request UAC elevation. The caller has already released the app mutex."""
+    reset_name = "PYINSTALLER_RESET_ENVIRONMENT"
+    previous = os.environ.get(reset_name)
+    try:
+        import ctypes
+        program, parameters = _elevated_launch_spec()
+        if getattr(sys, "frozen", False):
+            os.environ[reset_name] = "1"
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", program, parameters, ROOT, 1)
+        return int(result) > 32
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        if previous is None:
+            os.environ.pop(reset_name, None)
+        else:
+            os.environ[reset_name] = previous
+
+
+def _show_elevation_launch_failed():
+    """Report a cancelled/failed UAC request without starting the full app."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "OpenSpan was not started. The administrator request was cancelled "
+            "or could not be opened.",
+            APP_LABEL,
+            0x10)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ---- console log sink -------------------------------------------------------
 # Every command the app runs (VBoxManage + ssh into the VM) is mirrored to the
 # right-hand console panel. The App installs the sink once its console exists;
@@ -253,7 +435,7 @@ def ensure_ssh_key():
     (guest/install-authorized-key.sh) -- this only guarantees the host has
     a key to offer. Never regenerates an existing key."""
     if os.path.exists(KEY):
-        return True
+        return harden_ssh_key_acl()
     try:
         r = subprocess.run(
             ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", KEY,
@@ -261,6 +443,8 @@ def ensure_ssh_key():
             capture_output=True, text=True, timeout=30,
             creationflags=NO_WINDOW)
         if r.returncode == 0 and os.path.exists(KEY):
+            if not harden_ssh_key_acl():
+                return False
             _emit("event", "generated a new bridge SSH key "
                            f"({os.path.basename(KEY)}). Install its .pub in "
                            "the VM (the provisioner does this).")
@@ -275,14 +459,59 @@ def ensure_ssh_key():
     return False
 
 
+def harden_ssh_key_acl():
+    """Make the private key acceptable to Windows OpenSSH.
+
+    Copying a project tree onto NTFS can make the key inherit broad
+    Authenticated Users/Users permissions. OpenSSH then ignores the key and,
+    without BatchMode, sits invisibly at a password prompt until our subprocess
+    timeout. Keep only the launching user, SYSTEM, and Administrators.
+    """
+    if os.name != "nt" or not os.path.exists(KEY):
+        return os.path.exists(KEY)
+    domain = os.environ.get("USERDOMAIN", "").strip()
+    username = os.environ.get("USERNAME", "").strip()
+    principal = f"{domain}\\{username}" if domain and username else username
+    if not principal:
+        return False
+    icacls = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "icacls.exe")
+    flags = {"capture_output": True, "text": True, "timeout": 15,
+             "creationflags": NO_WINDOW}
+    try:
+        steps = [
+            [icacls, KEY, "/inheritance:r"],
+            [icacls, KEY, "/remove:g", "*S-1-5-11", "*S-1-5-32-545"],
+            [icacls, KEY, "/grant:r", f"{principal}:(M)",
+             "*S-1-5-18:(F)", "*S-1-5-32-544:(F)"],
+        ]
+        results = [subprocess.run(step, **flags) for step in steps]
+        return results[0].returncode == 0 and results[-1].returncode == 0
+    except Exception as exc:  # noqa: BLE001
+        _emit("err", f"couldn't secure the bridge SSH key: {exc}")
+        return False
+
+
+def _ssh_argv(cmd):
+    """One non-interactive SSH contract for every guest operation."""
+    return [
+        "ssh", "-p", "2222", "-i", KEY,
+        "-o", "BatchMode=yes",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "NumberOfPasswordPrompts=0",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=6",
+        "root@127.0.0.1", cmd,
+    ]
+
+
 def ssh_guest(cmd, timeout=20, quiet=False, show_result=True):
     if not quiet:
         _emit("cmd", "ssh: " + " ".join(cmd.split())[:240])
     try:
         r = subprocess.run(
-            ["ssh", "-p", "2222", "-i", KEY,
-             "-o", "StrictHostKeyChecking=accept-new",
-             "-o", "ConnectTimeout=6", "root@127.0.0.1", cmd],
+            _ssh_argv(cmd),
             capture_output=True, text=True, timeout=timeout,
             creationflags=NO_WINDOW)
         if not quiet and show_result:
@@ -305,25 +534,223 @@ def vm_running():
     return f'"{VM}"' in (vbox("list", "runningvms", quiet=True).stdout or "")
 
 
+def _has_nat_forward(info, host_port, guest_port):
+    """Return True when a VirtualBox machine-readable NAT rule maps the ports."""
+    for line in (info or "").splitlines():
+        if not line.startswith("Forwarding(") or '="' not in line:
+            continue
+        value = line.split('="', 1)[1].rstrip('"')
+        fields = value.split(",")
+        if len(fields) >= 6 and fields[1].lower() == "tcp":
+            if fields[3] == str(host_port) and fields[5] == str(guest_port):
+                return True
+    return False
+
+
+def ensure_mac_daemon_forward(info=None):
+    """Expose the independent Mac HID daemon through this VM's NAT adapter.
+
+    Older OpenSpan VMs predate the 9956 lane. Add it live when the VM is
+    running, or persist it before the next start when the VM is powered off.
+    Existing rules are left untouched.
+    """
+    host, port = TARGET_DAEMONS["mac"]
+    if host not in ("127.0.0.1", "localhost"):
+        return True
+    if info is None:
+        info = vbox("showvminfo", VM, "--machinereadable",
+                    quiet=True).stdout or ""
+    if _has_nat_forward(info, port, port):
+        return True
+    rule = f"mac-hid,tcp,127.0.0.1,{port},,{port}"
+    if 'VMState="running"' in info:
+        result = vbox("controlvm", VM, "natpf1", rule, quiet=True)
+    else:
+        result = vbox("modifyvm", VM, "--natpf1", rule, quiet=True)
+    if result.returncode == 0:
+        _emit("ok", f"managed Mac control port {port} is ready.")
+        return True
+    # A concurrent startup path may have installed it between our check and
+    # command. Re-read before reporting a failure.
+    refreshed = vbox(
+        "showvminfo", VM, "--machinereadable", quiet=True).stdout or ""
+    if _has_nat_forward(refreshed, port, port):
+        return True
+    detail = (result.stderr or result.stdout or "").strip()
+    _emit("err", "couldn't expose the managed Mac control port: "
+                  + detail[-180:])
+    return False
+
+
 def load_bt_prefs():
     """Local, persistent Bluetooth prefs: custom names (survive re-pairing) and
-    a blacklist of devices that never show in scans. Keyed by MAC."""
+    a blacklist of devices that never show in scans. Multi-radio fields are
+    deliberately opt-in; an old/missing prefs file stays on the original
+    single-radio path."""
+    defaults = {
+        "renames": {},
+        "blacklist": set(),
+        "radio_mode": "single",
+        "radio_assignments": {},
+        "hid_radio": "",
+        "mac_radio": "",
+        "scan_radio": "",
+        "radio_labels": {},
+    }
     try:
         with open(BT_PREFS) as f:
             d = json.load(f)
-        return {"renames": dict(d.get("renames", {})),
-                "blacklist": set(d.get("blacklist", []))}
+        if not isinstance(d, dict):
+            return defaults
+        mode = d.get("radio_mode", "single")
+        return {
+            "renames": dict(d.get("renames", {})),
+            "blacklist": set(d.get("blacklist", [])),
+            "radio_mode": "multi" if mode == "multi" else "single",
+            "radio_assignments": {
+                str(device).upper(): str(controller).upper()
+                for device, controller
+                in dict(d.get("radio_assignments", {})).items()
+            },
+            "hid_radio": str(d.get("hid_radio", "")).upper(),
+            "mac_radio": str(d.get("mac_radio", "")).upper(),
+            "scan_radio": str(d.get("scan_radio", "")).upper(),
+            "radio_labels": {
+                str(controller).upper(): str(label)
+                for controller, label
+                in dict(d.get("radio_labels", {})).items()
+            },
+        }
     except (OSError, ValueError):
-        return {"renames": {}, "blacklist": set()}
+        return defaults
 
 
 def save_bt_prefs(prefs):
     try:
         with open(BT_PREFS, "w") as f:
             json.dump({"renames": prefs["renames"],
-                       "blacklist": sorted(prefs["blacklist"])}, f, indent=2)
+                       "blacklist": sorted(prefs["blacklist"]),
+                       "radio_mode": prefs.get("radio_mode", "single"),
+                       "radio_assignments":
+                           prefs.get("radio_assignments", {}),
+                       "hid_radio": prefs.get("hid_radio", ""),
+                       "mac_radio": prefs.get("mac_radio", ""),
+                       "scan_radio": prefs.get("scan_radio", ""),
+                       "radio_labels": prefs.get("radio_labels", {})},
+                      f, indent=2)
     except OSError:
         pass
+
+
+def multi_radio_enabled(prefs=None):
+    prefs = prefs if prefs is not None else load_bt_prefs()
+    return prefs.get("radio_mode") == "multi"
+
+
+def _active_usb_filter_ids(info):
+    """Return VID/PID tokens for active VirtualBox USB filters.
+
+    The machine-readable output is stable across VirtualBox releases and lets
+    us match the VM's intended radios without hard-coding TP-Link hardware.
+    """
+    filters = {}
+    for line in (info or "").splitlines():
+        match = re.match(
+            r'USBFilter(Active|VendorId|ProductId)(\d+)="([^"]*)"$',
+            line.strip(), re.IGNORECASE)
+        if not match:
+            continue
+        field, index, value = match.groups()
+        filters.setdefault(index, {})[field.lower()] = value
+    result = set()
+    for row in filters.values():
+        vendor = row.get("vendorid", "").strip().upper()
+        product = row.get("productid", "").strip().upper()
+        if row.get("active", "").lower() == "on" and vendor and product:
+            result.add(f"VID_{vendor}&PID_{product}")
+    return result
+
+
+def _shared_filtered_radio_hubs(info, pnp_lines):
+    """Find external hubs holding 2+ radios filtered into this VM.
+
+    Re-enumerating a root hub would be far too broad.  A shared external hub is
+    narrow enough for recovery and is the one Windows/VirtualBox edge case we
+    need to handle: identical radios can remain stuck in CapturingForVM until
+    their parent hub hot-plugs them after the VM is listening.
+    """
+    filter_ids = _active_usb_filter_ids(info)
+    by_parent = {}
+    for line in (pnp_lines or "").splitlines():
+        if "|" not in line:
+            continue
+        instance, parent = (part.strip() for part in line.split("|", 1))
+        upper_instance = instance.upper()
+        upper_parent = parent.upper()
+        if not any(token in upper_instance for token in filter_ids):
+            continue
+        if not upper_parent.startswith("USB\\VID_") \
+                or "ROOT_HUB" in upper_parent:
+            continue
+        by_parent.setdefault(parent, set()).add(upper_instance)
+    return sorted(
+        parent for parent, children in by_parent.items()
+        if len(children) >= 2)
+
+
+def _multi_radio_rearm_hubs(info):
+    """Read the parent hubs before VirtualBox captures the filtered radios."""
+    if os.name != "nt" or not multi_radio_enabled():
+        return []
+    powershell = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    command = (
+        "Get-PnpDevice -PresentOnly -Class Bluetooth "
+        "-ErrorAction SilentlyContinue | "
+        "Where-Object {$_.InstanceId -like 'USB\\VID_*&PID_*'} | "
+        "ForEach-Object {"
+        "$p=(Get-PnpDeviceProperty -InstanceId $_.InstanceId "
+        "-KeyName DEVPKEY_Device_Parent "
+        "-ErrorAction SilentlyContinue).Data;"
+        "if($p){Write-Output ($_.InstanceId+'|'+$p)}}")
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, timeout=15,
+            creationflags=NO_WINDOW)
+        if result.returncode:
+            return []
+        return _shared_filtered_radio_hubs(info, result.stdout)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _rearm_multi_radio_hubs(parents):
+    """Hot-plug narrow shared radio hubs after the VM's filters are active."""
+    if not parents:
+        return
+    pnputil = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32", "pnputil.exe")
+    # VirtualBox needs a moment to arm the per-VM capture filters.
+    threading.Event().wait(4)
+    for parent in parents:
+        _emit("event", "re-arming the shared USB radio hub so every assigned "
+                       "adapter reaches the bridge VM...")
+        try:
+            result = subprocess.run(
+                [pnputil, "/restart-device", parent],
+                capture_output=True, text=True, timeout=20,
+                creationflags=NO_WINDOW)
+            if result.returncode:
+                detail = (result.stderr or result.stdout or "").strip()
+                _emit("err", "USB radio hub re-arm failed: " + detail[-180:])
+            else:
+                _emit("ok", "shared USB radio hub re-armed.")
+        except Exception as exc:  # noqa: BLE001
+            _emit("err", f"USB radio hub re-arm failed: {exc}")
+    threading.Event().wait(5)
 
 
 def start_vm_clean():
@@ -334,14 +761,20 @@ def start_vm_clean():
     radio re-enumeration on xHCI."""
     _emit("event", "starting the bridge VM (clean cold boot)…")
     info = vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout or ""
+    rearm_hubs = _multi_radio_rearm_hubs(info)
     if 'VMState="saved"' in info:
         vbox("discardstate", VM)
-    vbox("startvm", VM, "--type", "headless")
+        info = None
+    ensure_mac_daemon_forward(info)
+    result = vbox("startvm", VM, "--type", "headless")
+    if result.returncode == 0:
+        _rearm_multi_radio_hubs(rearm_hubs)
 
 
-def daemon_status():
+def target_daemon_status(target="ipad"):
     try:
-        s = socket.create_connection(DAEMON, 2)
+        endpoint = TARGET_DAEMONS.get(target, DAEMON)
+        s = socket.create_connection(endpoint, 2)
         s.sendall(b'{"cmd":"status"}\n')
         s.settimeout(2)
         # read to the newline the daemon terminates replies with -- a single
@@ -358,12 +791,18 @@ def daemon_status():
         return None
 
 
-def daemon_cmd(obj):
+def daemon_status():
+    """Backward-compatible iPad daemon status."""
+    return target_daemon_status("ipad")
+
+
+def target_daemon_cmd(target, obj, timeout=2):
     """Send one command to the daemon and return its reply (or None)."""
     try:
-        s = socket.create_connection(DAEMON, 2)
+        endpoint = TARGET_DAEMONS.get(target, DAEMON)
+        s = socket.create_connection(endpoint, 2)
         s.sendall((json.dumps(obj) + "\n").encode())
-        s.settimeout(2)
+        s.settimeout(timeout)
         data = b""
         while b"\n" not in data and len(data) < 4096:
             chunk = s.recv(512)
@@ -376,14 +815,30 @@ def daemon_cmd(obj):
         return None
 
 
-def set_advertising(on):
+def daemon_cmd(obj, timeout=2):
+    """Backward-compatible iPad daemon command."""
+    return target_daemon_cmd("ipad", obj, timeout=timeout)
+
+
+def set_target_advertising(target, on):
     """Broadcasting is OPT-IN. The daemon no longer advertises at boot, so this
     is the ONLY thing that makes the machine visible as a Bluetooth keyboard --
     and it is called only from Pair/Broadcast. It is switched back off the
     moment the iPad is in, so the PC is never left beaconing and a bonded iPad
     cannot silently reconnect on its own."""
-    r = daemon_cmd({"cmd": "adv", "on": bool(on)})
-    return bool(r and r.get("ok"))
+    # Advertisement operations complete asynchronously inside BlueZ. The
+    # daemon now waits for BlueZ's completion callback, so allow longer than
+    # the normal status-command timeout and require the confirmed state to
+    # match the request.
+    r = target_daemon_cmd(
+        target, {"cmd": "adv", "on": bool(on)}, timeout=8)
+    return bool(r and r.get("ok")
+                and bool(r.get("advertising")) == bool(on))
+
+
+def set_advertising(on):
+    """Backward-compatible iPad advertising command."""
+    return set_target_advertising("ipad", on)
 
 
 _ELEVATED = None
@@ -417,9 +872,6 @@ def is_elevated():
 #   POST /clip  -> sets the Windows clipboard        ("Copy to PC")
 # Token-gated: the clipboard carries passwords, and any LAN device can
 # reach the port. Text only (CF_UNICODETEXT), UTF-8 on the wire.
-SETTINGS = os.path.join(ROOT, "openspan_settings.json")
-
-
 def load_setting(key, default=None):
     try:
         with open(SETTINGS, encoding="utf-8") as f:
@@ -448,12 +900,13 @@ def save_setting(key, value):
 CLIP_MAX = 10 * 1024 * 1024  # 10 MB cap on inbound clipboard payloads
 BAL_FILE = os.path.join(ROOT, "audio_balance.txt")  # -1 (L) .. +1 (R); the
 #   audio sender polls this every 150ms and applies it as channel gains
+GAIN_FILE = os.path.join(ROOT, "audio_gain.txt")  # 0..1 OpenSpan gain; read
+#   by the audio role so the UI never needs Core Audio COM inside the main app
 
 
-# Volume for the compact slider is handled by App._volume_thread — ALL Core
-# Audio COM lives on that one dedicated thread (the sender's proven pattern).
-# COM on the Tk thread froze the whole UI for the RPC duration whenever
-# AudioSrv was busy or the endpoint needed re-acquiring.
+# Core Audio COM belongs only to the isolated --audio role. Re-acquiring
+# comtypes endpoint objects in the long-running main process caused repeatable
+# native _ctypes.pyd access violations with no Python traceback.
 
 
 def clipboard_config():
@@ -1143,6 +1596,527 @@ class ArrangeCanvas(tk.Canvas):
             self.on_change(bool(self._portals()))
 
 
+class MultiArrangeCanvas(tk.Canvas):
+    """Desk-layout canvas for Windows screens, iPad, and managed Mac displays.
+
+    Layout width/height are physical/visual geometry. Pixel resolution,
+    rotation, and refresh rate are separate fields, so corner-resizing a
+    rectangle cannot alter the target's display mode.
+    """
+
+    UNITS_PER_INCH = 40.0
+
+    def __init__(self, master, on_change=None, **kw):
+        super().__init__(master, bg=PANEL, highlightthickness=0, **kw)
+        self.on_change = on_change
+        live = enum_monitors()
+        raw = {}
+        try:
+            with open(CONFIG, encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except (OSError, ValueError):
+            pass
+        self.config = normalize_config(raw, live)
+        self.monitors = self.config["monitors"]
+        self.targets = self.config["targets"]
+        ipad = target_by_id(self.config, "ipad")
+        self.ipad = ipad["displays"][0]
+        self.target_states = {"ipad": "off", "mac": "off"}
+        self.ipad_state = "off"  # compatibility for existing tests/callers
+        self.selected = ("target", "ipad", self.ipad["id"])
+        self.action = None
+        self.drag_off = (0, 0)
+        self._resize_anchor = None
+        self.bind("<Configure>", lambda _event: self.redraw())
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", self._release)
+        self.redraw()
+        # Persist the v1->v2 migration immediately. A Mac can be paired before
+        # the user drags anything, and the portal process must already know its
+        # three displays/independent daemon port when that connect edge lands.
+        self._persist()
+
+    def target(self, target_id):
+        return target_by_id(self.config, target_id)
+
+    def set_ipad_size(self, width, height):
+        self.ipad["res_w"] = int(width)
+        self.ipad["res_h"] = int(height)
+        self.ipad["rotation"] = 0
+        set_layout_width(self.ipad, self.ipad["w"])
+        self.redraw()
+        self.save()
+
+    def set_target_state(self, target_id, live, paired):
+        state = "live" if live else ("idle" if paired else "off")
+        if self.target_states.get(target_id) != state:
+            self.target_states[target_id] = state
+            if target_id == "ipad":
+                self.ipad_state = state
+            self.redraw()
+
+    def set_ipad_state(self, live, paired):
+        self.set_target_state("ipad", live, paired)
+
+    def rotate(self):
+        rotate_display(self.ipad)
+        self.redraw()
+        self.save()
+
+    def mac_displays(self):
+        target = self.target("mac")
+        return target["displays"] if target else []
+
+    def replace_mac_displays(self, rows):
+        rows = validate_mac_displays(rows)
+        target = self.target("mac")
+        old = list(target.get("displays", []))
+        primary = next(
+            (m for m in self.monitors if m.get("primary")), self.monitors[0])
+        base_x = int(primary.get("layout_x", primary["x"]))
+        base_y = max(
+            int(m.get("layout_y", m["y"]))
+            + int(m.get("layout_h", m["h"]))
+            for m in self.monitors)
+        displays = []
+        next_x = base_x
+        for index, spec in enumerate(rows):
+            prior = old[index] if index < len(old) else None
+            display = dict(prior or {})
+            display.update({
+                "id": spec["id"],
+                "name": spec["name"],
+                "res_w": spec["res_w"],
+                "res_h": spec["res_h"],
+                "refresh_hz": spec["refresh_hz"],
+                "rotation": spec["rotation"],
+            })
+            width = spec["physical_width"] * self.UNITS_PER_INCH
+            set_layout_width(display, width)
+            if prior:
+                display["x"] = int(prior["x"])
+                display["y"] = int(prior["y"])
+            else:
+                display["x"] = int(next_x)
+                display["y"] = int(base_y)
+            next_x = display["x"] + display["w"]
+            displays.append(display)
+        target["displays"] = displays
+        if self.selected and self.selected[1] == "mac":
+            self.selected = (
+                "target", "mac", displays[0]["id"]) if displays else None
+        self.redraw()
+        self.save()
+
+    @staticmethod
+    def _monitor_rect(monitor):
+        return (
+            int(monitor.get("layout_x", monitor["x"])),
+            int(monitor.get("layout_y", monitor["y"])),
+            int(monitor.get("layout_w", monitor["w"])),
+            int(monitor.get("layout_h", monitor["h"])),
+        )
+
+    @staticmethod
+    def _display_rect(display):
+        return (
+            int(display["x"]), int(display["y"]),
+            int(display["w"]), int(display["h"]))
+
+    def _items(self):
+        for monitor in self.monitors:
+            yield ("local", "windows", monitor["name"]), monitor
+        for target in self.targets:
+            if not target.get("enabled", True):
+                continue
+            for display in target.get("displays", []):
+                yield ("target", target["id"], display["id"]), display
+
+    def _lookup(self, key):
+        if not key:
+            return None
+        if key[0] == "local":
+            return next(
+                (m for m in self.monitors if m["name"] == key[2]), None)
+        target = self.target(key[1])
+        if not target:
+            return None
+        return next(
+            (d for d in target["displays"] if d["id"] == key[2]), None)
+
+    def _rect(self, key, item):
+        return (self._monitor_rect(item) if key[0] == "local"
+                else self._display_rect(item))
+
+    def _set_position(self, key, item, x, y):
+        if key[0] == "local":
+            item["layout_x"], item["layout_y"] = int(x), int(y)
+        else:
+            item["x"], item["y"] = int(x), int(y)
+
+    def _set_width(self, key, item, width):
+        if key[0] == "local":
+            width = max(120, int(width))
+            ratio = item["h"] / max(1, item["w"])
+            item["layout_w"] = width
+            item["layout_h"] = max(120, int(round(width * ratio)))
+        else:
+            set_layout_width(item, width)
+
+    def _world_bounds(self):
+        rects = [self._rect(key, item) for key, item in self._items()]
+        if not rects:
+            self.wx0, self.wy0, self.wx1, self.wy1 = 0, 0, 100, 100
+            return
+        min_x = min(x for x, _y, _w, _h in rects)
+        min_y = min(y for _x, y, _w, _h in rects)
+        max_x = max(x + w for x, _y, w, _h in rects)
+        max_y = max(y + h for _x, y, _w, h in rects)
+        pad = max(180, int(max(max_x - min_x, max_y - min_y) * 0.12))
+        self.wx0, self.wy0 = min_x - pad, min_y - pad
+        self.wx1, self.wy1 = max_x + pad, max_y + pad
+
+    def _scale(self):
+        self._world_bounds()
+        width = max(self.winfo_width(), 100)
+        height = max(self.winfo_height(), 100)
+        scale = min(
+            width / max(1, self.wx1 - self.wx0),
+            height / max(1, self.wy1 - self.wy0)) * 0.94
+        ox = (width - (self.wx1 - self.wx0) * scale) / 2
+        oy = (height - (self.wy1 - self.wy0) * scale) / 2
+        return scale, ox, oy
+
+    def w2c(self, x, y):
+        scale, ox, oy = self._scale()
+        return (
+            (x - self.wx0) * scale + ox,
+            (y - self.wy0) * scale + oy)
+
+    def c2w(self, x, y):
+        scale, ox, oy = self._scale()
+        return (
+            (x - ox) / scale + self.wx0,
+            (y - oy) / scale + self.wy0)
+
+    def _colors(self, key):
+        if key[0] == "local":
+            return MON_FILL, MON_LINE, "#c9d4ec"
+        state = self.target_states.get(key[1], "off")
+        if state == "live":
+            return IPAD_FILL, IPAD_LINE, "#d6ffe9"
+        if state == "idle":
+            return IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"
+        if key[1] == "mac":
+            return "#2b2940", "#756bb1", "#c8c1ef"
+        return IPAD_OFF_FILL, IPAD_OFF_LINE, MUTED
+
+    def redraw(self):
+        self.delete("all")
+        for key, item in self._items():
+            x, y, width, height = self._rect(key, item)
+            x0, y0 = self.w2c(x, y)
+            x1, y1 = self.w2c(x + width, y + height)
+            fill, line, text_color = self._colors(key)
+            chosen = key == self.selected
+            self.create_rectangle(
+                x0, y0, x1, y1, fill=fill,
+                outline="#ffffff" if chosen else line,
+                width=3 if chosen or key[0] == "target" else 2)
+            if key[0] == "local":
+                name = "This PC" + (" · PRIMARY" if item["primary"] else "")
+                res_w, res_h = item["w"], item["h"]
+                refresh = item.get("refresh_hz", 60)
+                rotation = 0
+            else:
+                target = self.target(key[1])
+                name = f"{target['name']} · {item['name']}"
+                res_w, res_h = oriented_resolution(item)
+                refresh = item.get("refresh_hz", 60)
+                rotation = item.get("rotation", 0)
+            hz = int(refresh) if float(refresh).is_integer() else refresh
+            rotate_note = f" · {rotation}°" if rotation else ""
+            physical = width / self.UNITS_PER_INCH
+            self.create_text(
+                (x0 + x1) / 2, (y0 + y1) / 2,
+                text=f"{name}\n{res_w}×{res_h} @ {hz} Hz{rotate_note}"
+                     f"\n≈ {physical:.1f}\" wide",
+                fill=text_color, justify="center",
+                font=("Segoe UI", 8, "bold"))
+            if chosen:
+                self.create_rectangle(
+                    x1 - 10, y1 - 10, x1 + 2, y1 + 2,
+                    fill=PORTAL, outline=PORTAL)
+        self._draw_portals()
+
+    def _draw_portals(self):
+        for portal in compute_portals(self.config):
+            display = next(
+                (d for d in self.target(portal["target"])["displays"]
+                 if d["id"] == portal["target_display"]), None)
+            monitor = next(
+                (m for m in self.monitors
+                 if m["name"] == portal["monitor"]), None)
+            if not display or not monitor:
+                continue
+            tx, ty, tw, th = self._display_rect(display)
+            mx, my, mw, mh = self._monitor_rect(monitor)
+            edge = portal["edge"]
+            if edge in ("target-left", "target-right"):
+                x = tx if edge == "target-left" else tx + tw
+                lo, hi = max(ty, my), min(ty + th, my + mh)
+                a, b = self.w2c(x, lo), self.w2c(x, hi)
+            else:
+                y = ty if edge == "target-top" else ty + th
+                lo, hi = max(tx, mx), min(tx + tw, mx + mw)
+                a, b = self.w2c(lo, y), self.w2c(hi, y)
+            self.create_line(a[0], a[1], b[0], b[1],
+                             fill=PORTAL, width=5)
+        # PC↔target edges above are real Windows entry triggers. Also show each
+        # target↔target edge from the shared adjacency graph; those are direct
+        # handoff routes inside the running portal broker.
+        drawn = set()
+        for link in compute_adjacencies(self.config):
+            source, destination = link["source"], link["destination"]
+            if source["kind"] != "target" \
+                    or destination["kind"] != "target":
+                continue
+            key = (
+                link["axis"], link["line"], tuple(link["span"]),
+                tuple(sorted((
+                    f"{source['target']}:{source['display']}",
+                    f"{destination['target']}:{destination['display']}",
+                ))),
+            )
+            if key in drawn:
+                continue
+            drawn.add(key)
+            lo, hi = link["span"]
+            if link["axis"] == "x":
+                a = self.w2c(link["line"], lo)
+                b = self.w2c(link["line"], hi)
+            else:
+                a = self.w2c(lo, link["line"])
+                b = self.w2c(hi, link["line"])
+            self.create_line(a[0], a[1], b[0], b[1],
+                             fill=PORTAL, width=5)
+
+    def _press(self, event):
+        world_x, world_y = self.c2w(event.x, event.y)
+        scale = self._scale()[0]
+        hit = None
+        # Target displays are drawn over local screens, so hit-test in reverse.
+        for key, item in reversed(list(self._items())):
+            x, y, width, height = self._rect(key, item)
+            if x <= world_x <= x + width and y <= world_y <= y + height:
+                hit = (key, item, x, y, width, height)
+                break
+        if not hit:
+            self.selected = None
+            self.redraw()
+            return
+        key, item, x, y, width, height = hit
+        self.selected = key
+        handle = max(10 / max(scale, 0.001), 12)
+        if world_x >= x + width - handle and world_y >= y + height - handle:
+            self.action = "resize"
+            self._resize_anchor = (x, y)
+        else:
+            self.action = "move"
+            self.drag_off = (world_x - x, world_y - y)
+        self.redraw()
+
+    def _drag(self, event):
+        if not self.action or not self.selected:
+            return
+        item = self._lookup(self.selected)
+        if not item:
+            return
+        world_x, world_y = self.c2w(event.x, event.y)
+        if self.action == "move":
+            self._set_position(
+                self.selected, item,
+                world_x - self.drag_off[0], world_y - self.drag_off[1])
+        else:
+            anchor_x, _anchor_y = self._resize_anchor
+            self._set_width(self.selected, item, world_x - anchor_x)
+        self.redraw()
+
+    @staticmethod
+    def _align(pos, size, other_pos, other_size):
+        return max(
+            other_pos - size + 24,
+            min(pos, other_pos + other_size - 24))
+
+    def _snap_selected(self):
+        item = self._lookup(self.selected)
+        if not item:
+            return
+        x, y, width, height = self._rect(self.selected, item)
+        neighbors = [
+            self._rect(key, other)
+            for key, other in self._items()
+            if key != self.selected
+        ]
+        nx, ny = snap_rect_to_neighbors(
+            (x, y, width, height), neighbors)
+        self._set_position(self.selected, item, nx, ny)
+
+    def _release(self, _event):
+        if not self.action:
+            return
+        if self.action == "move":
+            self._snap_selected()
+        self.action = None
+        self._resize_anchor = None
+        self.redraw()
+        self.save()
+
+    def save(self):
+        sync_legacy_ipad(self.config)
+        self.config["portals"] = compute_portals(self.config)
+        self.config["links"] = compute_adjacencies(self.config)
+        self._persist()
+        if self.on_change:
+            self.on_change(bool(self.config["portals"]))
+
+    def _persist(self):
+        try:
+            with open(CONFIG + ".new", "w", encoding="utf-8") as handle:
+                json.dump(self.config, handle, indent=2)
+            os.replace(CONFIG + ".new", CONFIG)
+        except OSError:
+            pass
+
+
+class MacDisplayEditor:
+    """Dark, modal editor for Mac count/resolution/rotation/Hz/physical size."""
+
+    def __init__(self, parent, canvas):
+        self.parent = parent
+        self.canvas = canvas
+        self.rows = []
+        self.top = tk.Toplevel(parent)
+        self.top.title("Managed Mac displays")
+        self.top.geometry("900x420")
+        self.top.minsize(820, 340)
+        self.top.configure(bg=BG)
+        self.top.transient(parent)
+        _paint_dark_titlebar(self.top)
+        tk.Label(
+            self.top,
+            text="Managed Mac display configuration",
+            bg=BG, fg=FG, font=("Segoe UI Semibold", 15)).pack(
+                anchor="w", padx=18, pady=(16, 2))
+        tk.Label(
+            self.top,
+            text="Resolution, rotation, and refresh rate are independent from "
+                 "the physical width used on the drag canvas.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
+                anchor="w", padx=18, pady=(0, 12))
+        self.body = tk.Frame(self.top, bg=BG)
+        self.body.pack(fill="both", expand=True, padx=18)
+        headers = [
+            ("Display", 18), ("Width px", 9), ("Height px", 9),
+            ("Rotation", 9), ("Refresh Hz", 10), ("Physical width", 13),
+        ]
+        head = tk.Frame(self.body, bg=BG)
+        head.pack(fill="x")
+        for text, width in headers:
+            tk.Label(head, text=text, width=width, anchor="w",
+                     bg=BG, fg=MUTED,
+                     font=("Segoe UI", 8, "bold")).pack(
+                         side="left", padx=(0, 5))
+        for display in canvas.mac_displays():
+            self._add_row(display)
+        bar = tk.Frame(self.top, bg=BG)
+        bar.pack(fill="x", padx=18, pady=14)
+        ttk.Button(bar, text="+ Add display", command=self._add_row).pack(
+            side="left")
+        ttk.Button(bar, text="Cancel", command=self.top.destroy).pack(
+            side="right")
+        ttk.Button(bar, text="Save displays", style="Accent.TButton",
+                   command=self._save).pack(side="right", padx=8)
+        self.top.protocol("WM_DELETE_WINDOW", self.top.destroy)
+        self.top.grab_set()
+        self.top.focus_force()
+
+    def _add_row(self, display=None):
+        if len(self.rows) >= 8:
+            return
+        display = dict(display or {})
+        frame = tk.Frame(self.body, bg=BG)
+        frame.pack(fill="x", pady=3)
+        values = {
+            "id": display.get("id", f"mac-{len(self.rows) + 1}"),
+            "name": tk.StringVar(
+                value=display.get("name", f"Mac Display {len(self.rows) + 1}")),
+            "res_w": tk.StringVar(value=str(display.get("res_w", 3840))),
+            "res_h": tk.StringVar(value=str(display.get("res_h", 2160))),
+            "rotation": tk.StringVar(
+                value=f"{int(display.get('rotation', 0))}°"),
+            "refresh_hz": tk.StringVar(
+                value=str(display.get("refresh_hz", 60))),
+            "physical_width": tk.StringVar(value=(
+                f"{float(display.get('w', 960)) / self.canvas.UNITS_PER_INCH:.1f}"
+            )),
+        }
+        specs = [
+            (values["name"], 18), (values["res_w"], 9),
+            (values["res_h"], 9),
+        ]
+        for variable, width in specs:
+            tk.Entry(
+                frame, textvariable=variable, width=width, bg=CARD, fg=FG,
+                insertbackground=FG, relief="flat",
+                font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+        ttk.Combobox(
+            frame, textvariable=values["rotation"], width=7,
+            values=("0°", "90°", "180°", "270°"),
+            state="readonly").pack(side="left", padx=(0, 5))
+        tk.Entry(
+            frame, textvariable=values["refresh_hz"], width=10,
+            bg=CARD, fg=FG, insertbackground=FG, relief="flat",
+            font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+        tk.Entry(
+            frame, textvariable=values["physical_width"], width=13,
+            bg=CARD, fg=FG, insertbackground=FG, relief="flat",
+            font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+        tk.Label(frame, text="in", bg=BG, fg=MUTED).pack(side="left")
+        ttk.Button(
+            frame, text="Remove",
+            command=lambda row=values, holder=frame:
+                self._remove_row(row, holder)).pack(side="right")
+        values["_frame"] = frame
+        self.rows.append(values)
+
+    def _remove_row(self, row, frame):
+        if len(self.rows) <= 1:
+            return
+        self.rows.remove(row)
+        frame.destroy()
+
+    def _save(self):
+        raw = []
+        for row in self.rows:
+            raw.append({
+                "id": row["id"],
+                "name": row["name"].get(),
+                "res_w": row["res_w"].get(),
+                "res_h": row["res_h"].get(),
+                "rotation": row["rotation"].get().replace("°", ""),
+                "refresh_hz": row["refresh_hz"].get(),
+                "physical_width": row["physical_width"].get(),
+            })
+        try:
+            self.canvas.replace_mac_displays(raw)
+        except ValueError as exc:
+            dark_alert(self.top, "Check the display values", str(exc))
+            return
+        self.top.destroy()
+
+
 class BtPanel(tk.Frame):
     """Bluetooth & headphones, embedded in the main window (a notebook tab).
     Right-click any device for its actions. Custom names and a blacklist are
@@ -1157,11 +2131,20 @@ class BtPanel(tk.Frame):
         self._conn_busy = False  # one connect-retry loop at a time
         self._connected = set()
         self._connected_names = []  # display names, for the compact view
-        self._seen = {}  # mac -> (name, icon): every device seen this session,
+        self._seen = {}  # mac -> (name, icon, controller), seen this session
         #                  kept in the list even after BlueZ purges an un-bonded
         #                  device, so a failed Connect never drops it from view.
         self.prefs = load_bt_prefs()
+        self._radios = []
+        self._device_radios = {}
+        self._radio_choices = {}
         self.show_blk = tk.BooleanVar(value=False)
+        self.radio_mode = tk.StringVar(value=(
+            "Multiple radios" if multi_radio_enabled(self.prefs)
+            else "Single radio (recommended)"))
+        self.hid_radio = tk.StringVar(value="")
+        self.mac_radio = tk.StringVar(value="")
+        self.scan_radio = tk.StringVar(value="")
 
         tk.Label(self, text="Put headphones in pairing mode, Scan, then "
                             "RIGHT-CLICK a device: Connect, Rename, Blacklist, "
@@ -1169,6 +2152,59 @@ class BtPanel(tk.Frame):
                             "re-pairing.",
                  bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=500,
                  justify="left").pack(anchor="w", padx=12, pady=(10, 0))
+
+        options = ttk.LabelFrame(self, text="Radio options", padding=7)
+        options.pack(fill="x", padx=12, pady=(7, 2))
+        mode_row = tk.Frame(options, bg=BG)
+        mode_row.pack(fill="x")
+        tk.Label(mode_row, text="Setup", bg=BG, fg=FG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.mode_combo = ttk.Combobox(
+            mode_row, textvariable=self.radio_mode, state="readonly",
+            values=("Single radio (recommended)", "Multiple radios"),
+            width=25)
+        self.mode_combo.pack(side="right")
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
+
+        assign_row = tk.Frame(options, bg=BG)
+        assign_row.pack(fill="x", pady=(6, 0))
+        tk.Label(assign_row, text="iPad keyboard", bg=BG, fg=FG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.hid_combo = ttk.Combobox(
+            assign_row, textvariable=self.hid_radio, state="disabled",
+            width=25)
+        self.hid_combo.pack(side="right")
+        self.hid_combo.bind("<<ComboboxSelected>>", self._on_hid_radio)
+
+        mac_row = tk.Frame(options, bg=BG)
+        mac_row.pack(fill="x", pady=(4, 0))
+        tk.Label(mac_row, text="Managed Mac", bg=BG, fg=FG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.mac_combo = ttk.Combobox(
+            mac_row, textvariable=self.mac_radio, state="disabled",
+            width=25)
+        self.mac_combo.pack(side="right")
+        self.mac_combo.bind("<<ComboboxSelected>>", self._on_mac_radio)
+
+        scan_row = tk.Frame(options, bg=BG)
+        scan_row.pack(fill="x", pady=(4, 0))
+        tk.Label(scan_row, text="Scan from", bg=BG, fg=FG,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.scan_combo = ttk.Combobox(
+            scan_row, textvariable=self.scan_radio, state="disabled",
+            width=25)
+        self.scan_combo.pack(side="right")
+        self.scan_combo.bind("<<ComboboxSelected>>", self._on_scan_radio)
+        self.radio_note = tk.StringVar(
+            value="Single-radio compatibility is active.")
+        tk.Label(options, textvariable=self.radio_note, bg=BG, fg=MUTED,
+                 font=("Segoe UI", 8), anchor="w", justify="left",
+                 wraplength=470).pack(fill="x", pady=(5, 0))
+        self.recommended_btn = ttk.Button(
+            options, text="Use recommended 3-radio layout",
+            command=self._use_recommended_radios)
+        self.recommended_btn.pack(anchor="e", pady=(5, 0))
+
         self.info = tk.StringVar(value="")
         tk.Label(self, textvariable=self.info, bg=BG, fg=ACCENT,
                  font=("Consolas", 9), anchor="w").pack(fill="x", padx=12,
@@ -1177,17 +2213,19 @@ class BtPanel(tk.Frame):
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True, padx=12, pady=6)
         self.tree = ttk.Treeview(body, columns=("name", "status", "type",
-                                                "addr"),
+                                                "radio", "addr"),
                                  show="headings", selectmode="browse",
                                  height=8)
         self.tree.heading("name", text="Device")
         self.tree.heading("status", text="Status")
         self.tree.heading("type", text="Type")
+        self.tree.heading("radio", text="Radio")
         self.tree.heading("addr", text="Address")
-        self.tree.column("name", width=190, anchor="w")
-        self.tree.column("status", width=120, anchor="w")
-        self.tree.column("type", width=85, anchor="w")
-        self.tree.column("addr", width=130, anchor="w")
+        self.tree.column("name", width=155, anchor="w")
+        self.tree.column("status", width=105, anchor="w")
+        self.tree.column("type", width=75, anchor="w")
+        self.tree.column("radio", width=105, anchor="w")
+        self.tree.column("addr", width=125, anchor="w")
         self.tree.tag_configure("connected", foreground=ACCENT)
         self.tree.tag_configure("paired", foreground=FG)
         self.tree.tag_configure("available", foreground=MUTED)
@@ -1219,6 +2257,7 @@ class BtPanel(tk.Frame):
                            insertbackground=FG)
         self.out.pack(fill="both", expand=False, padx=12, pady=(4, 10))
         self._log("Ready. Right-click a device for its actions.")
+        self._set_radio_controls()
         self.refresh()
 
     def _log(self, msg):
@@ -1240,6 +2279,262 @@ class BtPanel(tk.Frame):
         sel = self.tree.selection()
         return sel[0] if sel else None
 
+    def _multi(self):
+        return multi_radio_enabled(self.prefs)
+
+    def _radio_display(self, radio):
+        address = radio.get("address", "")
+        label = self.prefs["radio_labels"].get(address)
+        if not label:
+            label = radio.get("hardware") or radio.get("alias") \
+                or radio.get("name") \
+                or radio.get("hci") or "Bluetooth radio"
+        suffix = address[-5:] if address else radio.get("hci", "")
+        return f"{label} ({suffix})"
+
+    def _radio_label(self, controller):
+        if not controller:
+            return "Default"
+        for radio in self._radios:
+            if radio.get("address") == controller:
+                return self._radio_display(radio)
+        return f"Unavailable ({controller[-5:]})"
+
+    def _selected_controller(self, variable):
+        return self._radio_choices.get(variable.get(), "")
+
+    def _controller_for(self, mac):
+        return (self.prefs["radio_assignments"].get(mac)
+                or self._device_radios.get(mac)
+                or self.prefs.get("scan_radio")
+                or self.prefs.get("hid_radio")
+                or (self._radios[0]["address"] if self._radios else ""))
+
+    def _set_radio_controls(self):
+        enabled = self._multi()
+        available = bool(self._radios)
+        state = "readonly" if enabled and available else "disabled"
+        self.hid_combo.configure(state=state)
+        self.mac_combo.configure(state=state)
+        self.scan_combo.configure(state=state)
+        self.recommended_btn.state(
+            ["!disabled"] if enabled and len(self._radios) >= 3
+            else ["disabled"])
+        if not enabled:
+            self.radio_note.set(
+                "Single-radio compatibility is active. Existing behavior is "
+                "unchanged.")
+        elif available:
+            self.radio_note.set(
+                f"{len(self._radios)} radio"
+                f"{'s' if len(self._radios) != 1 else ''} available. "
+                "Right-click a device to assign it.")
+        else:
+            self.radio_note.set(
+                "No guest radios are available yet. The host restart is still "
+                "required before the three-radio bench test.")
+
+    def _refresh_radio_choices(self):
+        self._radio_choices = {
+            self._radio_display(radio): radio["address"]
+            for radio in self._radios
+        }
+        values = tuple(self._radio_choices)
+        self.hid_combo.configure(values=values)
+        self.mac_combo.configure(values=values)
+        self.scan_combo.configure(values=values)
+        addresses = {radio["address"] for radio in self._radios}
+        if self._multi() and addresses:
+            first = self._radios[0]["address"]
+            hid = self.prefs.get("hid_radio")
+            mac = self.prefs.get("mac_radio")
+            scan = self.prefs.get("scan_radio")
+            if not hid:
+                hid = first
+                self.prefs["hid_radio"] = hid
+            if not scan:
+                scan = hid
+                self.prefs["scan_radio"] = scan
+            save_bt_prefs(self.prefs)
+            reverse = {address: label
+                       for label, address in self._radio_choices.items()}
+            self.hid_radio.set(
+                reverse.get(hid, self._radio_label(hid)))
+            self.mac_radio.set(
+                reverse.get(mac, self._radio_label(mac)) if mac else "")
+            self.scan_radio.set(
+                reverse.get(scan, self._radio_label(scan)))
+        else:
+            self.hid_radio.set("")
+            self.mac_radio.set("")
+            self.scan_radio.set("")
+        self._set_radio_controls()
+
+    def _on_mode_changed(self, _event=None):
+        enabled = self.radio_mode.get() == "Multiple radios"
+        self.prefs["radio_mode"] = "multi" if enabled else "single"
+        save_bt_prefs(self.prefs)
+        self._refresh_radio_choices()
+        if enabled:
+            self._log("multiple-radio mode enabled — assignments are now "
+                      "controller-specific.")
+        else:
+            self._log("single-radio compatibility restored.")
+        self.refresh(quiet=True)
+
+        def apply():
+            if not self._reachable():
+                return
+            if enabled:
+                controller = self.prefs.get("hid_radio")
+                if not controller:
+                    return
+                command = ("bash /opt/openspan/set-hid-radio.sh "
+                           f"{controller}")
+            else:
+                command = ("bash /opt/openspan/set-hid-radio.sh "
+                           "--default")
+            r = ssh_guest(command, timeout=35, show_result=False)
+            if r.returncode:
+                detail = (r.stderr or r.stdout or "guest command failed").strip()
+                self._log("could not apply radio mode — " + detail[-220:])
+            else:
+                self._log("keyboard radio mode applied.")
+        threading.Thread(target=apply, daemon=True).start()
+
+    def _on_hid_radio(self, _event=None):
+        controller = self._selected_controller(self.hid_radio)
+        if not controller:
+            return
+        if controller == self.prefs.get("mac_radio"):
+            dark_alert(
+                self, "Choose another radio",
+                "The iPad and managed Mac each need an independent Bluetooth "
+                "radio. Assign one of them to a different radio.")
+            self._refresh_radio_choices()
+            return
+        self.prefs["hid_radio"] = controller
+        save_bt_prefs(self.prefs)
+        self._log("assigning the iPad keyboard to "
+                  f"{self._radio_label(controller)}…")
+
+        def apply():
+            r = ssh_guest(
+                "bash /opt/openspan/set-hid-radio.sh " + controller,
+                timeout=35, show_result=False)
+            if r.returncode:
+                detail = (r.stderr or r.stdout or "guest command failed").strip()
+                self._log("keyboard radio assignment FAILED — "
+                          + detail[-220:])
+            else:
+                self._log("iPad keyboard radio assigned.")
+            if self.app:
+                self.app._refresh_paired()
+        threading.Thread(target=apply, daemon=True).start()
+
+    def _on_mac_radio(self, _event=None):
+        controller = self._selected_controller(self.mac_radio)
+        if not controller:
+            return
+        if controller == self.prefs.get("hid_radio"):
+            dark_alert(
+                self, "Choose another radio",
+                "The managed Mac and iPad cannot share a radio. Move the iPad "
+                "to the internal backup radio first, then assign this external "
+                "TP-Link radio to the Mac.")
+            self._refresh_radio_choices()
+            return
+        self.prefs["mac_radio"] = controller
+        save_bt_prefs(self.prefs)
+        self._log("assigning the managed Mac to "
+                  f"{self._radio_label(controller)}…")
+
+        def apply():
+            r = ssh_guest(
+                "bash /opt/openspan/set-hid-target.sh mac " + controller,
+                timeout=45, show_result=False)
+            if r.returncode:
+                detail = (r.stderr or r.stdout or "guest command failed").strip()
+                self._log("managed Mac radio assignment FAILED — "
+                          + detail[-220:])
+            else:
+                self._log("managed Mac radio assigned and ready.")
+            if self.app:
+                self.app._refresh_target_paired("mac")
+        threading.Thread(target=apply, daemon=True).start()
+
+    def _on_scan_radio(self, _event=None):
+        controller = self._selected_controller(self.scan_radio)
+        if not controller:
+            return
+        self.prefs["scan_radio"] = controller
+        save_bt_prefs(self.prefs)
+        self._log("future scans will use "
+                  f"{self._radio_label(controller)}.")
+
+    def _use_recommended_radios(self):
+        if len(self._radios) < 3:
+            return
+        external = []
+        internal = []
+        for radio in self._radios:
+            text = " ".join(str(radio.get(key, "")) for key in (
+                "hardware", "alias", "name", "vendor", "product")).lower()
+            label = self.prefs.get("radio_labels", {}).get(
+                radio.get("address", ""), "").lower()
+            if "tp-link" in text or "tp-link" in label \
+                    or "2357" in text:
+                external.append(radio["address"])
+            else:
+                internal.append(radio["address"])
+        if len(external) < 2 or not internal:
+            dark_alert(
+                self, "Couldn’t identify the three radios",
+                "Assign the internal radio to iPad, one external TP-Link to "
+                "Managed Mac, and the other external TP-Link to Scan/audio.")
+            return
+        self.prefs["hid_radio"] = internal[0]
+        self.prefs["mac_radio"] = external[0]
+        self.prefs["scan_radio"] = external[1]
+        save_bt_prefs(self.prefs)
+        self._refresh_radio_choices()
+        self._log(
+            "recommended layout saved — internal backup: iPad; external "
+            "TP-Link 1: managed Mac; external TP-Link 2: audio/scan.")
+
+        def apply():
+            ipad = self.prefs["hid_radio"]
+            mac = self.prefs["mac_radio"]
+            first = ssh_guest(
+                "bash /opt/openspan/set-hid-target.sh ipad " + ipad,
+                timeout=40, show_result=False)
+            second = ssh_guest(
+                "bash /opt/openspan/set-hid-target.sh mac " + mac,
+                timeout=45, show_result=False)
+            if first.returncode or second.returncode:
+                self._log("one of the recommended radio assignments failed — "
+                          "see the console.")
+            else:
+                self._log("all three radio lanes are active.")
+            if self.app:
+                self.app._refresh_paired()
+                self.app._refresh_target_paired("mac")
+        threading.Thread(target=apply, daemon=True).start()
+
+    def _assign_radio(self, controller):
+        mac = self._sel_mac()
+        if not mac:
+            return
+        if controller:
+            self.prefs["radio_assignments"][mac] = controller
+            self._device_radios[mac] = controller
+            self._log(f"{mac} assigned to {self._radio_label(controller)}.")
+        else:
+            self.prefs["radio_assignments"].pop(mac, None)
+            self._log(f"{mac} radio assignment set to automatic.")
+        save_bt_prefs(self.prefs)
+        self.refresh(quiet=True)
+
     def _popup(self, event):
         row = self.tree.identify_row(event.y)
         if not row:
@@ -1257,6 +2552,27 @@ class BtPanel(tk.Frame):
             else:
                 m.add_command(label="🎧  Connect", command=self.connect)
             m.add_command(label="Rename…", command=self.rename)
+            if self._multi() and self._radios:
+                assign = tk.Menu(
+                    m, tearoff=0, bg=CARD, fg=FG,
+                    activebackground=ACCENT_DIM,
+                    activeforeground="#eafff3", bd=0)
+                current = self.prefs["radio_assignments"].get(mac, "")
+                assign.add_command(
+                    label=("✓ Automatic" if not current else "Automatic"),
+                    command=lambda: self._assign_radio(""))
+                assign.add_separator()
+                for radio in self._radios:
+                    controller = radio["address"]
+                    label = self._radio_display(radio)
+                    if controller == current:
+                        label = "✓ " + label
+                    assign.add_command(
+                        label=label,
+                        command=lambda value=controller:
+                            self._assign_radio(value))
+                self.assign_menu = assign
+                m.add_cascade(label="Assign to radio", menu=assign)
             m.add_separator()
             m.add_command(label="Blacklist (hide from scans)",
                           command=self.blacklist)
@@ -1306,29 +2622,72 @@ class BtPanel(tk.Frame):
                         self.after(5000, self.refresh)  # retry until reachable
                     ui(apply_unreachable)
                     return
-                r = ssh_guest("bash /opt/openspan/bt-list.sh", timeout=25,
-                              quiet=quiet, show_result=False)
                 rows = []
-                for line in (r.stdout or "").splitlines():
-                    p = line.split("|")
-                    if len(p) >= 4 and re.match(
-                            r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$", p[0]):
-                        rows.append((p[0], p[1], p[2] == "1", p[3] == "1",
-                                     p[4] if len(p) > 4 else ""))
+                radios = []
+                if self._multi():
+                    r = ssh_guest(
+                        "python3 /opt/openspan/openspan_bt.py list",
+                        timeout=25, quiet=quiet, show_result=False)
+                    try:
+                        inventory = json.loads(r.stdout or "{}")
+                    except (TypeError, ValueError):
+                        inventory = {}
+                    radios = list(inventory.get("radios", []))
+                    candidates = {}
+                    for item in inventory.get("devices", []):
+                        mac = str(item.get("address", "")).upper()
+                        controller = str(
+                            item.get("controller", "")).upper()
+                        if not re.match(
+                                r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", mac):
+                            continue
+                        assigned = self.prefs[
+                            "radio_assignments"].get(mac, "")
+                        score = (
+                            controller == assigned,
+                            bool(item.get("connected")),
+                            bool(item.get("paired")),
+                        )
+                        old = candidates.get(mac)
+                        if old is None or score > old[0]:
+                            candidates[mac] = (score, item)
+                    for _score, item in candidates.values():
+                        rows.append((
+                            str(item.get("address", "")).upper(),
+                            str(item.get("alias") or item.get("name")
+                                or item.get("address", "")),
+                            bool(item.get("paired")),
+                            bool(item.get("connected")),
+                            str(item.get("icon", "")),
+                            str(item.get("controller", "")).upper(),
+                        ))
+                else:
+                    r = ssh_guest("bash /opt/openspan/bt-list.sh", timeout=25,
+                                  quiet=quiet, show_result=False)
+                    for line in (r.stdout or "").splitlines():
+                        p = line.split("|")
+                        if len(p) >= 4 and re.match(
+                                r"^[0-9A-Fa-f]{2}"
+                                r"(:[0-9A-Fa-f]{2}){5}$", p[0]):
+                            rows.append((
+                                p[0].upper(), p[1], p[2] == "1",
+                                p[3] == "1",
+                                p[4] if len(p) > 4 else "", ""))
                 # Remember everything BlueZ currently knows, then add back any
                 # device we've seen this session that BlueZ has since purged
                 # (an un-bonded device is dropped the moment discovery stops).
                 # Those come back as plain "available" so a failed Connect never
                 # makes the buds vanish from the list — you can just try again.
                 live = set()
-                for mac, name, paired, conn, icon in rows:
+                for mac, name, paired, conn, icon, controller in rows:
                     live.add(mac)
-                    self._seen[mac] = (name, icon)
-                for mac, (name, icon) in self._seen.items():
+                    self._seen[mac] = (name, icon, controller)
+                for mac, (name, icon, controller) in self._seen.items():
                     if mac not in live:
-                        rows.append((mac, name, False, False, icon))
+                        rows.append((
+                            mac, name, False, False, icon, controller))
                 rows.sort(key=lambda x: (not x[3], not x[2], x[1].lower()))
-                ui(lambda: self._apply_rows(rows))
+                ui(lambda: self._apply_rows(rows, radios))
             finally:
                 self._refreshing = False
                 if self._refresh_pending:
@@ -1336,19 +2695,25 @@ class BtPanel(tk.Frame):
                     self.refresh(quiet=True)  # the queued trailing rerun
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_rows(self, rows):
+    def _apply_rows(self, rows, radios=None):
         """Rebuild the device list. UI thread only."""
+        if radios is not None:
+            self._radios = radios
+            self._refresh_radio_choices()
         keep = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         self._connected = set()
+        self._device_radios = {}
         names = []
         nconn = nhidden = 0
         show_blk = self.show_blk.get()
-        for mac, name, paired, conn, icon in rows:
+        for mac, name, paired, conn, icon, controller in rows:
             blk = mac in self.prefs["blacklist"]
             if blk and not show_blk:
                 nhidden += 1
                 continue
+            if controller:
+                self._device_radios[mac] = controller
             nm = self.prefs["renames"].get(mac, name)
             typ = ("🎧 audio" if "audio" in (icon or "")
                    else (icon or "device"))
@@ -1363,8 +2728,13 @@ class BtPanel(tk.Frame):
                 status, tag = "○ Paired (idle)", "paired"
             else:
                 status, tag = "Available", "available"
+            assigned = self.prefs["radio_assignments"].get(mac)
+            shown_controller = assigned or controller
+            radio_name = (self._radio_label(shown_controller)
+                          if self._multi() else "Default")
             self.tree.insert("", "end", iid=mac,
-                             values=(nm, status, typ, mac), tags=(tag,))
+                             values=(nm, status, typ, radio_name, mac),
+                             tags=(tag,))
         for k in keep:
             if self.tree.exists(k):
                 self.tree.selection_set(k)
@@ -1387,19 +2757,36 @@ class BtPanel(tk.Frame):
     def scan(self):
         if self._retry_lock("Scan"):
             return
+        controller = self._controller_for("") if self._multi() else ""
+        if self._multi() and not controller:
+            self._log("scan needs an available radio — refresh after the "
+                      "host restart.")
+            return
         self.btn_scan.state(["disabled"])
-        self._log("scanning 10s — make sure headphones are blinking…")
+        where = (f" with {self._radio_label(controller)}"
+                 if controller else "")
+        self._log(f"scanning 10s{where} — make sure headphones are blinking…")
         def work():
             if self.app:
                 self.app._manual_bt_begin()
             try:
-                ssh_guest("source /opt/openspan/env.sh; "
-                          "bluetoothctl --timeout 10 scan on", timeout=18,
-                          show_result=False)
+                if self._multi():
+                    command = (
+                        "python3 /opt/openspan/openspan_bt.py scan "
+                        f"--controller {controller} --seconds 10")
+                else:
+                    command = ("source /opt/openspan/env.sh; "
+                               "bluetoothctl --timeout 10 scan on")
+                r = ssh_guest(
+                    command, timeout=18, show_result=False)
             finally:
                 if self.app:
                     self.app._manual_bt_end()
-            self._log("scan done.")
+            if r.returncode == 0:
+                self._log("scan done.")
+            else:
+                detail = (r.stderr or r.stdout or "guest SSH failed").strip()
+                self._log("scan FAILED — " + detail[-240:])
             self.refresh()
             if self.app:
                 self.app.ui(lambda: self.btn_scan.state(["!disabled"]))
@@ -1412,8 +2799,14 @@ class BtPanel(tk.Frame):
         if self._conn_busy:
             self._log("already trying to connect — hold on…")
             return
+        controller = self._controller_for(mac) if self._multi() else ""
+        if self._multi() and not controller:
+            self._log("assign this device to an available radio first.")
+            return
         self._conn_busy = True
-        self._log(f"connecting {mac} — up to 5 attempts over ~30s…")
+        where = (f" through {self._radio_label(controller)}"
+                 if controller else "")
+        self._log(f"connecting {mac}{where} — up to 5 attempts over ~30s…")
 
         def work():
             # keep trying: earbuds waking from the case routinely miss the
@@ -1431,19 +2824,30 @@ class BtPanel(tk.Frame):
                     # first attempt may hit the (long) pairing branch; the
                     # bonded fast path needs only a few seconds — a shorter
                     # timeout keeps one wedged ssh from holding the loop
-                    r = ssh_guest(f"bash /opt/openspan/bt-connect.sh {mac}",
-                                  timeout=70 if attempt == 1 else 20,
-                                  show_result=False)
+                    if self._multi():
+                        command = (
+                            "python3 /opt/openspan/openspan_bt.py connect "
+                            f"--controller {controller} --device {mac}")
+                    else:
+                        command = (
+                            f"bash /opt/openspan/bt-connect.sh {mac}")
+                    r = ssh_guest(
+                        command, timeout=70 if attempt == 1 else 20,
+                        show_result=False)
                     out = (r.stdout or r.stderr or "").strip()
                     self._log(f"[{attempt}/5] {out[-260:]}")
                     if "CONNECTED" in out:
+                        break
+                    if self._multi() and "ERROR:" in out:
+                        self._log("connect stopped — check the assignment and "
+                                  "put the device in pairing mode.")
                         break
                     if "pairing didn't take" in out:
                         self._log("pairing needs the buds BLINKING — put "
                                   "them in pairing mode and click Connect "
                                   "again (one scan per click).")
                         break
-                    if "paired ✓" in out:
+                    if "paired ✓" in out or "PAIRED" in out:
                         t0 = time.time()  # fresh budget for the connect
                     if attempt >= 5 or time.time() - t0 > 30:
                         self._log("no luck after retries — wake the buds "
@@ -1462,12 +2866,22 @@ class BtPanel(tk.Frame):
         mac = self._sel_mac()
         if not mac or self._retry_lock("Disconnect"):
             return
+        controller = self._controller_for(mac) if self._multi() else ""
+        if self._multi() and not controller:
+            self._log("disconnect needs a valid radio assignment.")
+            return
         self._log(f"disconnecting {mac}…")
         def work():
             if self.app:
                 self.app._manual_bt_begin()
             try:
-                ssh_guest(f"bluetoothctl disconnect {mac}", timeout=15)
+                if self._multi():
+                    command = (
+                        "python3 /opt/openspan/openspan_bt.py disconnect "
+                        f"--controller {controller} --device {mac}")
+                else:
+                    command = f"bluetoothctl disconnect {mac}"
+                ssh_guest(command, timeout=15)
             finally:
                 if self.app:
                     self.app._manual_bt_end()
@@ -1479,14 +2893,25 @@ class BtPanel(tk.Frame):
         mac = self._sel_mac()
         if not mac or self._retry_lock("Forget"):
             return
+        controller = self._controller_for(mac) if self._multi() else ""
+        if self._multi() and not controller:
+            self._log("forget needs a valid radio assignment.")
+            return
         self._log(f"forgetting {mac}…")
         self._seen.pop(mac, None)  # don't let it reappear as "available"
         def work():
             if self.app:
                 self.app._manual_bt_begin()
             try:
-                ssh_guest(f"bluetoothctl disconnect {mac} >/dev/null 2>&1; "
-                          f"bluetoothctl remove {mac}", timeout=15)
+                if self._multi():
+                    command = (
+                        "python3 /opt/openspan/openspan_bt.py forget "
+                        f"--controller {controller} --device {mac}")
+                else:
+                    command = (
+                        f"bluetoothctl disconnect {mac} >/dev/null 2>&1; "
+                        f"bluetoothctl remove {mac}")
+                ssh_guest(command, timeout=20)
             finally:
                 if self.app:
                     self.app._manual_bt_end()
@@ -1530,11 +2955,21 @@ class BtPanel(tk.Frame):
                 self.prefs["renames"].pop(mac, None)
             save_bt_prefs(self.prefs)
             self._log(f"renamed {mac} → “{new or '(default)'}”")
-            path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
-            threading.Thread(target=lambda: ssh_guest(
-                "busctl --system set-property org.bluez " + path +
-                ' org.bluez.Device1 Alias s "' + new + '"', timeout=10,
-                quiet=True), daemon=True).start()
+            controller = self._controller_for(mac) if self._multi() else ""
+            if self._multi() and controller:
+                command = (
+                    "python3 /opt/openspan/openspan_bt.py alias "
+                    f"--controller {controller} --device {mac} "
+                    f'--name "{new}"')
+            else:
+                path = "/org/bluez/hci0/dev_" + mac.replace(":", "_")
+                command = (
+                    "busctl --system set-property org.bluez " + path
+                    + ' org.bluez.Device1 Alias s "' + new + '"')
+            threading.Thread(
+                target=lambda: ssh_guest(
+                    command, timeout=10, quiet=True),
+                daemon=True).start()
             self.refresh()
 
         def cancel(_=None):
@@ -1569,9 +3004,9 @@ class BtPanel(tk.Frame):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("OpenSpan")
-        root.geometry("1120x860")   # lean: console collapsed; grows when opened
-        root.minsize(940, 600)
+        root.title(APP_LABEL)
+        root.geometry("1120x930")   # multi-target canvas; console still collapsed
+        root.minsize(940, 680)
         root.configure(bg=BG)
         try:
             root.iconbitmap(ICON)
@@ -1599,6 +3034,12 @@ class App:
         self._ipad_paired = False      # iPad (non-audio) bonded? -> Connect/Unpair
         self._paired_gen = 0           # generation token: newest read wins
         self._pair_lock = threading.Lock()  # atomic pair-commit vs cancel-clear
+        self._mac_paired = False
+        self._mac_paired_gen = 0
+        self._mac_pair_inflight = False
+        self.mac_broadcasting = False
+        self._mac_conn = None
+        self._mac_pair_lock = threading.Lock()
         root.after(50, self._drain_ui)
         self._theme()
 
@@ -1606,10 +3047,9 @@ class App:
         # keep the default window lean; it re-opens via the header toggle.
         self._console_open = False
         self._was_zoomed = False   # for the un-maximize width re-sync
-        self._vol_ok = None      # None = probing; set by _volume_thread
-        self._vol_now = None     # last read master volume 0..1
-        self._vol_target = None  # slider-requested volume (thread applies)
-        threading.Thread(target=self._volume_thread, daemon=True).start()
+        self._vol_ok = True
+        self._vol_now = None
+        self._vol_target = None
         full = tk.Frame(root, bg=BG)
         full.pack(fill="both", expand=True)
         self._full = full
@@ -1656,10 +3096,10 @@ class App:
         head = tk.Frame(full, bg=BG)
         head.pack(fill="x", padx=16, pady=(12, 4))
         self._cons_anchor = head   # the console packs before this when opened
-        _t1 = tk.Label(head, text="OpenSpan", bg=BG, fg=FG,
+        _t1 = tk.Label(head, text=APP_LABEL, bg=BG, fg=FG,
                        font=("Segoe UI Semibold", 18))
         _t1.pack(side="left")
-        _t2 = tk.Label(head, text="PC → iPad bridge", bg=BG, fg=MUTED,
+        _t2 = tk.Label(head, text="PC → iPad + Mac bridge", bg=BG, fg=MUTED,
                        font=("Segoe UI", 10))
         _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
         # window controls: the caption is removed (frameless), so THIS row is the
@@ -1680,7 +3120,7 @@ class App:
         _mn.pack(side="right")
         _mn.bind("<Enter>", lambda e: _mn.config(bg=PANEL, fg=FG))
         _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
-        ttk.Button(head, text="⤓  Send to Tray", command=self._to_tray).pack(
+        ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
             side="right", padx=(0, 12))
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
@@ -1699,7 +3139,7 @@ class App:
         indrow = tk.Frame(full, bg=BG)
         indrow.pack(fill="x", padx=16, pady=(0, 1))
         self._ind = {}
-        for _k in ("vm", "ipad", "portal", "audio", "bcast", "admin"):
+        for _k in ("vm", "ipad", "mac", "portal", "audio", "bcast", "admin"):
             _lb = tk.Label(indrow, text="", bg=BG, fg=MUTED,
                            font=("Consolas", 10))
             _lb.pack(side="left", padx=(0, 14))
@@ -1716,7 +3156,7 @@ class App:
         main.pack(fill="both", expand=True, padx=10, pady=4)
         bridge_col = tk.Frame(main, bg=BG)
         bridge_col.pack(side="left", fill="both", expand=True)
-        tk.Label(bridge_col, text="iPad Bridge", bg=BG, fg=FG,
+        tk.Label(bridge_col, text="Device Bridge", bg=BG, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(anchor="w",
                                                       padx=16, pady=(0, 2))
         bridge = tk.Frame(bridge_col, bg=BG)
@@ -1735,12 +3175,13 @@ class App:
         # arrangement — always visible (Bridge tab)
         arr_wrap = tk.Frame(bridge, bg=CARD, bd=0)
         arr_wrap.pack(fill="both", expand=True, padx=8, pady=6)
-        tk.Label(arr_wrap, text="Drag the iPad to the screen edge it sits "
-                                "next to — the yellow line is the portal.",
+        tk.Label(arr_wrap, text="Drag any screen to match your desk. Drag a "
+                                "yellow corner to resize its physical drawing; "
+                                "resolution stays unchanged.",
                  bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(
             anchor="w", padx=8, pady=(6, 0))
-        self.canvas = ArrangeCanvas(arr_wrap, on_change=self._portal_changed,
-                                    height=230)
+        self.canvas = MultiArrangeCanvas(
+            arr_wrap, on_change=self._portal_changed, height=270)
         self.canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
         row = tk.Frame(arr_wrap, bg=CARD)
@@ -1753,6 +3194,10 @@ class App:
         cb.bind("<<ComboboxSelected>>", self._pick_model)
         ttk.Button(row, text="Rotate",
                    command=self.canvas.rotate).pack(side="left")
+        ttk.Button(
+            row, text="Configure Mac displays…",
+            command=lambda: MacDisplayEditor(self.root, self.canvas)).pack(
+                side="right")
 
         # controls (Bridge tab) -- the iPad is managed like a normal Bluetooth
         # device: Pair / Connect / Disconnect / Unpair on top. Portal (input
@@ -1798,6 +3243,39 @@ class App:
             _b.state(["disabled"])
         for c in range(4):
             ctl.columnconfigure(c, weight=1)
+
+        mac_ctl = ttk.LabelFrame(
+            bridge, text="Managed Mac · Bluetooth only", padding=7)
+        mac_ctl.pack(fill="x", padx=16, pady=(3, 2))
+        self.mac_pair_btn = ttk.Button(
+            mac_ctl, text="Pair", command=self._pair_mac)
+        self.mac_pair_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        self.mac_conn_btn = ttk.Button(
+            mac_ctl, text="Connect", command=self._connect_mac)
+        self.mac_conn_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
+        self.mac_disc_btn = ttk.Button(
+            mac_ctl, text="Disconnect", command=self._disconnect_mac)
+        self.mac_disc_btn.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
+        self.mac_unpair_btn = ttk.Button(
+            mac_ctl, text="Unpair", command=self._unpair_mac)
+        self.mac_unpair_btn.grid(row=0, column=3, sticky="ew", padx=3, pady=3)
+        ttk.Button(
+            mac_ctl, text="Re-pair (reset bond)",
+            command=lambda: self._pair_mac(reset=True)).grid(
+                row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=3)
+        tk.Label(
+            mac_ctl,
+            text="No software is installed on the Mac. Display geometry "
+                 "guides edge routing; Bluetooth HID carries keyboard/mouse.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 8),
+            wraplength=430, justify="left").grid(
+                row=1, column=2, columnspan=2, sticky="w", padx=5)
+        for button in (
+                self.mac_pair_btn, self.mac_conn_btn,
+                self.mac_disc_btn, self.mac_unpair_btn):
+            button.state(["disabled"])
+        for column in range(4):
+            mac_ctl.columnconfigure(column, weight=1)
 
         # ---- System control: every backend action, nothing hidden ----
         sysf = ttk.LabelFrame(bridge, text="System control", padding=8)
@@ -1870,8 +3348,15 @@ class App:
         # push app-bundled guest scripts to the VM so a fix in the app also
         # updates the VM-side connection logic (no manual deploy, no reliance)
         self._sync_guest_scripts()
-        self.root.after(120, self._dark_titlebar)
-        self.root.after(500, self._ensure_tray)  # persistent tray from startup
+        # Keep the native Tk/Windows window procedure. The earlier frameless
+        # treatment replaced GWLP_WNDPROC with a Python ctypes callback; rapid
+        # pointer traffic over the arrangement canvas repeatedly faulted in
+        # _ctypes.pyd (0xc0000005). DWM dark paint is cosmetic and does not
+        # install a callback, so it is safe under the same workload.
+        self.root.after(120, lambda: _paint_dark_titlebar(self.root))
+        # Runtime tray creation is deliberately disabled. Its pure-ctypes
+        # WNDPROC also access-violated during a live soak despite passing short
+        # self-tests. Native taskbar minimize needs no Python Windows callback.
         # re-sync the window width to the console state when un-maximized (a
         # width change requested while zoomed is deferred, not lost)
         self.root.bind("<Configure>", self._on_configure)
@@ -1896,6 +3381,7 @@ class App:
         dots.pack(fill="x", pady=(4, 0))
         self.c_stat = {}
         for key, label in [("vm", "VM"), ("ipad", "iPad"),
+                           ("mac", "Mac"),
                            ("audio", "Audio"), ("portal", "Portal")]:
             cell = tk.Frame(dots, bg=BG)
             cell.pack(side="left", padx=(0, 12))
@@ -1916,7 +3402,7 @@ class App:
         vr.pack(fill="x", pady=(8, 0))
         tk.Label(vr, text="Volume", bg=BG, fg=MUTED, width=9, anchor="w",
                  font=("Segoe UI", 9, "bold")).pack(side="left")
-        self.c_vol_var = tk.DoubleVar(value=50.0)
+        self.c_vol_var = tk.DoubleVar(value=self._load_audio_gain() * 100.0)
         self.c_vol = ttk.Scale(vr, from_=0, to=100, variable=self.c_vol_var,
                                command=self._vol_changed)
         self.c_vol.pack(side="left", fill="x", expand=True)
@@ -1983,52 +3469,27 @@ class App:
                 1520 if self._console_open else 1120))
 
     def _vol_changed(self, _=None):
-        if not self._vol_syncing:
-            # latest-wins handoff to the volume thread; the UI thread never
-            # touches COM (a busy AudioSrv would freeze the whole window)
-            self._vol_target = self.c_vol_var.get() / 100.0
-
-    def _volume_thread(self):
-        """Owns ALL Core Audio COM (import, endpoint, get, set) on this one
-        thread — the same proven pattern as the sender's _volume_watcher.
-        Publishes the current master volume to _vol_now, applies slider
-        targets from _vol_target, and re-resolves the default endpoint every
-        ~30s so a device switch doesn't leave the slider driving the OLD
-        device (no COM error fires on a mere default-device change)."""
-        try:
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL, CoCreateInstance, GUID
-            from pycaw.pycaw import IAudioEndpointVolume, IMMDeviceEnumerator
-            clsid = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
-        except Exception:  # noqa: BLE001
-            self._vol_ok = False
-            _emit("info", "volume slider disabled — pycaw not available "
-                          "(Windows volume keys still work).")
+        if self._vol_syncing:
             return
-        self._vol_ok = True
-        vol = None
-        acquired = 0.0
-        while not self._closing:
-            try:
-                now = time.time()
-                if vol is None or now - acquired > 30:
-                    enum = CoCreateInstance(clsid, IMMDeviceEnumerator,
-                                            CLSCTX_ALL)
-                    endpoint = enum.GetDefaultAudioEndpoint(0, 1)
-                    vol = cast(endpoint.Activate(
-                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
-                        POINTER(IAudioEndpointVolume))
-                    acquired = now
-                t = self._vol_target
-                if t is not None:
-                    self._vol_target = None
-                    vol.SetMasterVolumeLevelScalar(
-                        max(0.0, min(1.0, float(t))), None)
-                self._vol_now = float(vol.GetMasterVolumeLevelScalar())
-            except Exception:  # noqa: BLE001
-                vol = None          # re-acquire next lap
-                self._vol_now = None
-            threading.Event().wait(0.5)
+        gain = max(0.0, min(1.0, self.c_vol_var.get() / 100.0))
+        try:
+            tmp = GAIN_FILE + ".new"
+            with open(tmp, "w") as f:
+                f.write(f"{gain:.4f}")
+            os.replace(tmp, GAIN_FILE)
+        except OSError:
+            pass
+
+    def _load_audio_gain(self):
+        """Read the UI-owned gain without loading Core Audio/comtypes."""
+        try:
+            with open(GAIN_FILE) as f:
+                gain = float(f.read().strip())
+            if not math.isfinite(gain):
+                return 1.0
+            return max(0.0, min(1.0, gain))
+        except (OSError, ValueError):
+            return 1.0
 
     def _load_balance(self):
         import math
@@ -2373,7 +3834,7 @@ class App:
                       "openspan-pipewire-pulse openspan-udprecv", timeout=45)
             try:
                 if self.audio_proc and self.audio_proc.poll() is None:
-                    self.audio_proc.terminate()
+                    _terminate_role_process(self.audio_proc)
             except Exception:  # noqa: BLE001
                 pass
             self.audio_proc = None
@@ -2410,22 +3871,50 @@ class App:
             try:
                 r = ssh_guest("cat /opt/openspan/audio-device.txt 2>/dev/null",
                               timeout=8, quiet=True)
-                mac = (r.stdout or "").strip().upper()
+                pin = (r.stdout or "").strip().upper()
+                pin_parts = pin.split("|", 1)
+                pin_controller = (
+                    pin_parts[0] if len(pin_parts) == 2 else "")
+                mac = pin_parts[-1]
                 if not re.match(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", mac):
                     return  # no known last device -> nothing to do
                 prefs = load_bt_prefs()
                 if mac in prefs["blacklist"]:
                     return
-                r = ssh_guest("bash /opt/openspan/bt-list.sh", timeout=25,
-                              quiet=True)
                 name, paired, conn, icon = mac, False, False, ""
-                for line in (r.stdout or "").splitlines():
-                    p = line.split("|")
-                    if len(p) >= 4 and p[0].upper() == mac:
-                        name = prefs["renames"].get(p[0], p[1])
-                        paired, conn = p[2] == "1", p[3] == "1"
-                        icon = p[4] if len(p) > 4 else ""
+                if multi_radio_enabled(prefs):
+                    r = ssh_guest(
+                        "python3 /opt/openspan/openspan_bt.py list",
+                        timeout=25, quiet=True)
+                    try:
+                        devices = json.loads(
+                            r.stdout or "{}").get("devices", [])
+                    except (TypeError, ValueError):
+                        devices = []
+                    for item in devices:
+                        if str(item.get("address", "")).upper() != mac:
+                            continue
+                        if pin_controller and str(
+                                item.get("controller", "")).upper() \
+                                != pin_controller:
+                            continue
+                        name = prefs["renames"].get(
+                            mac, item.get("alias") or item.get("name") or mac)
+                        paired = bool(item.get("paired"))
+                        conn = bool(item.get("connected"))
+                        icon = str(item.get("icon", ""))
                         break
+                else:
+                    r = ssh_guest(
+                        "bash /opt/openspan/bt-list.sh", timeout=25,
+                        quiet=True)
+                    for line in (r.stdout or "").splitlines():
+                        p = line.split("|")
+                        if len(p) >= 4 and p[0].upper() == mac:
+                            name = prefs["renames"].get(p[0], p[1])
+                            paired, conn = p[2] == "1", p[3] == "1"
+                            icon = p[4] if len(p) > 4 else ""
+                            break
                 if "audio" not in (icon or ""):
                     return  # never auto-touch anything that isn't audio
                 if conn or not paired:
@@ -2435,16 +3924,21 @@ class App:
                                "automatically…")
                 # connect-only, bond re-verified in the SAME shell: empty or
                 # doubtful info -> NOT_BONDED -> we do NOTHING (fail-closed)
-                cmd = (f'info=$(bluetoothctl info {mac} 2>/dev/null); '
-                       f'echo "$info" | grep -q "Paired: yes" '
-                       '|| { echo NOT_BONDED; exit 0; }; '
-                       f'echo "$info" | grep -q "Connected: yes" '
-                       '&& { echo CONNECTED; exit 0; }; '
-                       f'bluetoothctl connect {mac} >/dev/null 2>&1; '
-                       'sleep 3; '
-                       f'bluetoothctl info {mac} 2>/dev/null '
-                       '| grep -q "Connected: yes" '
-                       '&& echo CONNECTED || echo NO_LINK')
+                if multi_radio_enabled(prefs):
+                    cmd = (
+                        "python3 /opt/openspan/openspan_bt.py "
+                        "reconnect-audio")
+                else:
+                    cmd = (f'info=$(bluetoothctl info {mac} 2>/dev/null); '
+                           f'echo "$info" | grep -q "Paired: yes" '
+                           '|| { echo NOT_BONDED; exit 0; }; '
+                           f'echo "$info" | grep -q "Connected: yes" '
+                           '&& { echo CONNECTED; exit 0; }; '
+                           f'bluetoothctl connect {mac} >/dev/null 2>&1; '
+                           'sleep 3; '
+                           f'bluetoothctl info {mac} 2>/dev/null '
+                           '| grep -q "Connected: yes" '
+                           '&& echo CONNECTED || echo NO_LINK')
                 attempted = True
                 for attempt in (1, 2):
                     r = ssh_guest(cmd, timeout=25, quiet=True)
@@ -2538,7 +4032,7 @@ class App:
         for p in (self.portal_proc, self.audio_proc):
             try:
                 if p and p.poll() is None:
-                    p.terminate()
+                    _terminate_role_process(p)
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -2552,20 +4046,20 @@ class App:
         self.root.after(400, self.root.destroy)
 
     def _confirm_close(self):
-        """X handler. The recommended close is KEEP THE BRIDGE WARM (tray):
+        """X handler. The recommended close is KEEP THE BRIDGE WARM (minimized):
         a full shutdown powers off the VM, and a fresh VM makes the bonded
         iPad reconnect to 'connected but no input' until it is re-paired. So
-        tray is the default and shutdown is the deliberate, warned choice.
+        minimize is the default and shutdown is the deliberate, warned choice.
         Shown as an in-frame overlay; the re-entrancy guard handles a second
         X while it's open."""
         choice = _dialog(
             self.root, "Keep OpenSpan running?",
-            "Send it to the tray and the bridge stays warm — the iPad keeps "
+            "Minimize it and the bridge stays warm — the iPad keeps "
             "working and reconnects with NO re-pairing.\n\nA full shut down "
             "powers off the VM. Next launch the iPad reconnects but won't "
             "accept input until you re-pair it (the ↻ Re-pair / reset "
             "button). Only shut down if you're done for a while.",
-            [("⤓  Send to tray  (keeps the iPad working)", "tray", "TButton"),
+            [("—  Minimize  (keeps the iPad working)", "tray", "TButton"),
              ("⏻  Shut down — needs a re-pair next time", "shutdown",
               "Danger.TButton"),
              ("Cancel", "cancel", "TButton")])
@@ -2575,28 +4069,13 @@ class App:
             self._full_stop()
 
     def _ensure_tray(self):
-        """Create the PERSISTENT tray icon: left-click opens the window,
-        right-click posts the full control menu. Always present -- it is the
-        normal-ops surface; the big window is for setup."""
-        if self._tray is not None:
-            return
-        try:
-            self._tray = TrayIcon(
-                "OpenSpan — click to open, right-click for controls", ICON,
-                self._from_tray, on_menu=self._show_tray_menu)
-        except Exception:  # noqa: BLE001
-            self._tray = None
+        """Compatibility no-op: runtime tray callbacks are deliberately off."""
+        return None
 
     def _to_tray(self):
-        """Hide the WINDOW to the tray. Everything keeps running; the tray icon
-        stays put (persistent)."""
-        self._ensure_tray()
-        if self._tray is None:
-            self.root.iconify()   # tray unavailable -> never strand the app
-            return
-        self.root.withdraw()
-        _emit("event", "sent to the tray — everything keeps running. Click the "
-                       "tray icon to reopen, or right-click it for controls.")
+        """Minimize to the native taskbar while every bridge role stays live."""
+        self.root.iconify()
+        _emit("event", "minimized — everything keeps running.")
 
     def _from_tray(self):
         # arrives on the Tk thread (the tray window shares this thread's pump);
@@ -2629,7 +4108,7 @@ class App:
             m = tk.Menu(self.root, tearoff=0, bg=CARD, fg=FG, bd=0,
                         activebackground=ACCENT_DIM, activeforeground="#eafff3",
                         font=("Segoe UI", 10))
-            m.add_command(label="Open OpenSpan", command=self._from_tray)
+            m.add_command(label=f"Open {APP_LABEL}", command=self._from_tray)
             m.add_separator()
             m.add_command(label="Pair iPad",
                           command=lambda: self.pair(confirm=False),
@@ -2672,11 +4151,18 @@ class App:
     def _pick_model(self, *_):
         w, h = IPAD_PRESETS[self.model.get()]
         self.canvas.set_ipad_size(w, h)
-        self.canvas.save()
 
     def _portal_changed(self, ok):
         if not ok:
-            self.status.set("⚠ iPad not touching a monitor — no portal")
+            self.status.set(
+                "⚠ No managed device touches a PC monitor — no portal")
+        if self.portal_proc and self.portal_proc.poll() is None:
+            # The portal reads geometry once at process start. Apply a drag,
+            # resize, rotation, or resolution edit immediately.
+            _terminate_role_process(self.portal_proc)
+            self.portal_proc = None
+            self._start_portal_process()
+            self.log("event", "portal geometry reloaded from the arrangement.")
 
     def toggle_vm(self):
         if vm_running():
@@ -2691,25 +4177,28 @@ class App:
 
     def toggle_portal(self):
         if self.portal_proc and self.portal_proc.poll() is None:
-            self.portal_proc.terminate()
+            _terminate_role_process(self.portal_proc)
             self.portal_proc = None
             self.portal_btn.config(text="Start portal")  # immediate feedback
             self.log("event", "portal STOPPED — keyboard/mouse no longer "
-                              "bridging to the iPad.")
+                              "bridging to managed devices.")
         else:
-            try:
-                if self._portal_logf:
-                    self._portal_logf.close()
-            except OSError:
-                pass
-            self._portal_logf = open(LOG, "a", buffering=1)
-            self.portal_proc = subprocess.Popen(
-                PORTAL_CMD,
-                stdout=self._portal_logf, stderr=self._portal_logf,
-                creationflags=NO_WINDOW)
-            self.portal_btn.config(text="Stop portal")  # immediate feedback
+            self._start_portal_process()
             self.log("event", "portal STARTED — keyboard/mouse now bridging "
-                              "to the iPad.")
+                              "to the iPad and managed Mac.")
+
+    def _start_portal_process(self):
+        try:
+            if self._portal_logf:
+                self._portal_logf.close()
+        except OSError:
+            pass
+        self._portal_logf = open(LOG, "a", buffering=1)
+        self.portal_proc = subprocess.Popen(
+            PORTAL_CMD,
+            stdout=self._portal_logf, stderr=self._portal_logf,
+            creationflags=NO_WINDOW, env=_independent_frozen_env())
+        self.portal_btn.config(text="Stop portal")
 
     def _ensure_audio(self):
         """(Re)start the Windows->VM audio sender if it isn't running. Captures
@@ -2731,7 +4220,8 @@ class App:
                 self._audio_logf = open(AUDIO_LOG, "a", buffering=1)
                 self.audio_proc = subprocess.Popen(
                     AUDIO_CMD, stdout=self._audio_logf,
-                    stderr=self._audio_logf, creationflags=NO_WINDOW)
+                    stderr=self._audio_logf, creationflags=NO_WINDOW,
+                    env=_independent_frozen_env())
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2747,7 +4237,22 @@ class App:
                 (os.path.join("..", "guest", "udp_to_sink.py"),
                  "/opt/openspan/udp_to_sink.py"),
                 (os.path.join("..", "guest", "btready.sh"),
-                 "/opt/openspan/btready.sh")]
+                 "/opt/openspan/btready.sh"),
+                (os.path.join("..", "guest", "openspan_bt.py"),
+                 "/opt/openspan/openspan_bt.py"),
+                (os.path.join("..", "guest", "set-hid-radio.sh"),
+                 "/opt/openspan/set-hid-radio.sh"),
+                (os.path.join("..", "guest", "set-hid-target.sh"),
+                 "/opt/openspan/set-hid-target.sh"),
+                (os.path.join("..", "guest", "ensure-dualmode.sh"),
+                 "/opt/openspan/ensure-dualmode.sh"),
+                (os.path.join("..", "guest", "wait-hci0.sh"),
+                 "/opt/openspan/wait-hci0.sh"),
+                (os.path.join("..", "guest", "openspan_ble.py"),
+                 "/opt/openspan/openspan_ble.py"),
+                (os.path.join("..", "guest", "system",
+                              "openspanble-mac.service"),
+                 "/etc/systemd/system/openspanble-mac.service")]
         def work():
             reachable = False
             for _ in range(60):
@@ -2758,6 +4263,7 @@ class App:
                 threading.Event().wait(3)
             if not reachable:
                 return
+            ensure_mac_daemon_forward()
             _emit("event", "VM reachable — syncing guest scripts…")
             # idempotent guest prep: keep the journal ON DISK so Bluetooth
             # events survive a VM power-off -- without this, a "Broadcast
@@ -2766,6 +4272,7 @@ class App:
             ssh_guest("install -d /var/log/journal && "
                       "systemctl kill -s USR1 systemd-journald",
                       timeout=10, quiet=True)
+            daemon_changed = False
             for local, remote in jobs:
                 src = os.path.join(HERE, local)
                 if not os.path.exists(src):
@@ -2779,16 +4286,80 @@ class App:
                     # write-then-rename: atomic replace, so a script that is
                     # RUNNING right now (btready.sh during boot) keeps its old
                     # inode instead of being truncated mid-execution
-                    subprocess.run(
-                        ["ssh", "-p", "2222", "-i", KEY,
-                         "-o", "StrictHostKeyChecking=accept-new",
-                         "-o", "ConnectTimeout=6", "root@127.0.0.1",
-                         f"cat > {remote}.new && chmod +x {remote}.new"
-                         f" && mv -f {remote}.new {remote}"],
+                    r = subprocess.run(
+                        _ssh_argv(
+                            f"cat > {remote}.new && "
+                            f"if [ -f {remote} ] && "
+                            f"cmp -s {remote}.new {remote}; then "
+                            f"rm -f {remote}.new; echo UNCHANGED; "
+                            f"else chmod +x {remote}.new && "
+                            f"mv -f {remote}.new {remote} && echo CHANGED; fi"),
                         input=content.encode("utf-8"), timeout=20,
+                        capture_output=True,
                         creationflags=NO_WINDOW)
-                except Exception:  # noqa: BLE001
-                    pass
+                    if r.returncode != 0:
+                        detail = (r.stderr or r.stdout or b"").decode(
+                            "utf-8", errors="replace").strip()
+                        _emit("err", f"guest sync failed for "
+                                     f"{os.path.basename(remote)}: "
+                                     f"{detail[-180:]}")
+                    elif (remote.endswith("/openspan_ble.py")
+                          or remote.endswith("/openspanble-mac.service")) \
+                            and b"CHANGED" in (r.stdout or b""):
+                        daemon_changed = True
+                except Exception as exc:  # noqa: BLE001
+                    _emit("err", f"guest sync failed for "
+                                 f"{os.path.basename(remote)}: {exc}")
+            if daemon_changed:
+                r = ssh_guest(
+                    "systemctl daemon-reload; "
+                    "systemctl restart openspanble; "
+                    "systemctl is-enabled --quiet openspanble-mac && "
+                    "systemctl restart openspanble-mac || true; "
+                    "for i in $(seq 20); do "
+                    "ss -ltn 2>/dev/null | grep -q ':9955' && exit 0; "
+                    "sleep 1; done; exit 1",
+                    timeout=35, quiet=True)
+                if r.returncode == 0:
+                    _emit("event", "guest HID daemon updated and restarted "
+                                   "(advertising remains off).")
+                else:
+                    detail = (r.stderr or r.stdout or "").strip()
+                    _emit("err", "guest HID daemon update did not restart "
+                                 f"cleanly: {detail[-180:]}")
+            # hciN ordering is not stable across boots. The preference stores
+            # the controller MAC, so re-resolve it every time the VM becomes
+            # reachable and refresh the systemd drop-in before the user pairs.
+            prefs = load_bt_prefs()
+            controller = prefs.get("hid_radio", "")
+            if multi_radio_enabled(prefs) and re.match(
+                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
+                r = ssh_guest(
+                    "bash /opt/openspan/set-hid-radio.sh " + controller,
+                    timeout=35, quiet=True)
+                if r.returncode == 0:
+                    _emit("event", "saved iPad radio resolved for this boot "
+                                   f"({controller}).")
+                    self._refresh_paired()
+                else:
+                    detail = (r.stderr or r.stdout or "").strip()
+                    _emit("err", "saved iPad radio could not be applied: "
+                                 f"{detail[-180:]}")
+            mac_controller = prefs.get("mac_radio", "")
+            if multi_radio_enabled(prefs) and re.match(
+                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", mac_controller):
+                r = ssh_guest(
+                    "bash /opt/openspan/set-hid-target.sh mac "
+                    + mac_controller,
+                    timeout=45, quiet=True)
+                if r.returncode == 0:
+                    _emit("event", "saved managed Mac radio resolved for this "
+                                   f"boot ({mac_controller}).")
+                    self._refresh_target_paired("mac")
+                else:
+                    detail = (r.stderr or r.stdout or "").strip()
+                    _emit("err", "saved managed Mac radio could not be applied: "
+                                 f"{detail[-180:]}")
         threading.Thread(target=work, daemon=True).start()
 
     def pair(self, reset=False, confirm=True):
@@ -2800,17 +4371,25 @@ class App:
         # double-click, or Re-pair mid-flight) -- one radio op at a time.
         if self._pair_inflight or self.broadcasting:
             return
+        separate_radios = multi_radio_enabled()
         if reset:
             title = "Reset and re-pair the iPad?"
             body = ("Use this only when the iPad won't connect. It FORGETS the "
                     "iPad's saved pairing on this side so you can pair from "
                     "scratch (you'll re-add \"OpenSpan Keyboard\" on the iPad). "
-                    "Earbuds are untouched. Audio drops briefly, then returns.")
+                    "Earbuds are untouched. "
+                    + ("Audio assigned to another radio stays live."
+                       if separate_radios else
+                       "Audio drops briefly, then returns."))
         else:
             title = "Pair the iPad now?"
-            body = ("This briefly disconnects Bluetooth audio so the iPad "
-                    "finds the keyboard fast — it reconnects automatically the "
-                    "moment the iPad pairs.")
+            body = (
+                "The iPad will broadcast through its assigned radio. Audio on "
+                "another radio stays live."
+                if separate_radios else
+                "This briefly disconnects Bluetooth audio so the iPad finds "
+                "the keyboard fast — it reconnects automatically the moment "
+                "the iPad pairs.")
         if confirm and not dark_confirm(self.root, title, body):
             return
         # immediate visual acknowledgement (the work runs in a thread).
@@ -2835,6 +4414,8 @@ class App:
                 if daemon_status() is not None:
                     break
                 threading.Event().wait(2)
+        prefs = load_bt_prefs()
+        multi = multi_radio_enabled(prefs)
         # The daemon restart is FRESH-PAIR-ONLY. Restarting it on a plain
         # Broadcast was the reconnect input-killer: it wiped the daemon's
         # GATT subscription state at the exact moment the kept-bond iPad
@@ -2845,7 +4426,28 @@ class App:
         # session (its sender then loops in _connect forever). This restart
         # is very likely the ORIGINAL cause of the old no-input ghost that
         # the blanket bond-wipe was papering over.
-        if reset:
+        if multi:
+            controller = prefs.get("hid_radio", "")
+            if not re.match(
+                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
+                r = subprocess.CompletedProcess(
+                    [], 1, "", "No iPad keyboard radio is assigned")
+            else:
+                reset_arg = " --reset" if reset else ""
+                restart = (
+                    "systemctl restart openspanble; "
+                    if reset else "")
+                command = (
+                    "bash /opt/openspan/set-hid-radio.sh "
+                    f"{controller}; "
+                    "python3 /opt/openspan/openspan_bt.py prepare-hid "
+                    f"--controller {controller} --target ipad{reset_arg}; "
+                    f"{restart}"
+                    "for i in $(seq 20); do "
+                    "ss -ltn 2>/dev/null | grep -q ':9955' && exit 0; "
+                    "sleep 1; done; exit 1")
+                r = ssh_guest(command, timeout=45)
+        elif reset:
             # fresh pair: forget every disconnected non-audio bond (the
             # iPad) so it re-pairs clean -- earbuds ("Icon: audio") always
             # exempt -- then restart for a truly fresh GATT server.
@@ -2879,9 +4481,9 @@ class App:
             # be honest: the guest work failed, so we are NOT broadcasting
             set_advertising(False)
             self._pair_inflight = False
-            _emit("err", "pair FAILED — the guest bluetoothctl step didn't "
-                  "complete (radio busy or the VM isn't ready). Nothing is "
-                  "advertising. Try Pair/Connect again in a moment.")
+            detail = (r.stderr or r.stdout or "guest command failed").strip()
+            _emit("err", "pair FAILED before advertising — "
+                  f"{detail[-220:]}. Nothing is advertising.")
             # we may have already dropped the earbud audio for the burst — the
             # pair isn't happening, so put it back (force past the cooldown)
             self._auto_conn_last = 0.0
@@ -2898,18 +4500,28 @@ class App:
         if not self._pair_inflight:      # cancelled while we freed the radio
             _emit("event", "pair cancelled before advertising.")
             return
-        _emit("event", "guest ready (audio paused) — telling the daemon to "
+        prep_note = (
+            "iPad radio isolated; other-radio audio left alone"
+            if multi else "audio paused")
+        _emit("event", f"guest ready ({prep_note}) — telling the daemon to "
                        "broadcast…")
         adv_ok = set_advertising(True)
         st = daemon_status()
         really_adv = bool(st and st.get("advertising"))
+        adv_state = st.get("advertising_state", "unknown") if st else "offline"
+        adv_error = st.get("advertising_error", "") if st else ""
         _emit("event", f"broadcast command: daemon ack={adv_ok}, daemon now "
-                       f"reports advertising={really_adv}")
+                       f"reports advertising={really_adv}, state={adv_state}"
+                       f"{f', error={adv_error}' if adv_error else ''}")
         if not adv_ok or not really_adv:
+            # A TCP timeout can race a late BlueZ success callback. Explicitly
+            # request OFF before restoring audio so a failed/late Pair can never
+            # leave an invisible keyboard beacon behind.
+            cleanup_ok = set_advertising(False)
             _emit("err", "BROADCAST DID NOT START. The daemon didn't accept the "
-                  "adv command (or isn't reachable on :9955). Nothing is "
-                  "advertising, so the iPad can't connect. Press Pair/Broadcast "
-                  "again; if it keeps failing, tell me this line.")
+                  "adv command or BlueZ rejected/timed it out. "
+                  f"Cleanup-off confirmed={cleanup_ok}. Press Pair/Connect "
+                  "again; if it keeps failing, report this line.")
             self.broadcasting = False
             self._pair_inflight = False
             self._auto_conn_last = 0.0
@@ -2930,9 +4542,12 @@ class App:
             set_advertising(False)
             _emit("event", "pair cancelled — advertising off.")
             return
+        audio_note = (
+            " Other-radio audio remains independent."
+            if multi else " Audio returns when it pairs.")
         _emit("event", "✅ NOW BROADCASTING at full power (daemon confirmed) — "
-                       "on the iPad, tap \"OpenSpan Keyboard\". Audio returns "
-                       "when it pairs.")
+                       "on the iPad, tap \"OpenSpan Keyboard\"."
+                       + audio_note)
 
         self.ui(lambda: self.status.set(
             "📡 Advertising — on the iPad, tap \"OpenSpan Keyboard\" to "
@@ -2947,10 +4562,9 @@ class App:
     def _disconnect_ipad(self):
         """DISCONNECT verb: drop the iPad's BLE link AND stop advertising, so the
         iPad's on-screen keyboard comes back and STAYS back (nothing left to
-        reconnect to). Stops input routing too. The bond is KEPT -> Connect
-        brings it right back. Portal stop runs on the UI thread (Tk); the radio
-        work runs off it."""
-        self._stop_portal_if_running()          # fold portal in (UI thread)
+        reconnect to). The bond is KEPT -> Connect brings it right back. The
+        shared input broker stays alive for the managed Mac; its independent
+        iPad channel notices the disconnect and becomes unavailable."""
         def work():
             # clear the flags under the lock FIRST so an in-flight pair worker's
             # commit sees the cancel; then drop advertising + the link.
@@ -2975,7 +4589,8 @@ class App:
 
     def _unpair_ipad(self):
         """UNPAIR verb: forget the iPad's bond on THIS side (+ disconnect + stop
-        advertising + stop routing). You also tap 'Forget This Device' on the
+        advertising for the iPad lane only). The Mac radio, Mac daemon, and
+        shared input broker stay live. You also tap 'Forget This Device' on the
         iPad. Earbuds (Icon: audio) are never touched."""
         if not dark_confirm(
                 self.root, "Unpair the iPad?",
@@ -2983,22 +4598,28 @@ class App:
                 "disconnects it — you'll also tap 'Forget This Device' on the "
                 "iPad itself. Your earbuds are not affected."):
             return
-        self._stop_portal_if_running()
         def work():
             set_advertising(False)
             self.broadcasting = False
             self._pair_inflight = False
             daemon_cmd({"cmd": "disconnect"})
             # forget every bonded NON-audio device (the iPad); earbuds exempt
-            r = ssh_guest(
-                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-                'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
-                '[ "$d" = "$AUD" ] && continue; '
-                'info=$(bluetoothctl info "$d" 2>/dev/null); '
-                'echo "$info" | grep -qi "Icon: audio" && continue; '
-                'bluetoothctl remove "$d" >/dev/null 2>&1; '
-                'done; echo done',
-                timeout=25)
+            prefs = load_bt_prefs()
+            controller = prefs.get("hid_radio", "")
+            if multi_radio_enabled(prefs) and controller:
+                command = (
+                    "python3 /opt/openspan/openspan_bt.py forget-hid "
+                    f"--controller {controller} --target ipad")
+            else:
+                command = (
+                    'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
+                    'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
+                    '[ "$d" = "$AUD" ] && continue; '
+                    'info=$(bluetoothctl info "$d" 2>/dev/null); '
+                    'echo "$info" | grep -qi "Icon: audio" && continue; '
+                    'bluetoothctl remove "$d" >/dev/null 2>&1; '
+                    'done; echo done')
+            r = ssh_guest(command, timeout=25)
             if r.returncode == 0:
                 self._ipad_paired = False   # authoritative: the bond is gone
                 _emit("event", "iPad UNPAIRED — bond forgotten on this side. Now "
@@ -3024,15 +4645,209 @@ class App:
         gen = self._paired_gen = self._paired_gen + 1
         def work():
             try:
-                r = ssh_guest(
-                    'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
-                    'info=$(bluetoothctl info "$d" 2>/dev/null); '
-                    'echo "$info" | grep -qi "Icon: audio" && continue; '
-                    'echo "$info" | grep -q "Paired: yes" && '
-                    '{ echo IPAD_PAIRED; break; }; done; echo done',
-                    timeout=8, quiet=True)
+                prefs = load_bt_prefs()
+                controller = prefs.get("hid_radio", "")
+                if multi_radio_enabled(prefs) and controller:
+                    command = (
+                        "python3 /opt/openspan/openspan_bt.py hid-status "
+                        f"--controller {controller} --target ipad")
+                else:
+                    command = (
+                        'for d in $(bluetoothctl devices '
+                        '| awk \'{print $2}\'); do '
+                        'info=$(bluetoothctl info "$d" 2>/dev/null); '
+                        'echo "$info" | grep -qi "Icon: audio" && continue; '
+                        'echo "$info" | grep -q "Paired: yes" && '
+                        '{ echo IPAD_PAIRED; break; }; done; echo done')
+                r = ssh_guest(command, timeout=8, quiet=True)
                 if r.returncode == 0 and gen == self._paired_gen:
-                    self._ipad_paired = "IPAD_PAIRED" in (r.stdout or "")
+                    out = r.stdout or ""
+                    self._ipad_paired = (
+                        "PAIRED" in out and "NOT_PAIRED" not in out)
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _pair_mac(self, reset=False, confirm=True):
+        prefs = load_bt_prefs()
+        controller = prefs.get("mac_radio", "")
+        if not multi_radio_enabled(prefs) or not controller:
+            dark_alert(
+                self.root, "Assign the Mac radio first",
+                "Open Radio options, choose Multiple radios, then assign the "
+                "external TP-Link radio to Managed Mac.")
+            return
+        if controller == prefs.get("hid_radio"):
+            dark_alert(
+                self.root, "Choose another radio",
+                "The managed Mac and iPad each require their own Bluetooth "
+                "radio. Move the iPad to the internal backup radio first.")
+            return
+        if self._mac_pair_inflight or self.mac_broadcasting:
+            return
+        title = (
+            "Reset and re-pair the managed Mac?"
+            if reset else "Pair the managed Mac now?")
+        body = (
+            "This forgets the saved Mac bond on its assigned radio, then "
+            "broadcasts “OpenSpan Mac Control” for a clean pairing. Pair only "
+            "from the Mac; for the first pairing, temporarily turn off the "
+            "iPad’s Bluetooth."
+            if reset else
+            "The assigned external TP-Link radio will broadcast “OpenSpan "
+            "Mac Control”. Pair only from the Mac—do not tap this name on the "
+            "iPad. For the first Mac pairing, temporarily turn off the iPad’s "
+            "Bluetooth. Audio remains on its own radio.")
+        if confirm and not dark_confirm(self.root, title, body):
+            return
+        self._mac_pair_inflight = True
+        self._mac_broadcast_started = time.time()
+        for button in (
+                self.mac_pair_btn, self.mac_conn_btn, self.mac_unpair_btn):
+            button.state(["disabled"])
+        self.mac_disc_btn.state(["!disabled"])
+        self.status.set(
+            "Working — preparing the managed Mac Bluetooth radio…")
+        threading.Thread(
+            target=self._pair_mac_worker, args=(reset,), daemon=True).start()
+
+    def _pair_mac_worker(self, reset=False):
+        if not vm_running():
+            start_vm_clean()
+            for _ in range(45):
+                if ssh_guest(
+                        "echo ok", timeout=5, quiet=True).stdout.strip() == "ok":
+                    break
+                threading.Event().wait(2)
+        prefs = load_bt_prefs()
+        controller = prefs.get("mac_radio", "")
+        if not re.match(
+                r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
+            r = subprocess.CompletedProcess(
+                [], 1, "", "No managed Mac radio is assigned")
+        else:
+            reset_arg = " --reset" if reset else ""
+            restart = "systemctl restart openspanble-mac; " if reset else ""
+            command = (
+                "bash /opt/openspan/set-hid-target.sh mac "
+                f"{controller}; "
+                "python3 /opt/openspan/openspan_bt.py prepare-hid "
+                f"--controller {controller} --target mac{reset_arg}; "
+                f"{restart}"
+                "for i in $(seq 25); do "
+                "ss -ltn 2>/dev/null | grep -q ':9956' && exit 0; "
+                "sleep 1; done; exit 1")
+            r = ssh_guest(command, timeout=55)
+        if r.returncode:
+            set_target_advertising("mac", False)
+            self._mac_pair_inflight = False
+            detail = (r.stderr or r.stdout or "guest command failed").strip()
+            _emit("err", "managed Mac pair FAILED before advertising — "
+                  f"{detail[-220:]}. Nothing is advertising.")
+            self.ui(lambda: self.status.set(
+                "Managed Mac pair failed — see console."))
+            return
+        if not self._mac_pair_inflight:
+            _emit("event", "managed Mac pair cancelled before advertising.")
+            return
+        _emit("event", "managed Mac radio ready — starting its independent "
+                       "Bluetooth HID broadcast…")
+        adv_ok = set_target_advertising("mac", True)
+        state = target_daemon_status("mac")
+        really_adv = bool(state and state.get("advertising"))
+        if not adv_ok or not really_adv:
+            cleanup_ok = set_target_advertising("mac", False)
+            self.mac_broadcasting = False
+            self._mac_pair_inflight = False
+            _emit("err", "MANAGED MAC BROADCAST DID NOT START. "
+                  f"Cleanup-off confirmed={cleanup_ok}.")
+            self.ui(lambda: self.status.set(
+                "Managed Mac advertising didn't start — see console."))
+            return
+        with self._mac_pair_lock:
+            cancelled = not self._mac_pair_inflight
+            if not cancelled:
+                self.mac_broadcasting = True
+        if cancelled:
+            set_target_advertising("mac", False)
+            return
+        _emit(
+            "event",
+            "✅ MANAGED MAC NOW BROADCASTING — on the Mac, open Bluetooth "
+            "and connect “OpenSpan Mac Control”. Do not select it on the iPad.")
+        self.ui(lambda: self.status.set(
+            "📡 Mac only — connect “OpenSpan Mac Control” from the Mac."))
+
+    def _connect_mac(self):
+        self._pair_mac(reset=False, confirm=False)
+
+    def _disconnect_mac(self):
+        def work():
+            with self._mac_pair_lock:
+                self.mac_broadcasting = False
+                self._mac_pair_inflight = False
+            set_target_advertising("mac", False)
+            reply = target_daemon_cmd("mac", {"cmd": "disconnect"})
+            if reply and reply.get("ok"):
+                _emit(
+                    "event",
+                    f"Managed Mac DISCONNECTED "
+                    f"({reply.get('disconnected', 0)} link).")
+            else:
+                _emit("err", "couldn't disconnect the managed Mac.")
+            self._refresh_target_paired("mac")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _unpair_mac(self):
+        if not dark_confirm(
+                self.root, "Unpair the managed Mac?",
+                "This forgets the Mac bond on its assigned radio. Remove "
+                "“OpenSpan Mac Control” in the Mac’s Bluetooth settings too."):
+            return
+
+        def work():
+            with self._mac_pair_lock:
+                self.mac_broadcasting = False
+                self._mac_pair_inflight = False
+            set_target_advertising("mac", False)
+            target_daemon_cmd("mac", {"cmd": "disconnect"})
+            prefs = load_bt_prefs()
+            controller = prefs.get("mac_radio", "")
+            r = ssh_guest(
+                "python3 /opt/openspan/openspan_bt.py forget-hid "
+                f"--controller {controller} --target mac",
+                timeout=25)
+            if r.returncode == 0:
+                self._mac_paired = False
+                _emit("event", "Managed Mac UNPAIRED on the OpenSpan side.")
+            else:
+                _emit("err", "managed Mac unpair failed — see console.")
+            self._refresh_target_paired("mac")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_target_paired(self, target):
+        if target == "ipad":
+            self._refresh_paired()
+            return
+        self._mac_paired_gen += 1
+        generation = self._mac_paired_gen
+
+        def work():
+            try:
+                prefs = load_bt_prefs()
+                controller = prefs.get("mac_radio", "")
+                if not multi_radio_enabled(prefs) or not controller:
+                    if generation == self._mac_paired_gen:
+                        self._mac_paired = False
+                    return
+                r = ssh_guest(
+                    "python3 /opt/openspan/openspan_bt.py hid-status "
+                    f"--controller {controller} --target mac",
+                    timeout=8, quiet=True)
+                if r.returncode == 0 and generation == self._mac_paired_gen:
+                    output = r.stdout or ""
+                    self._mac_paired = (
+                        "PAIRED" in output and "NOT_PAIRED" not in output)
             except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=work, daemon=True).start()
@@ -3054,6 +4869,11 @@ class App:
             return  # shutting down: never respawn anything past _full_stop
         running = vm_running()
         st = daemon_status() if running else None
+        prefs = load_bt_prefs()
+        mac_st = (
+            target_daemon_status("mac")
+            if running and multi_radio_enabled(prefs)
+            and prefs.get("mac_radio") else None)
         on = bool(self.portal_proc and self.portal_proc.poll() is None)
         self._ensure_audio()  # watchdog: relaunch the sender if it died
         aud = bool(self.audio_proc and self.audio_proc.poll() is None)
@@ -3063,6 +4883,7 @@ class App:
         if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
             self._refresh_paired()             # keep bond state fresh; self-heals
+            self._refresh_target_paired("mac")
         if running and self._poll_n % 20 == 0:
             # flush the VM disk every ~60s so a bond (or any state) can't be
             # lost to an unclean poweroff/crash between the connect-edge sync
@@ -3070,9 +4891,9 @@ class App:
             threading.Thread(
                 target=lambda: ssh_guest("sync", timeout=8, quiet=True),
                 daemon=True).start()
-        self.ui(lambda: self._apply_poll(running, st, on, aud))
+        self.ui(lambda: self._apply_poll(running, st, on, aud, mac_st))
 
-    def _apply_poll(self, running, st, on, aud):
+    def _apply_poll(self, running, st, on, aud, mac_st=None):
         # per-indicator status row: each token coloured by ITS OWN live state.
         def setind(key, text, good):
             self._ind[key].config(text=text, fg=(ACCENT if good else MUTED))
@@ -3091,13 +4912,48 @@ class App:
             setind("ipad", "iPad ○ daemon starting", False)
         else:
             setind("ipad", "iPad ○ off", False)
+        if mac_st:
+            mac_subscribed = bool(mac_st.get("kbd_subscribed"))
+            if mac_subscribed and on:
+                self._ind["mac"].config(
+                    text="Mac ● connected", fg=ACCENT)
+            elif mac_subscribed:
+                self._ind["mac"].config(
+                    text="Mac ◐ portal off", fg=WARN)
+            elif self._mac_paired:
+                self._ind["mac"].config(text="Mac ◐ paired", fg=WARN)
+            else:
+                self._ind["mac"].config(text="Mac ○ not paired", fg=MUTED)
+        elif running and load_bt_prefs().get("mac_radio"):
+            setind("mac", "Mac ○ daemon starting", False)
+        else:
+            setind("mac", "Mac ○ not assigned", False)
         setind("portal", f"portal {'● ON' if on else '○ off'}", on)
         setind("audio", f"audio {'●' if aud else '○'}", aud)
         # Honest broadcast state, read straight from the daemon -- never a UI
         # guess: if it says BROADCASTING the machine really is advertising.
-        _adv = bool(st and st.get("advertising"))
-        setind("bcast", ("📡 BROADCASTING" if _adv else "📡 not broadcasting")
-               if st else "", _adv)
+        _ipad_adv = bool(st and st.get("advertising"))
+        _mac_adv = bool(mac_st and mac_st.get("advertising"))
+        _adv = _ipad_adv or _mac_adv
+        _adv_names = " + ".join(
+            name for name, enabled in (
+                ("iPad", _ipad_adv), ("Mac", _mac_adv)) if enabled)
+        setind(
+            "bcast",
+            (f"📡 {_adv_names} BROADCASTING"
+             if _adv else "📡 not broadcasting") if (st or mac_st) else "",
+            _adv)
+        # The boolean above is confirmed BlueZ state. Transitional and failure
+        # states get their own honest, non-green rendering.
+        _adv_state = st.get("advertising_state", "off") if st else "off"
+        _adv_error = st.get("advertising_error", "") if st else ""
+        if st and not _adv:
+            if _adv_state in ("starting", "stopping"):
+                self._ind["bcast"].config(
+                    text=f"broadcast {_adv_state}...", fg=WARN)
+            elif _adv_error:
+                self._ind["bcast"].config(
+                    text="broadcast error", fg=DANGER)
         # UIPI: without admin, input hooks die under any elevated window
         if is_elevated():
             self._ind["admin"].config(text="")
@@ -3135,11 +4991,14 @@ class App:
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
         connected = bool(st and st.get("kbd_subscribed"))
+        mac_connected = bool(mac_st and mac_st.get("kbd_subscribed"))
         # snapshot for the tray menu (built on the Tk thread; must never block)
         self._cache = {"running": running, "connected": connected, "on": on,
                        "aud": aud, "paired": self._ipad_paired,
                        "busy": self._pair_inflight or self.broadcasting}
         self.canvas.set_ipad_state(connected and on, self._ipad_paired)
+        self.canvas.set_target_state(
+            "mac", mac_connected and on, self._mac_paired)
         # gate the four verbs by REAL state. Pair: daemon up + not mid-pair.
         # Connect: bonded but not connected. Disconnect: connected. Unpair:
         # bonded. Never fight the pair flow while it owns the radio.
@@ -3158,6 +5017,25 @@ class App:
                              else ["disabled"])
         self.unpair_btn.state(["!disabled"] if (_up and not busy
                               and self._ipad_paired) else ["disabled"])
+        prefs = load_bt_prefs()
+        mac_assigned = bool(
+            multi_radio_enabled(prefs) and prefs.get("mac_radio"))
+        mac_busy = self._mac_pair_inflight or self.mac_broadcasting
+        mac_up = mac_st is not None
+        self.mac_pair_btn.state(
+            ["!disabled"] if (
+                mac_assigned and mac_up and not mac_busy
+                and not mac_connected) else ["disabled"])
+        self.mac_conn_btn.state(
+            ["!disabled"] if (
+                mac_assigned and mac_up and not mac_busy
+                and self._mac_paired and not mac_connected) else ["disabled"])
+        self.mac_disc_btn.state(
+            ["!disabled"] if (mac_connected or mac_busy) else ["disabled"])
+        self.mac_unpair_btn.state(
+            ["!disabled"] if (
+                mac_assigned and mac_up and not mac_busy
+                and self._mac_paired) else ["disabled"])
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
             if self._ipad_conn is not None or connected:
@@ -3174,6 +5052,19 @@ class App:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
             self._refresh_paired()   # a bond may have just formed or dropped
+        if mac_connected != self._mac_conn:
+            if self._mac_conn is not None or mac_connected:
+                if mac_connected:
+                    _emit("event", "Managed Mac CONNECTED — Bluetooth "
+                                   "keyboard/mouse subscribed and live.")
+                    threading.Thread(
+                        target=lambda: ssh_guest(
+                            "sync", timeout=8, quiet=True),
+                        daemon=True).start()
+                elif mac_st is not None:
+                    _emit("event", "Managed Mac disconnected.")
+            self._mac_conn = mac_connected
+            self._refresh_target_paired("mac")
         # once the iPad connects: settle the button to a check, auto-start the
         # portal (no manual click), and bring the earbuds back — full steady
         # state without another button press. Clearing broadcasting/_pair_
@@ -3200,6 +5091,16 @@ class App:
             self._auto_conn_last = 0.0
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("iPad paired — reconnecting the earbuds")
+        if mac_connected and self.mac_broadcasting:
+            threading.Thread(
+                target=set_target_advertising, args=("mac", False),
+                daemon=True).start()
+            self.mac_broadcasting = False
+            self._mac_pair_inflight = False
+            if not (self.portal_proc and self.portal_proc.poll() is None):
+                self.toggle_portal()
+                _emit("event", "Managed Mac paired — portal auto-started.")
+            on = bool(self.portal_proc and self.portal_proc.poll() is None)
         # an abandoned broadcast must not suppress auto-reconnect forever
         if (self.broadcasting or self._pair_inflight) and \
                 time.time() - self._broadcast_started > 300:
@@ -3218,6 +5119,18 @@ class App:
             self._auto_conn_last = 0.0
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("broadcast expired — restoring audio")
+        if (self.mac_broadcasting or self._mac_pair_inflight) and \
+                time.time() - getattr(
+                    self, "_mac_broadcast_started", time.time()) > 300:
+            threading.Thread(
+                target=set_target_advertising, args=("mac", False),
+                daemon=True).start()
+            self.mac_broadcasting = False
+            self._mac_pair_inflight = False
+            _emit(
+                "event",
+                "managed Mac advertising window expired — press Pair or "
+                "Connect again when ready.")
         # secondary status readout — set AFTER the connect-edge auto-start so
         # `on` reflects the portal we may have just started this tick
         try:
@@ -3225,6 +5138,8 @@ class App:
                 f"VM {'● up' if running else '○ down'}    "
                 f"keyboard {'● up' if st is not None else '○ down'}"
                 f"{'  (iPad subscribed)' if (st and st.get('kbd_subscribed')) else ''}"
+                f"    Mac {'● up' if mac_st is not None else '○ down'}"
+                f"{' (subscribed)' if mac_connected else ''}"
                 f"    audio {'● on' if aud else '○ off'}"
                 f"    portal {'● on' if on else '○ off'}")
         except Exception:  # noqa: BLE001
@@ -3242,6 +5157,7 @@ class App:
         self.c_stat["vm"].config(fg=colors[bool(running)])
         self.c_stat["ipad"].config(
             fg=colors[bool(st and st.get("kbd_subscribed"))])
+        self.c_stat["mac"].config(fg=colors[mac_connected])
         self.c_stat["audio"].config(fg=colors[bool(aud)])
         self.c_stat["portal"].config(fg=colors[bool(on)])
         self.c_ready.config(text=r_txt, fg=r_col)
@@ -3266,6 +5182,7 @@ class App:
                                    fg=(ACCENT if on else MUTED))
         cur = self.status.get()
         if not self.broadcasting and not self._pair_inflight \
+                and not self.mac_broadcasting and not self._mac_pair_inflight \
                 and "fail" not in cur.lower() and "didn't" not in cur:
             if not running:
                 self.status.set("Bridge stopped — click Bridge VM to start.")
@@ -3273,9 +5190,12 @@ class App:
                 self.status.set("Booting the bridge… (~90s)")
             elif connected:
                 self.status.set("iPad connected — keyboard & mouse bridging.")
+            elif mac_connected:
+                self.status.set(
+                    "Managed Mac connected — keyboard & mouse bridging.")
             else:
-                self.status.set("Ready — press Pair (new) or Connect "
-                                "(paired) for the iPad.")
+                self.status.set(
+                    "Ready — pair or connect the iPad or managed Mac.")
         # the Pair button stays a static "Pair"; connection state is shown by the
         # indicator colours + which of Connect/Disconnect/Unpair are enabled.
         self.vm_btn.config(text="Bridge VM ✓" if running
@@ -3301,6 +5221,17 @@ def _single_instance_lock():
         return True  # never block startup if the mutex mechanism is unavailable
 
 
+def _release_single_instance_lock(lock):
+    """Release the startup mutex before launching the elevated replacement."""
+    if not lock or lock is True:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(lock)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_app():
     """The GUI entry point — used by both `python openspan.py` and the
     frozen OpenSpan.exe (via openspan_launcher.py)."""
@@ -3310,37 +5241,27 @@ def run_app():
         # window or block on a dialog
         sys.exit(0)
 
-    ensure_ssh_key()  # a fresh clone has no id_openspan; make one before
-    #                   anything tries to ssh into the VM
+    # This decision must precede ensure_ssh_key and App(...): App construction
+    # starts the VM/audio workers. Close therefore means a truly inert exit.
+    if not is_elevated():
+        startup_choice = _elevation_gate()
+        if startup_choice == "close":
+            return
+        if startup_choice == "restart":
+            _release_single_instance_lock(lock)
+            if not _launch_elevated():
+                _show_elevation_launch_failed()
+            return
+
+    key_ok = ensure_ssh_key()  # make + secure it before any guest operation
     root = tk.Tk()
     app = App(root)
-    # UIPI: a non-elevated OpenSpan gets NO input hooks while an elevated
-    # window has focus -- the mouse silently stops crossing, with nothing in
-    # any log. Say it plainly up front instead of failing mysteriously later.
-    if not is_elevated():
-        root.after(800, lambda: _warn_not_elevated(app))
+    if not key_ok:
+        _emit("err", "Bridge SSH key setup failed. Guest actions are disabled; "
+                     "check id_openspan permissions and restart OpenSpan.")
     # X asks first (it's a FULL STOP: portal + audio + VM), and offers
     # "send to system tray" to keep the bridge running instead
     root.protocol("WM_DELETE_WINDOW", app._confirm_close)
     root.mainloop()
-
-
-def _warn_not_elevated(app):
-    _emit("err", "NOT running as administrator. Windows (UIPI) will not give "
-                 "OpenSpan keyboard/mouse events while an ELEVATED window has "
-                 "focus — the mouse silently stops crossing to the iPad, with "
-                 "no error anywhere. If you run ANY app as admin, run OpenSpan "
-                 "as admin too.")
-    dark_alert(
-        app.root, "Run OpenSpan as administrator",
-        "OpenSpan is not running as administrator.\n\n"
-        "Windows blocks input hooks from a lower-privilege process. So if any "
-        "app you use runs as admin (an elevated terminal, for example), the "
-        "mouse will silently stop crossing to the iPad whenever that window "
-        "has focus — with no error shown anywhere.\n\n"
-        "If you run anything as admin, close OpenSpan and relaunch it with "
-        "\"Run as administrator\".")
-
-
 if __name__ == "__main__":
     run_app()

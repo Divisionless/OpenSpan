@@ -37,7 +37,11 @@ echo "== config files in place =="
 for f in /etc/bluetooth/main.conf \
          /usr/share/wireplumber/bluetooth.lua.d/50-bluez-config.lua \
          /etc/modprobe.d/btusb-noautosuspend.conf \
-         /opt/openspan/openspan_ble.py /opt/openspan/udp_to_sink.py; do
+         /lib/firmware/rtl_bt/rtl8761bu_fw.bin \
+         /opt/openspan/openspan_ble.py /opt/openspan/openspan_bt.py \
+         /opt/openspan/set-hid-radio.sh /opt/openspan/set-hid-target.sh \
+         /etc/systemd/system/openspanble-mac.service \
+         /opt/openspan/udp_to_sink.py; do
   [ -f "$f" ] && ok "$f" || bad "$f MISSING"
 done
 grep -q 'suspend-timeout-seconds"\] = 0' \

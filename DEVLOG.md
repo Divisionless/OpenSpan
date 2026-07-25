@@ -26,6 +26,26 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
 
 ## Rough timeline
 
+### Jul 24 — independent managed-Mac lane
+- The three-radio bench passed: iPad input, Bluetooth audio, and controller
+  isolation all worked after restart.
+- Added a second BLE HID daemon on TCP `9956`, advertised as **OpenSpan Mac
+  Control**, with its own controller assignment, bond, subscription state, and
+  Pair/Connect/Disconnect/Unpair controls. The original iPad daemon and the
+  single-radio compatibility path remain intact.
+- The arrangement canvas now holds Windows monitors, the iPad, and individual
+  managed-Mac displays. Display resolution, refresh rate, rotation, and
+  physical/layout size are independent. The default Mac profile is three 4K
+  displays with two rotated 90°; any display can be changed manually to 2K or
+  another mode.
+- Bluetooth-only limitation kept explicit: no companion software is installed
+  on the Mac. OpenSpan knows the configured desk/display geometry and sends
+  standard relative HID input; it cannot read the Mac's authoritative cursor
+  position back over the HID link.
+- Live verification found that older VM clones had no host forwarding rule for
+  the second daemon. The app now self-heals TCP `9956` on a running or stopped
+  VM, and newly created VMs include the rule from the start.
+
 ### ~Jul 5–6 — getting audio to survive
 - Goal: route Windows audio to BT earbuds through the VM, and have it *stay*.
 - **Bruise:** first cut ran the audio stack on a hand-rolled `dbus-daemon`.
@@ -301,6 +321,104 @@ instead: Windows relocates the existing pixels with no invalidation, so there is
 nothing to repaint and nothing to starve. Smooth — and still safe from the
 reentrancy rule, because it is a synchronous Win32 call from a normal callback,
 with no modal move loop.
+
+---
+
+## Multi-radio without sacrificing the one-radio build
+
+Multi-device support is an opt-in layer over the shipped single-radio path.
+`radio_mode = single` remains the default and still calls the original
+`bluetoothctl` scripts. In Multiple radios mode, BlueZ controllers are
+enumerated with their stable MAC addresses and USB hardware names; the iPad
+keyboard, scan target, and each discovered device can be assigned separately.
+The UI stores assignments by controller MAC rather than `hciN`, because Linux
+is free to renumber adapters after any reboot.
+
+Every multi-radio action is controller-scoped through `openspan_bt.py`.
+The HID daemon can move to the selected adapter via a systemd drop-in, while
+the audio pin records `controller|device` (and still reads the old MAC-only
+format). Pairing the iPad only disconnects audio when both are deliberately
+assigned to the same controller. Audio on another controller is left live.
+
+The first bench machine now has all three physical radios live together:
+Intel internal `58:A0:23:CD:6A:B7`, TP-Link 1 `AC:A7:F1:29:9F:CB`, and
+TP-Link 2 `3C:6A:D2:3C:D4:4E`. The two RTL8761BU adapters require Debian's
+`firmware-realtek`. VirtualBox could mark both dongles captured at VM startup
+without actually attaching them; re-enumerating their shared external USB hub
+after the VM filters are listening makes both proxy devices appear. The app
+now performs that narrow recovery only in multi-radio mode and only for a
+shared external hub containing two filtered radios. Root hubs and the default
+single-radio path are never cycled.
+
+The saved HID choice remains a controller MAC. Every app startup re-resolves
+that MAC to the current `hciN`, updates the daemon drop-in, and applies the
+15-30 ms mouse interval to the resolved controller. This prevents Linux radio
+renumbering from silently moving the iPad lane after a reboot. The internal
+Intel bonds were preserved as the backup lane throughout the bench work.
+
+The packed app also needed `PYINSTALLER_RESET_ENVIRONMENT=1` for its independent
+audio, portal, and elevated-replacement roles. Without it, a child could share
+the main one-file `_MEI` directory and display "Failed to remove temporary
+directory" when it exited. The roles now unpack independently.
+
+Hardware inventory, passthrough, controller isolation, HID-daemon assignment,
+and service bring-up are confirmed. The remaining live hardware test is the
+first fresh iPad bond on TP-Link 1 followed by simultaneous headphone pairing
+on TP-Link 2; the preserved Intel lane remains available for the original
+single-radio behavior.
+
+## Display-editor crash and duplicate Apple bond hardening
+
+Repeated display arrangement crashes were native access violations in
+`_ctypes.pyd`, not damaged monitor geometry. The main window had replaced Tk's
+native Windows procedure with a Python `ctypes` callback to implement a
+frameless title bar. High-volume move/resize messages could reach that callback
+after its safe lifetime and take down the main process without a Python
+traceback. The app now keeps Tk's native window procedure and applies only the
+safe DWM dark-titlebar painting. A live soak then exposed the same failure in
+the remaining pure-ctypes tray WNDPROC, despite its short packaged self-test
+passing. Runtime tray creation is therefore disabled: Minimize now uses the
+native taskbar and keeps the bridge warm without another Python Windows
+callback. This also eliminates duplicate OpenSpan notification icons. Frozen
+audio and portal roles are stopped as full process trees, preventing one-file
+child processes from surviving a UI crash or restart.
+
+The main UI's compact volume reader was another `_ctypes` risk: it repeatedly
+discarded and rebuilt Core Audio `comtypes` pointers. Core Audio now lives only
+in the isolated audio role. The app's volume slider writes a small persisted
+gain file that the sender applies alongside the normal Windows master volume,
+so the control remains functional without COM pointers in the UI process.
+
+The first Mac-lane test also exposed one iPad central bonded to both the iPad
+and Mac controllers. Mac pairing now rejects and removes iPad/iPhone/iPod bonds
+from the dedicated Mac controller, and Mac paired status ignores both mobile
+devices and audio devices. The two HID lanes now publish different PnP product
+IDs plus lane-specific model and serial characteristics, so Apple hosts can
+cache them as distinct accessories. The original single-radio path and Intel
+iPad bond remain unchanged.
+
+## Independent device lanes and multi-edge travel
+
+The first successful simultaneous iPad/Mac session revealed one remaining
+legacy coupling: iPad Disconnect/Unpair stopped the single Windows input-router
+process, which made the still-connected Mac look unpaired. Bluetooth had stayed
+controller-scoped, but control disappeared. The router now remains alive and
+maintains independent daemon/socket readiness per target. iPad and Mac unpair
+commands are also identity-filtered as well as controller-scoped, so each verb
+can remove only its intended class of host.
+
+The desk layout now produces a directed adjacency graph across every shared
+display edge, not just a list of target-to-PC entrances. One hook broker routes
+both independent target channels (two competing low-level-hook processes would
+steal or duplicate input). While captured, it tracks the cursor through the
+configured physical/resolution geometry, follows Mac display-to-display edges,
+hands directly between iPad and Mac when their rectangles touch, and returns to
+the correct Windows monitor through any shared PC edge.
+
+Dragging also solves horizontal and vertical snaps together. A device can now
+stick to two neighbors in one release—for example, the iPad's right edge against
+the PC and its top edge against Mac Display 2. All active PC↔target and
+target↔target segments are drawn with the same yellow portal line.
 
 ---
 
