@@ -75,7 +75,6 @@ MOUSE_SENS = float(_SETTINGS.get("mouse_sensitivity", 1.0))
 # bridge (keeps this PC's radio free for headphones).
 DAEMON_HOST = _SETTINGS.get("daemon_host", "127.0.0.1")
 DEFAULT_DAEMON_PORT = int(_SETTINGS.get("daemon_port", 9955))
-MAC_DAEMON_PORT = int(_SETTINGS.get("mac_daemon_port", 9956))
 
 # Scroll-wheel direction. Read LIVE from openspan_settings.json so the app's
 # "Invert scroll" toggle applies without restarting the portal. A tiny watcher
@@ -222,39 +221,12 @@ def load_portals():
     """
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
-    if int(cfg.get("version", 1)) >= 2 and cfg.get("targets"):
+    # Every entrance point is derived from the device list -- there is no
+    # per-device-type portal builder. A config with no devices simply has no
+    # entrances (nothing to route to), which is a valid, quiet state.
+    if cfg.get("devices"):
         return cfg, compute_portals(cfg)
-    ip = cfg["ipad"]
-    mons = {m["name"]: m for m in cfg["monitors"]}
-    portals = []
-    for p in cfg.get("portals", []):
-        m = mons[p["monitor"]]
-        edge, lo, hi = p["edge"], p["lo"], p["hi"]
-        if edge == "ipad-left":       # iPad right of monitor
-            portals.append(dict(target="ipad", target_name="iPad",
-                                daemon_port=DEFAULT_DAEMON_PORT,
-                                axis="x", line=m["x"] + m["w"] - 1,
-                                span=(lo, hi), span_axis="y", sign=+1,
-                                exit_to=(m["x"] + m["w"] - 3, None)))
-        elif edge == "ipad-right":    # iPad left of monitor
-            portals.append(dict(target="ipad", target_name="iPad",
-                                daemon_port=DEFAULT_DAEMON_PORT,
-                                axis="x", line=m["x"],
-                                span=(lo, hi), span_axis="y", sign=-1,
-                                exit_to=(m["x"] + 3, None)))
-        elif edge == "ipad-top":      # iPad below monitor
-            portals.append(dict(target="ipad", target_name="iPad",
-                                daemon_port=DEFAULT_DAEMON_PORT,
-                                axis="y", line=m["y"] + m["h"] - 1,
-                                span=(lo, hi), span_axis="x", sign=+1,
-                                exit_to=(None, m["y"] + m["h"] - 3)))
-        elif edge == "ipad-bottom":   # iPad above monitor
-            portals.append(dict(target="ipad", target_name="iPad",
-                                daemon_port=DEFAULT_DAEMON_PORT,
-                                axis="y", line=m["y"],
-                                span=(lo, hi), span_axis="x", sign=-1,
-                                exit_to=(None, m["y"] + 3)))
-    return cfg, portals
+    return cfg, []
 
 
 class Portal:
@@ -263,7 +235,7 @@ class Portal:
         self.links = compute_adjacencies(self.cfg)
         self._displays = {
             (target["id"], display["id"]): display
-            for target in self.cfg.get("targets", [])
+            for device in self.cfg.get("devices", [])
             if target.get("enabled", True)
             for display in target.get("displays", [])
         }
@@ -287,23 +259,23 @@ class Portal:
         self.active_display = None
         self.vx = 0.0
         self.vy = 0.0
-        # Settings WIN for the two known lanes. normalize_config() bakes the
-        # constant 9955/9956 into the config, so reading the port from the
-        # config alone ignored a customised daemon_port/mac_daemon_port -- the
-        # app would talk to the new port while the portal kept dialling the old
-        # one, leaving every edge shut with the UI showing "connected".
-        _lane_default = {"ipad": DEFAULT_DAEMON_PORT, "mac": MAC_DAEMON_PORT}
+        # Each device carries its OWN port -- its own entrance point. No lane
+        # is special-cased and no port is reserved for a kind of device.
         self._target_ports = {
-            target["id"]: int(
-                _lane_default.get(
-                    target["id"],
-                    target.get("daemon_port", DEFAULT_DAEMON_PORT)))
-            for target in self.cfg.get("targets", [])
-            if target.get("enabled", True)
+            device["id"]: int(device.get("port", DEFAULT_DAEMON_PORT))
+            for device in self.cfg.get("devices", [])
+            if device.get("enabled", True)
+        }
+        # Which devices opted into the clipboard bridge. Replaces the old
+        # `active_target == "ipad"` test so the feature follows a capability,
+        # not a hardcoded device name.
+        self._clipboard_devices = {
+            device["id"]: bool(device.get("clipboard", False))
+            for device in self.cfg.get("devices", [])
         }
         if not self._target_ports:
             self._target_ports = {
-                portal.get("target", "ipad"): int(
+                portal.get("target"): int(
                     portal.get("daemon_port", DEFAULT_DAEMON_PORT))
                 for portal in self.portals
             }
@@ -447,7 +419,7 @@ class Portal:
 
     def _entry_point(self, portal, along):
         display = self._displays.get((
-            portal.get("target", "ipad"), portal.get("target_display")))
+            portal.get("target"), portal.get("target_display")))
         if not display:
             return 0.0, 0.0
         x, y = float(display["x"]), float(display["y"])
@@ -614,7 +586,7 @@ class Portal:
     def enter(self, portal, along):
         self.active = True
         self.cur = portal
-        self.active_target = portal.get("target", "ipad")
+        self.active_target = portal.get("target")
         self.active_display = portal.get("target_display")
         self.entry_along = along
         self.perp = ENTER_MARGIN
@@ -628,7 +600,7 @@ class Portal:
         # "Paste from PC" shortcut) -- so a plain Ctrl(=Cmd)+V on the iPad
         # always pastes the newest copy from EITHER machine
         seq = _clip_seq()
-        if self.active_target == "ipad" and seq != self._last_sync_seq:
+        if self._clipboard_devices.get(self.active_target)                 and seq != self._last_sync_seq:
             self._last_sync_seq = seq
             print("[portal] syncing the PC clipboard to the iPad")
             threading.Timer(
@@ -648,7 +620,7 @@ class Portal:
         # portal keeps running but goes deaf, and edge crossings stop working
         # until a restart reinstalls the hook. The sender thread owns the
         # socket and is the only place allowed to block on it.
-        target = self.active_target or "ipad"
+        target = self.active_target
         self.q.put((target, "k", 0, [], 0))
         self.q.put((target, "b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
@@ -670,7 +642,7 @@ class Portal:
 
     def _hit_portal(self, x, y):
         for p in self.portals:
-            if not self.target_ready.get(p.get("target", "ipad"), False):
+            if not self.target_ready.get(p.get("target"), False):
                 continue
             if p["axis"] == "x" and abs(x - p["line"]) <= 1:
                 lo, hi = p["span"]
@@ -763,7 +735,7 @@ class Portal:
                     ready = next(
                         (portal for portal in self.portals
                          if self.target_ready.get(
-                             portal.get("target", "ipad"), False)),
+                             portal.get("target"), False)),
                         None)
                     if ready:
                         self.enter(ready, self.cy)
@@ -774,14 +746,14 @@ class Portal:
             if down and vk == 0x56 and ctrl and alt and shift:
                 # Ctrl+Alt+Shift+V: tell the iPad to FETCH the PC clipboard
                 # (runs its "Paste from PC" shortcut via the FKA chord)
-                if self.active_target == "ipad" and self._chord_armed(vk):
+                if self._clipboard_devices.get(self.active_target) and self._chord_armed(vk):
                     print("[portal] asking iPad to fetch the PC clipboard")
                     self._send_chord(FKA_FETCH)
                 return 1
             if down and vk == 0x43 and ctrl and alt and shift:
                 # Ctrl+Alt+Shift+C: tell the iPad to PUSH its clipboard to
                 # the PC (runs its "Copy to PC" shortcut via the FKA chord)
-                if self.active_target == "ipad" and self._chord_armed(vk):
+                if self._clipboard_devices.get(self.active_target) and self._chord_armed(vk):
                     print("[portal] asking iPad to push its clipboard to "
                           "the PC")
                     self._send_chord(FKA_PUSH)
@@ -811,7 +783,7 @@ class Portal:
                 # (Ctrl+C/X, remapped to Cmd by the keymap) also pushes the
                 # iPad clipboard back to the PC, so crossing back and
                 # hitting Ctrl+V on Windows just works
-                if self.active_target == "ipad" and down \
+                if self._clipboard_devices.get(self.active_target) and down \
                         and vk in (0x43, 0x58) and ctrl and not alt:
                     self._schedule_push()
                 return 1
@@ -874,7 +846,7 @@ class Portal:
         mods, usage = chord
         self._last_chord = now
         self._chord_until = now + FKA_HOLD + 0.05
-        target = self.active_target or "ipad"
+        target = self.active_target
         self.q.put((target, "k", mods, [usage], 0))
 
         def finish():
@@ -931,7 +903,7 @@ class Portal:
                     target, kind, a, b, c = self.q.get_nowait()
                 except queue.Empty:
                     break
-                target = target or "ipad"
+                target = target or self.active_target
                 batch = batches.setdefault(target, {
                     "dx": 0, "dy": 0, "wheel": 0,
                     "button": False, "keys": [], "texts": [],

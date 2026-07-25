@@ -25,9 +25,9 @@ from tkinter import ttk, messagebox, simpledialog
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
-    compute_adjacencies, compute_portals, normalize_config,
-    oriented_resolution, rotate_display, set_layout_width,
-    snap_rect_to_neighbors, sync_legacy_ipad, target_by_id,
+    BASE_PORT, add_device, compute_adjacencies, compute_portals, device_by_id,
+    normalize_config, oriented_resolution, refresh_geometry, remove_device,
+    rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
 )
 
@@ -64,10 +64,55 @@ DAEMON = (
     or "127.0.0.1",
     int(_BOOT_SETTINGS.get("daemon_port", 9955)),
 )
-TARGET_DAEMONS = {
-    "ipad": DAEMON,
-    "mac": (DAEMON[0], int(_BOOT_SETTINGS.get("mac_daemon_port", 9956))),
-}
+def target_daemons(config):
+    """{device_id: (host, port)} built from the CONFIG -- every device owns its
+    own entrance point. Nothing is keyed by a device type, and no port is
+    reserved: whatever the user created is what gets a lane."""
+    return {
+        device["id"]: (DAEMON[0], int(device.get("port", BASE_PORT)))
+        for device in (config or {}).get("devices", [])
+        if device.get("enabled", True)
+    }
+
+
+_DEVICE_ENDPOINTS = {}
+
+
+def live_config():
+    """Read the config from disk. Module-level helpers (VM start, daemon
+    probes) run without the App instance, so the file is the shared truth."""
+    try:
+        with open(CONFIG, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def set_device_endpoints(config):
+    """Publish the current device->port map for the module-level helpers."""
+    global _DEVICE_ENDPOINTS
+    _DEVICE_ENDPOINTS = target_daemons(config)
+    return _DEVICE_ENDPOINTS
+
+
+def _device_endpoint(device_id):
+    endpoint = _DEVICE_ENDPOINTS.get(device_id)
+    if endpoint:
+        return endpoint
+    for device in live_config().get("devices", []):
+        if device.get("id") == device_id:
+            return (DAEMON[0], int(device.get("port", BASE_PORT)))
+    return DAEMON
+
+
+def first_device_id(config=None):
+    """The first enabled device, or None. Used where a call has no explicit
+    device -- never assumes a particular one exists."""
+    devices = (config or live_config()).get("devices", [])
+    for device in devices:
+        if device.get("enabled", True):
+            return device.get("id")
+    return None
 KEY = os.path.join(ROOT, "id_openspan")
 KEYMAP = os.path.join(ROOT, "openspan_keymap.json")
 CONFIG = os.path.join(ROOT, "openspan_config.json")
@@ -547,28 +592,36 @@ def _has_nat_forward(info, host_port, guest_port):
     return False
 
 
-def ensure_mac_daemon_forward(info=None):
-    """Expose the independent Mac HID daemon through this VM's NAT adapter.
+def ensure_device_forwards(config, info=None):
+    """Expose EVERY device's daemon port through this VM's NAT adapter.
 
-    Older OpenSpan VMs predate the 9956 lane. Add it live when the VM is
-    running, or persist it before the next start when the VM is powered off.
-    Existing rules are left untouched.
+    One rule per device -- each is an independent entrance point. Added live
+    when the VM is running, or persisted before the next start when it is
+    powered off. Existing rules are left untouched.
     """
-    host, port = TARGET_DAEMONS["mac"]
-    if host not in ("127.0.0.1", "localhost"):
-        return True
+    ok = True
     if info is None:
         info = vbox("showvminfo", VM, "--machinereadable",
                     quiet=True).stdout or ""
+    for device_id, (host, port) in target_daemons(config).items():
+        if host not in ("127.0.0.1", "localhost"):
+            continue
+        if not _ensure_one_forward(device_id, port, info):
+            ok = False
+    return ok
+
+
+def _ensure_one_forward(device_id, port, info):
     if _has_nat_forward(info, port, port):
         return True
-    rule = f"mac-hid,tcp,127.0.0.1,{port},,{port}"
+    # rule names must be unique per VM and stable across restarts
+    rule = f"osp-{device_id},tcp,127.0.0.1,{port},,{port}"
     if 'VMState="running"' in info:
         result = vbox("controlvm", VM, "natpf1", rule, quiet=True)
     else:
         result = vbox("modifyvm", VM, "--natpf1", rule, quiet=True)
     if result.returncode == 0:
-        _emit("ok", f"managed Mac control port {port} is ready.")
+        _emit("ok", f"device control port {port} is ready.")
         return True
     # A concurrent startup path may have installed it between our check and
     # command. Re-read before reporting a failure.
@@ -577,8 +630,8 @@ def ensure_mac_daemon_forward(info=None):
     if _has_nat_forward(refreshed, port, port):
         return True
     detail = (result.stderr or result.stdout or "").strip()
-    _emit("err", "couldn't expose the managed Mac control port: "
-                  + detail[-180:])
+    _emit("err", f"couldn't expose device control port {port}: "
+                 + detail[-180:])
     return False
 
 
@@ -765,15 +818,15 @@ def start_vm_clean():
     if 'VMState="saved"' in info:
         vbox("discardstate", VM)
         info = None
-    ensure_mac_daemon_forward(info)
+    ensure_device_forwards(live_config(), info)
     result = vbox("startvm", VM, "--type", "headless")
     if result.returncode == 0:
         _rearm_multi_radio_hubs(rearm_hubs)
 
 
-def target_daemon_status(target="ipad"):
+def target_daemon_status(target=None):
     try:
-        endpoint = TARGET_DAEMONS.get(target, DAEMON)
+        endpoint = _device_endpoint(target)
         s = socket.create_connection(endpoint, 2)
         s.sendall(b'{"cmd":"status"}\n')
         s.settimeout(2)
@@ -799,7 +852,7 @@ def daemon_status():
 def target_daemon_cmd(target, obj, timeout=2):
     """Send one command to the daemon and return its reply (or None)."""
     try:
-        endpoint = TARGET_DAEMONS.get(target, DAEMON)
+        endpoint = _device_endpoint(target)
         s = socket.create_connection(endpoint, 2)
         s.sendall((json.dumps(obj) + "\n").encode())
         s.settimeout(timeout)
@@ -1618,12 +1671,18 @@ class MultiArrangeCanvas(tk.Canvas):
             pass
         self.config = normalize_config(raw, live)
         self.monitors = self.config["monitors"]
-        self.targets = self.config["targets"]
-        ipad = target_by_id(self.config, "ipad")
-        self.ipad = ipad["displays"][0]
-        self.target_states = {"ipad": "off", "mac": "off"}
+        self.targets = self.config["devices"]
+        # No device is privileged. `ipad` here is simply "the first display of
+        # the first device" -- a convenience handle for the legacy single-device
+        # helpers below; it is None when the user has not added a device yet.
+        self.ipad = None
+        self.selected = None
+        if self.targets and self.targets[0].get("displays"):
+            self.ipad = self.targets[0]["displays"][0]
+            self.selected = ("target", self.targets[0]["id"], self.ipad["id"])
+        self.target_states = {
+            device["id"]: "off" for device in self.targets}
         self.ipad_state = "off"  # compatibility for existing tests/callers
-        self.selected = ("target", "ipad", self.ipad["id"])
         self.action = None
         self.drag_off = (0, 0)
         self._resize_anchor = None
@@ -1638,9 +1697,37 @@ class MultiArrangeCanvas(tk.Canvas):
         self._persist()
 
     def target(self, target_id):
-        return target_by_id(self.config, target_id)
+        return device_by_id(self.config, target_id)
+
+    def devices(self):
+        return self.config.setdefault("devices", [])
+
+    def add_device(self, name=None):
+        device = add_device(self.config, name, self.monitors)
+        self.target_states.setdefault(device["id"], "off")
+        self.redraw()
+        self.save()
+        return device
+
+    def remove_device(self, device_id):
+        removed = remove_device(self.config, device_id)
+        self.target_states.pop(device_id, None)
+        if self.selected and self.selected[1] == device_id:
+            self.selected = None
+        self.targets = self.config["devices"]
+        if self.ipad is not None and not any(
+                self.ipad is d for t in self.targets
+                for d in t.get("displays", [])):
+            self.ipad = (self.targets[0]["displays"][0]
+                         if self.targets and self.targets[0].get("displays")
+                         else None)
+        self.redraw()
+        self.save()
+        return removed
 
     def set_ipad_size(self, width, height):
+        if self.ipad is None:
+            return
         self.ipad["res_w"] = int(width)
         self.ipad["res_h"] = int(height)
         self.ipad["rotation"] = 0
@@ -1660,17 +1747,23 @@ class MultiArrangeCanvas(tk.Canvas):
         self.set_target_state("ipad", live, paired)
 
     def rotate(self):
+        if self.ipad is None:
+            return
         rotate_display(self.ipad)
         self.redraw()
         self.save()
 
-    def mac_displays(self):
-        target = self.target("mac")
+    def mac_displays(self, device_id=None):
+        target = self.target(device_id) if device_id else (
+            self.targets[0] if self.targets else None)
         return target["displays"] if target else []
 
-    def replace_mac_displays(self, rows):
+    def replace_mac_displays(self, rows, device_id=None):
         rows = validate_mac_displays(rows)
-        target = self.target("mac")
+        target = self.target(device_id) if device_id else (
+            self.targets[0] if self.targets else None)
+        if target is None:
+            return
         old = list(target.get("displays", []))
         primary = next(
             (m for m in self.monitors if m.get("primary")), self.monitors[0])
@@ -1994,7 +2087,6 @@ class MultiArrangeCanvas(tk.Canvas):
         self.save()
 
     def save(self):
-        sync_legacy_ipad(self.config)
         before = json.dumps([self.config.get("portals"),
                              self.config.get("links")], sort_keys=True)
         self.config["portals"] = compute_portals(self.config)
@@ -4322,7 +4414,7 @@ class App:
                 threading.Event().wait(3)
             if not reachable:
                 return
-            ensure_mac_daemon_forward()
+            ensure_device_forwards(self.canvas.config)
             _emit("event", "VM reachable — syncing guest scripts…")
             # idempotent guest prep: keep the journal ON DISK so Bluetooth
             # events survive a VM power-off -- without this, a "Broadcast

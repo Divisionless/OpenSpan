@@ -19,9 +19,12 @@ from __future__ import annotations
 import copy
 
 
-CONFIG_VERSION = 2
-IPAD_PORT = 9955
-MAC_PORT = 9956
+CONFIG_VERSION = 3
+# Devices are AGNOSTIC. There is no "iPad" and no "managed Mac" in this model --
+# only N devices, each enumerated exactly as the user describes it, each owning
+# its own lane: a radio (controller MAC), a daemon port, and its own displays.
+# Ports are allocated from BASE_PORT upward; nothing is reserved for a "kind".
+BASE_PORT = 9955
 MIN_LAYOUT_SIZE = 120
 
 
@@ -61,69 +64,84 @@ def rotate_display(display, rotation=None):
     return display
 
 
-def _default_ipad(live_monitors, legacy=None):
-    primary = next(
-        (m for m in live_monitors if m.get("primary")), live_monitors[0])
-    old = dict(legacy or {})
-    old.setdefault("x", primary["x"] + primary["w"])
-    old.setdefault("y", primary["y"])
-    old.setdefault("w", 1080)
-    old.setdefault("h", 810)
-    old.setdefault("res_w", 1080)
-    old.setdefault("res_h", 810)
-    old.setdefault("rotation", 0)
-    old.update({
-        "id": "ipad-main",
-        "name": "iPad",
-        "refresh_hz": int(old.get("refresh_hz", 60)),
-    })
-    return {
-        "id": "ipad",
-        "name": "iPad",
-        "kind": "ipad",
-        "daemon_port": IPAD_PORT,
-        "enabled": True,
-        "displays": [old],
-    }
+def allocate_port(config, taken=None):
+    """First free daemon port at or above BASE_PORT. Ports are handed out in
+    order of creation -- no port is reserved for any particular sort of device."""
+    used = set(taken or ())
+    used.update(
+        int(device.get("port", 0)) for device in config.get("devices", []))
+    port = BASE_PORT
+    while port in used:
+        port += 1
+    return port
 
 
-def _default_mac(live_monitors):
-    primary = next(
-        (m for m in live_monitors if m.get("primary")), live_monitors[0])
-    bottom = max(
-        int(m.get("layout_y", m["y"]))
-        + int(m.get("layout_h", m["h"]))
-        for m in live_monitors)
-    base_x = int(primary.get("layout_x", primary["x"]))
-    specs = [
-        ("mac-1", "Mac Display 1", 90, 540, 960),
-        ("mac-2", "Mac Display 2", 0, 960, 540),
-        ("mac-3", "Mac Display 3", 90, 540, 960),
-    ]
-    displays = []
-    cursor_x = base_x
-    for ident, name, rotation, width, height in specs:
-        displays.append({
-            "id": ident,
-            "name": name,
-            "x": cursor_x,
-            "y": bottom,
-            "w": width,
-            "h": height,
-            "res_w": 3840,
-            "res_h": 2160,
-            "refresh_hz": 60,
-            "rotation": rotation,
-        })
-        cursor_x += width
+def allocate_device_id(config, taken=None):
+    """Opaque, stable device id. Deliberately meaningless -- the human-readable
+    label lives in `name`, so renaming a device never rewrites its identity
+    (and therefore never orphans its bonds, port, or saved geometry)."""
+    used = {str(device.get("id")) for device in config.get("devices", [])}
+    used.update(str(t) for t in (taken or ()))
+    index = 1
+    while f"device-{index}" in used:
+        index += 1
+    return f"device-{index}"
+
+
+def new_device(config, name=None, live_monitors=None, displays=None):
+    """Build a device with ONE display, placed to the right of everything that
+    already exists so it never lands on top of another surface (or on the
+    taskbar edge). Every value here is a neutral starting point the user edits --
+    no resolution, count, or rotation is assumed from anyone's hardware."""
+    device_id = allocate_device_id(config)
+    surfaces = layout_surfaces(config)
+    if surfaces:
+        # layout_surfaces returns {"rect": [x, y, w, h]}
+        right = max(int(s["rect"][0]) + int(s["rect"][2]) for s in surfaces)
+        top = min(int(s["rect"][1]) for s in surfaces)
+    elif live_monitors:
+        right = max(int(m.get("layout_x", m["x"]))
+                    + int(m.get("layout_w", m["w"])) for m in live_monitors)
+        top = min(int(m.get("layout_y", m["y"])) for m in live_monitors)
+    else:
+        right, top = 0, 0
+    if displays is None:
+        displays = [_normalize_display(
+            {"x": right, "y": top, "res_w": 1920, "res_h": 1080},
+            f"{device_id}-1", "Display 1")]
     return {
-        "id": "mac",
-        "name": "Managed Mac",
-        "kind": "mac",
-        "daemon_port": MAC_PORT,
+        "id": device_id,
+        "name": str(name or "New device"),
+        "port": allocate_port(config),
+        "radio": "",          # controller MAC; "" = not assigned yet
         "enabled": True,
+        "clipboard": False,   # opt-in; needs helper shortcuts on the device
+
         "displays": displays,
     }
+
+
+def add_device(config, name=None, live_monitors=None):
+    device = new_device(config, name=name, live_monitors=live_monitors)
+    config.setdefault("devices", []).append(device)
+    refresh_geometry(config)
+    return device
+
+
+def remove_device(config, device_id):
+    before = len(config.get("devices", []))
+    config["devices"] = [
+        device for device in config.get("devices", [])
+        if device.get("id") != device_id]
+    refresh_geometry(config)
+    return len(config.get("devices", [])) != before
+
+
+def refresh_geometry(config):
+    """Recompute the derived geometry (entrance points + adjacency graph)."""
+    config["portals"] = compute_portals(config)
+    config["links"] = compute_adjacencies(config)
+    return config
 
 
 def _normalize_monitor(live, saved):
@@ -176,11 +194,37 @@ def normalize_config(raw, live_monitors):
         for row in live_monitors
     ]
 
-    targets = []
-    for index, target in enumerate(raw.get("targets", [])):
+    # v3 reads `devices`. v2 configs carried `targets` (with a hardcoded
+    # ipad/mac kind) and v1 carried a single bare `ipad` rectangle -- both are
+    # migrated in as ordinary devices, keeping their id, name, port and layout
+    # so an existing setup survives the upgrade untouched.
+    raw_devices = raw.get("devices")
+    if not isinstance(raw_devices, list) or not raw_devices:
+        raw_devices = []
+        for legacy in raw.get("targets", []):
+            if isinstance(legacy, dict):
+                migrated = dict(legacy)
+                if migrated.get("kind") == "ipad" or migrated.get("id") == "ipad":
+                    migrated.setdefault("clipboard", True)
+                migrated.pop("kind", None)
+                if "port" not in migrated and "daemon_port" in migrated:
+                    migrated["port"] = migrated.pop("daemon_port")
+                raw_devices.append(migrated)
+        if not raw_devices and isinstance(raw.get("ipad"), dict):
+            raw_devices = [{
+                "id": "device-1",
+                "name": "iPad",
+                "port": BASE_PORT,
+                "displays": [dict(raw["ipad"], id="device-1-1",
+                                  name="Display 1")],
+            }]
+
+    devices = []
+    used_ports = set()
+    for index, target in enumerate(raw_devices):
         if not isinstance(target, dict):
             continue
-        target_id = str(target.get("id") or f"target-{index + 1}")
+        target_id = str(target.get("id") or f"device-{index + 1}")
         displays = [
             _normalize_display(
                 row, f"{target_id}-{i + 1}", f"Display {i + 1}")
@@ -202,83 +246,69 @@ def normalize_config(raw, live_monitors):
                     probe += 1
                 row["id"] = f"{target_id}-{probe}"
             seen_ids.add(row["id"])
-        targets.append({
+        # Every device owns a UNIQUE port: it is its own entrance point (its own
+        # daemon, radio, advertisement and bonds). A collision would put two
+        # devices on one lane, so re-allocate rather than trust the file.
+        port = int(target.get("port", target.get("daemon_port", 0)) or 0)
+        if port <= 0 or port in used_ports:
+            port = allocate_port({"devices": devices}, taken=used_ports)
+        used_ports.add(port)
+        devices.append({
             "id": target_id,
-            "name": str(target.get("name") or target_id.title()),
-            "kind": str(target.get("kind") or target_id),
-            "daemon_port": int(target.get(
-                "daemon_port", IPAD_PORT if target_id == "ipad" else MAC_PORT)),
+            "name": str(target.get("name") or target_id),
+            "port": port,
+            "radio": str(target.get("radio", "") or ""),
             "enabled": bool(target.get("enabled", True)),
+            # Capability, not a device type: the clipboard bridge needs helper
+            # shortcuts installed ON the device, so it is opt-in per device.
+            "clipboard": bool(target.get("clipboard", False)),
             "displays": displays,
         })
 
-    target_ids = {target["id"] for target in targets}
-    if "ipad" not in target_ids:
-        targets.insert(0, _default_ipad(monitors, raw.get("ipad")))
-    if "mac" not in target_ids:
-        targets.append(_default_mac(monitors))
-
+    # NOTHING is fabricated. A config with no devices stays empty and the user
+    # adds what they actually own -- no assumed iPad, no assumed Mac, no
+    # assumed display count, resolution or rotation.
     result = {
         "version": CONFIG_VERSION,
         "monitors": monitors,
-        "targets": targets,
+        "devices": devices,
     }
-    # One-time upgrade for layouts saved before the adjacency graph existed.
-    # Re-run the iPad's snap with the new two-axis solver so a near-touching
-    # second edge (such as Mac above + PC right) becomes a real connection.
+    # One-time upgrade for layouts saved before the adjacency graph existed:
+    # re-run each device's first display through the two-axis snap so a
+    # near-touching second edge becomes a real connection. Applies to every
+    # device equally -- no device is privileged.
     if "links" not in raw:
-        ipad_target = next(
-            (row for row in targets if row.get("id") == "ipad"), None)
-        if ipad_target and ipad_target.get("displays"):
-            ipad_display = ipad_target["displays"][0]
-            rect = (
-                ipad_display["x"], ipad_display["y"],
-                ipad_display["w"], ipad_display["h"])
-            neighbors = []
-            for monitor in monitors:
-                neighbors.append(_monitor_layout(monitor))
-            for target in targets:
-                for display in target.get("displays", []):
-                    if display is ipad_display:
+        for device in devices:
+            if not device.get("displays"):
+                continue
+            head = device["displays"][0]
+            rect = (head["x"], head["y"], head["w"], head["h"])
+            neighbors = [_monitor_layout(monitor) for monitor in monitors]
+            for other in devices:
+                for display in other.get("displays", []):
+                    if display is head:
                         continue
-                    neighbors.append((
-                        display["x"], display["y"],
-                        display["w"], display["h"]))
-            ipad_display["x"], ipad_display["y"] = \
-                snap_rect_to_neighbors(rect, neighbors)
-    # Keep the legacy field current so an older executable can still operate
-    # the iPad if the user rolls back to the proven single-target build.
-    sync_legacy_ipad(result)
-    result["portals"] = compute_portals(result)
-    result["links"] = compute_adjacencies(result)
-    return result
+                    neighbors.append((display["x"], display["y"],
+                                      display["w"], display["h"]))
+            head["x"], head["y"] = snap_rect_to_neighbors(rect, neighbors)
+    return refresh_geometry(result)
 
 
-def target_by_id(config, target_id):
+def device_by_id(config, device_id):
     return next(
-        (target for target in config.get("targets", [])
-         if target.get("id") == target_id),
+        (device for device in config.get("devices", [])
+         if device.get("id") == device_id),
         None)
 
 
-def display_by_id(config, target_id, display_id):
-    target = target_by_id(config, target_id)
-    if not target:
+def display_by_id(config, device_id, display_id):
+    device = device_by_id(config, device_id)
+    if not device:
         return None
     return next(
-        (display for display in target.get("displays", [])
+        (display for display in device.get("displays", [])
          if display.get("id") == display_id),
         None)
-
-
-def sync_legacy_ipad(config):
-    target = target_by_id(config, "ipad")
-    if target and target.get("displays"):
-        display = copy.deepcopy(target["displays"][0])
-        for key in ("id", "name", "refresh_hz", "rotation"):
-            display.pop(key, None)
-        config["ipad"] = display
-    return config
 
 
 def _monitor_layout(monitor):
@@ -311,7 +341,7 @@ def layout_surfaces(config):
             "name": monitor["name"],
             "rect": [x, y, width, height],
         })
-    for target in config.get("targets", []):
+    for target in config.get("devices", []):
         if not target.get("enabled", True):
             continue
         for display in target.get("displays", []):
@@ -463,7 +493,7 @@ def snap_rect_to_neighbors(rect, neighbors, threshold=None):
 def compute_portals(config):
     """Compute real Windows edge triggers from the independent desk layout."""
     out = []
-    for target in config.get("targets", []):
+    for target in config.get("devices", []):
         if not target.get("enabled", True):
             continue
         for display in target.get("displays", []):
@@ -520,7 +550,7 @@ def _portal(target, display, monitor, edge, axis, line, span, sign, exit_to):
         "target_name": target["name"],
         "target_display": display["id"],
         "target_display_name": display["name"],
-        "daemon_port": int(target["daemon_port"]),
+        "daemon_port": int(target["port"]),
         "edge": edge,
         "monitor": monitor["name"],
         "axis": axis,
