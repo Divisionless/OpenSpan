@@ -3094,7 +3094,9 @@ class App:
         self.log("event", "OpenSpan started.")
 
         head = tk.Frame(full, bg=BG)
-        head.pack(fill="x", padx=16, pady=(12, 4))
+        # flush to the very top (frameless) + extra height = a full title-bar
+        # drag band, not a thin strip. Whole band is bound to _drag_* below.
+        head.pack(fill="x", padx=16, pady=(0, 4), ipady=7)
         self._cons_anchor = head   # the console packs before this when opened
         _t1 = tk.Label(head, text=APP_LABEL, bg=BG, fg=FG,
                        font=("Segoe UI Semibold", 18))
