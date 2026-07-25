@@ -4452,6 +4452,10 @@ class App:
                  "/opt/openspan/set-hid-target.sh"),
                 (os.path.join("..", "guest", "set-hid-device.sh"),
                  "/opt/openspan/set-hid-device.sh"),
+                # the per-device systemd TEMPLATE unit: without it every
+                # openspanble@<id> enable/restart fails and the lane can't pair
+                (os.path.join("..", "guest", "system", "openspanble@.service"),
+                 "/etc/systemd/system/openspanble@.service"),
                 (os.path.join("..", "guest", "ensure-dualmode.sh"),
                  "/opt/openspan/ensure-dualmode.sh"),
                 (os.path.join("..", "guest", "wait-hci0.sh"),

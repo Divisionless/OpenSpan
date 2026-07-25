@@ -631,10 +631,6 @@ class Portal:
         self._last_transition = time.monotonic()
         self._press_side = None
         self._pressure = 0.0
-        try:      # the cursor is parked at screen-centre for relative capture;
-            user32.ShowCursor(False)   # hide it so that park is not visible
-        except Exception:  # noqa: BLE001
-            pass
         name = portal.get("target_name", self.active_target)
         print(f"[portal] >>> {name} mode ON via {portal['axis']}"
               f"={portal['line']}  (Esc x3 to bail)")
@@ -655,10 +651,6 @@ class Portal:
         self._last_transition = time.monotonic()
         self._press_side = None
         self._pressure = 0.0
-        try:
-            user32.ShowCursor(True)
-        except Exception:  # noqa: BLE001
-            pass
         self.active = False
         self.raw_keys.clear(); self.mods = 0; self.buttons = 0
         # Release the iPad's held keys + mouse buttons, but do it THROUGH THE
