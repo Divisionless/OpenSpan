@@ -30,7 +30,7 @@ def check(name, condition):
 objects = {
     "/org/bluez/hci0": {
         module.ADAPTER: {
-            "Address": "58:A0:23:CD:6A:B7",
+            "Address": "AA:BB:CC:00:00:01",
             "Alias": "Intel",
             "Name": "Intel",
             "Powered": True,
@@ -39,7 +39,7 @@ objects = {
     },
     "/org/bluez/hci1": {
         module.ADAPTER: {
-            "Address": "AC:A7:F1:29:9F:CB",
+            "Address": "AA:BB:CC:00:00:02",
             "Alias": "TP-Link",
             "Name": "TP-Link",
             "Powered": True,
@@ -48,7 +48,7 @@ objects = {
     },
     "/org/bluez/hci0/dev_60_8B_0E_05_72_82": {
         module.DEVICE: {
-            "Address": "60:8b:0e:05:72:82",
+            "Address": "aa:bb:cc:00:00:10",
             "Name": "iPad",
             "Alias": "iPad",
             "Icon": "input-keyboard",
@@ -59,7 +59,7 @@ objects = {
     },
     "/org/bluez/hci0/dev_D0_11_E5_F2_7E_2A": {
         module.DEVICE: {
-            "Address": "d0:11:e5:f2:7e:2a",
+            "Address": "aa:bb:cc:00:00:11",
             "Name": "Managed Mac",
             "Alias": "Managed Mac",
             "Icon": "input-keyboard",
@@ -70,7 +70,7 @@ objects = {
     },
     "/org/bluez/hci1/dev_B3_BD_E8_69_E5_59": {
         module.DEVICE: {
-            "Address": "b3:bd:e8:69:e5:59",
+            "Address": "aa:bb:cc:00:00:20",
             "Name": "Onn",
             "Alias": "Onn",
             "Icon": "audio-card",
@@ -81,7 +81,7 @@ objects = {
     },
     "/org/bluez/hci1/dev_60_8B_0E_05_72_82": {
         module.DEVICE: {
-            "Address": "60:8b:0e:05:72:82",
+            "Address": "aa:bb:cc:00:00:10",
             "Name": "Apple's iPad (2)",
             "Alias": "Apple's iPad (2)",
             "Icon": "input-keyboard",
@@ -100,27 +100,27 @@ devices = bluez.devices()
 check("two controllers are enumerated", len(radios) == 2)
 check("controller identities are stable MAC addresses",
       {row["address"] for row in radios}
-      == {"58:A0:23:CD:6A:B7", "AC:A7:F1:29:9F:CB"})
+      == {"AA:BB:CC:00:00:01", "AA:BB:CC:00:00:02"})
 check("devices retain their owning controller",
       {(row["address"], row["controller"]) for row in devices}
       == {
-          ("60:8B:0E:05:72:82", "58:A0:23:CD:6A:B7"),
-          ("60:8B:0E:05:72:82", "AC:A7:F1:29:9F:CB"),
-          ("B3:BD:E8:69:E5:59", "AC:A7:F1:29:9F:CB"),
-          ("D0:11:E5:F2:7E:2A", "58:A0:23:CD:6A:B7"),
+          ("AA:BB:CC:00:00:10", "AA:BB:CC:00:00:01"),
+          ("AA:BB:CC:00:00:10", "AA:BB:CC:00:00:02"),
+          ("AA:BB:CC:00:00:20", "AA:BB:CC:00:00:02"),
+          ("AA:BB:CC:00:00:11", "AA:BB:CC:00:00:01"),
       })
 check("controller lookup accepts current hci name",
-      bluez.radio("hci1")["address"] == "AC:A7:F1:29:9F:CB")
+      bluez.radio("hci1")["address"] == "AA:BB:CC:00:00:02")
 check("controller lookup accepts stable MAC",
-      bluez.radio("58-a0-23-cd-6a-b7")["hci"] == "hci0")
+      bluez.radio("aa-bb-cc-00-00-01")["hci"] == "hci0")
 check("legacy audio pins remain readable",
-      module.parse_audio_pin("B3:BD:E8:69:E5:59")
-      == ("", "B3:BD:E8:69:E5:59"))
+      module.parse_audio_pin("AA:BB:CC:00:00:20")
+      == ("", "AA:BB:CC:00:00:20"))
 check("multi-radio audio pins preserve controller ownership",
       module.parse_audio_pin(
           module.format_audio_pin(
-              "AC:A7:F1:29:9F:CB", "B3:BD:E8:69:E5:59"))
-      == ("AC:A7:F1:29:9F:CB", "B3:BD:E8:69:E5:59"))
+              "AA:BB:CC:00:00:02", "AA:BB:CC:00:00:20"))
+      == ("AA:BB:CC:00:00:02", "AA:BB:CC:00:00:20"))
 check("audio classification is icon-scoped",
       module.is_audio({"Icon": "audio-card"})
       and not module.is_audio({"Icon": "input-keyboard"}))

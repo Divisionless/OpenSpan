@@ -277,29 +277,29 @@ panel.prefs = {
     "blacklist": set(),
     "radio_mode": "multi",
     "radio_assignments": {
-        "B3:BD:E8:69:E5:59": "AC:A7:F1:29:9F:CB"},
-    "hid_radio": "58:A0:23:CD:6A:B7",
-    "scan_radio": "AC:A7:F1:29:9F:CB",
+        "AA:BB:CC:00:00:20": "AA:BB:CC:00:00:02"},
+    "hid_radio": "AA:BB:CC:00:00:01",
+    "scan_radio": "AA:BB:CC:00:00:02",
     "radio_labels": {},
 }
 panel.radio_mode.set("Multiple radios")
 panel._apply_rows(
-    [("B3:BD:E8:69:E5:59", "Onn", True, True, "audio-card",
-      "AC:A7:F1:29:9F:CB")],
-    [{"address": "58:A0:23:CD:6A:B7", "hci": "hci0",
+    [("AA:BB:CC:00:00:20", "Onn", True, True, "audio-card",
+      "AA:BB:CC:00:00:02")],
+    [{"address": "AA:BB:CC:00:00:01", "hci": "hci0",
       "hardware": "Intel Bluetooth", "alias": "Intel"},
-     {"address": "AC:A7:F1:29:9F:CB", "hci": "hci1",
+     {"address": "AA:BB:CC:00:00:02", "hci": "hci1",
       "hardware": "TP-Link Bluetooth", "alias": "TP-Link"}])
 check("radio UI: all guest controllers are exposed",
       len(panel._radios) == 2
       and len(panel.hid_combo.cget("values")) == 2)
 check("radio UI: saved iPad and scan assignments are restored",
-      panel._selected_controller(panel.hid_radio) == "58:A0:23:CD:6A:B7"
+      panel._selected_controller(panel.hid_radio) == "AA:BB:CC:00:00:01"
       and panel._selected_controller(panel.scan_radio)
-      == "AC:A7:F1:29:9F:CB")
+      == "AA:BB:CC:00:00:02")
 check("radio UI: device row identifies its assigned controller",
       "TP-Link Bluetooth" in panel.tree.item(
-          "B3:BD:E8:69:E5:59", "values")[3])
+          "AA:BB:CC:00:00:20", "values")[3])
 panel.prefs = openspan.load_bt_prefs()
 panel.radio_mode.set("Single radio (recommended)")
 panel._radios = []
@@ -484,8 +484,8 @@ openspan.load_bt_prefs = lambda: {
     "blacklist": set(),
     "radio_mode": "multi",
     "radio_assignments": {},
-    "hid_radio": "58:A0:23:CD:6A:B7",
-    "scan_radio": "58:A0:23:CD:6A:B7",
+    "hid_radio": "AA:BB:CC:00:00:01",
+    "scan_radio": "AA:BB:CC:00:00:01",
     "radio_labels": {},
 }
 openspan.ssh_guest = lambda command, *a, **k: (
@@ -495,11 +495,11 @@ app.broadcasting = False
 _adv["on"] = False
 app._pair_worker(False)
 check("multi-radio pair selects the saved HID controller",
-      any("set-hid-radio.sh 58:A0:23:CD:6A:B7" in command
+      any("set-hid-radio.sh AA:BB:CC:00:00:01" in command
           for command in _multi_commands))
 check("multi-radio pair uses controller-scoped preparation",
       any("openspan_bt.py prepare-hid "
-          "--controller 58:A0:23:CD:6A:B7 --target ipad" in command
+          "--controller AA:BB:CC:00:00:01 --target ipad" in command
           for command in _multi_commands))
 check("multi-radio pair does not use the legacy global disconnect",
       not any("bluetoothctl disconnect" in command
@@ -513,9 +513,9 @@ openspan.load_bt_prefs = lambda: {
     "blacklist": set(),
     "radio_mode": "multi",
     "radio_assignments": {},
-    "hid_radio": "58:A0:23:CD:6A:B7",
-    "mac_radio": "AC:A7:F1:29:9F:CB",
-    "scan_radio": "3C:6A:D2:3C:D4:4E",
+    "hid_radio": "AA:BB:CC:00:00:01",
+    "mac_radio": "AA:BB:CC:00:00:02",
+    "scan_radio": "AA:BB:CC:00:00:03",
     "radio_labels": {},
 }
 openspan.set_target_advertising = \
@@ -535,10 +535,10 @@ app._mac_pair_inflight = True
 app.mac_broadcasting = False
 app._pair_mac_worker(False)
 check("managed Mac pair selects its independent controller",
-      any("set-hid-target.sh mac AC:A7:F1:29:9F:CB" in command
+      any("set-hid-target.sh mac AA:BB:CC:00:00:02" in command
           for command in _multi_commands))
 check("managed Mac pair uses controller-scoped HID preparation",
-      any("prepare-hid --controller AC:A7:F1:29:9F:CB --target mac" in command
+      any("prepare-hid --controller AA:BB:CC:00:00:02 --target mac" in command
           for command in _multi_commands))
 check("managed Mac advertises through the second daemon",
       app.mac_broadcasting is True and _mac_adv["on"] is True)

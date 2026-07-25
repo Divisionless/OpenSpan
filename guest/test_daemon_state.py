@@ -106,7 +106,7 @@ class FakeManager:
 def make_app():
     app = module.OpenSpanBLE.__new__(module.OpenSpanBLE)
     app.adapter = "hci0"
-    app.adapter_address = "58:A0:23:CD:6A:B7"
+    app.adapter_address = "AA:BB:CC:00:00:01"
     app.adapter_path = "/org/bluez/hci0"
     app.command_port = 9955
     app.device_name = "OpenSpan Keyboard"
@@ -202,9 +202,9 @@ check("normal HID reconnect gets an eight-second subscription grace period",
       module.RESUB_SETTLE_SECONDS == 8)
 
 ipad_identity = module._device_identity(
-    "OpenSpan Keyboard", "58:A0:23:CD:6A:B7")
+    "OpenSpan Keyboard", "AA:BB:CC:00:00:01")
 mac_identity = module._device_identity(
-    "OpenSpan Mac Control", "AC:A7:F1:29:9F:CB")
+    "OpenSpan Mac Control", "AA:BB:CC:00:00:02")
 check("iPad and Mac lanes have distinct Bluetooth product identities",
       ipad_identity["product_id"] != mac_identity["product_id"]
       and ipad_identity["model"] != mac_identity["model"]

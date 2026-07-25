@@ -353,10 +353,9 @@ the audio pin records `controller|device` (and still reads the old MAC-only
 format). Pairing the iPad only disconnects audio when both are deliberately
 assigned to the same controller. Audio on another controller is left live.
 
-The first bench machine now has all three physical radios live together:
-Intel internal `58:A0:23:CD:6A:B7`, TP-Link 1 `AC:A7:F1:29:9F:CB`, and
-TP-Link 2 `3C:6A:D2:3C:D4:4E`. The two RTL8761BU adapters require Debian's
-`firmware-realtek`. VirtualBox could mark both dongles captured at VM startup
+The first bench machine now has all three physical radios live together: the
+internal Intel controller plus two TP-Link USB adapters. The two RTL8761BU
+adapters require Debian's `firmware-realtek`. VirtualBox could mark both dongles captured at VM startup
 without actually attaching them; re-enumerating their shared external USB hub
 after the VM filters are listening makes both proxy devices appear. The app
 now performs that narrow recovery only in multi-radio mode and only for a
