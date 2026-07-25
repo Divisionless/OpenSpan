@@ -39,7 +39,14 @@ else:
 CONFIG_PATH = os.path.join(_ROOT, "openspan_config.json")
 
 SEND_HZ = 120
-ENTER_MARGIN = 40          # perpendicular units "into" the iPad on entry
+ENTER_MARGIN = 40          # perpendicular units "into" the device on entry
+# Layout units of sustained overshoot required before a crossing commits. The
+# cursor is clamped ON the edge while captured, so without this any jitter
+# transitions instantly and repeatedly.
+EXIT_PRESSURE = 45.0
+# Seconds after a transition during which no further crossing may fire. Stops
+# ping-ponging between two surfaces at the shared edge.
+SWITCH_COOLDOWN = 0.30
 
 # FKA chords bound (on the iPad, Settings > Accessibility > Keyboards >
 # Full Keyboard Access > Commands) to the two clipboard Shortcuts -- see
@@ -230,6 +237,12 @@ def load_portals():
 
 
 class Portal:
+    # Class-level defaults so edge resistance is well-defined even for a
+    # partially constructed Portal (the routing tests build one directly).
+    _last_transition = 0.0
+    _press_side = None
+    _pressure = 0.0
+
     def __init__(self):
         self.cfg, self.portals = load_portals()
         self.links = compute_adjacencies(self.cfg)
@@ -249,6 +262,9 @@ class Portal:
         self.cx = prim["x"] + prim["w"] // 2
         self.cy = prim["y"] + prim["h"] // 2
         self.active = False
+        self._last_transition = 0.0   # edge-resistance cooldown clock
+        self._press_side = None       # which edge the cursor is leaning on
+        self._pressure = 0.0          # accumulated overshoot on that edge
         self.cur = None        # active portal
         self.entry_along = 0   # position along the edge at entry
         self.perp = 0          # perpendicular displacement into iPad
@@ -522,6 +538,9 @@ class Portal:
         self.active_display = display
         self.vx, self.vy = self._position_inside(
             destination, to_side, along)
+        self._last_transition = time.monotonic()
+        self._press_side = None
+        self._pressure = 0.0
         if target != old_target:
             self._emit_kbd()
             print(f"[portal] >>> direct handoff {old_target}/{old_display} "
@@ -564,7 +583,24 @@ class Portal:
             crossings.append((y - ny, "top", nx))
         if ny > bottom:
             crossings.append((ny - bottom, "bottom", nx))
+        # EDGE RESISTANCE. Without this a crossing fired on the FIRST unit past
+        # an edge -- and because the cursor is then clamped exactly ON that
+        # edge, it sits on the trigger, so the tiniest jitter throws you back
+        # out ("it returns too early"). Require sustained pressure past the
+        # edge, and refuse to transition again for a moment after one lands.
+        now = time.monotonic()
+        if now - self._last_transition < SWITCH_COOLDOWN:
+            crossings = []
+        if not crossings:
+            self._press_side = None
+            self._pressure = 0.0
         for _overshoot, side, along in sorted(crossings, reverse=True):
+            if side != self._press_side:
+                self._press_side = side
+                self._pressure = 0.0
+            self._pressure += _overshoot
+            if self._pressure < EXIT_PRESSURE:
+                break   # still leaning on the edge, not through it yet
             link = self._matching_link(side, along)
             if not link:
                 continue
@@ -592,6 +628,13 @@ class Portal:
         self.perp = ENTER_MARGIN
         self.vx, self.vy = self._entry_point(portal, along)
         user32.SetCursorPos(self.cx, self.cy)
+        self._last_transition = time.monotonic()
+        self._press_side = None
+        self._pressure = 0.0
+        try:      # the cursor is parked at screen-centre for relative capture;
+            user32.ShowCursor(False)   # hide it so that park is not visible
+        except Exception:  # noqa: BLE001
+            pass
         name = portal.get("target_name", self.active_target)
         print(f"[portal] >>> {name} mode ON via {portal['axis']}"
               f"={portal['line']}  (Esc x3 to bail)")
@@ -609,6 +652,13 @@ class Portal:
     def leave(self, exit_to=None):
         if not self.active:
             return
+        self._last_transition = time.monotonic()
+        self._press_side = None
+        self._pressure = 0.0
+        try:
+            user32.ShowCursor(True)
+        except Exception:  # noqa: BLE001
+            pass
         self.active = False
         self.raw_keys.clear(); self.mods = 0; self.buttons = 0
         # Release the iPad's held keys + mouse buttons, but do it THROUGH THE

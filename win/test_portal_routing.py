@@ -11,6 +11,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
+# NOTE: crossings now require sustained overshoot past an
+# edge (EXIT_PRESSURE) plus a post-transition cooldown --
+# edge resistance. Pushes below are sized to commit.
 import openspan_portal  # noqa: E402
 from openspan_targets import BASE_PORT, compute_adjacencies  # noqa: E402
 
@@ -97,7 +100,9 @@ broker._chord_until = 0.0
 broker.q = queue.Queue()
 broker._emit_kbd = lambda: None
 
-left_pc = broker._route_motion(0, -20)
+broker._last_transition = 0.0
+
+left_pc = broker._route_motion(0, -80)
 check("crossing a shared top edge hands control directly to the device above",
       left_pc is False
       and broker.active_target == "device-2"
@@ -109,7 +114,8 @@ broker.active_target = "device-1"
 broker.active_display = "device-1-1"
 broker.vx = -2995.0
 broker.vy = 400.0
-left_pc = broker._route_motion(-20, 0)
+broker._last_transition = 0.0
+left_pc = broker._route_motion(-80, 0)
 check("crossing the other shared edge lands on the third device",
       left_pc is False
       and broker.active_target == "device-3"
@@ -122,7 +128,8 @@ broker.active_display = "device-1-1"
 broker.vx = -2995.0
 broker.vy = 400.0
 broker.target_ready["device-3"] = False
-left_pc = broker._route_motion(-20, 0)
+broker._last_transition = 0.0
+left_pc = broker._route_motion(-80, 0)
 check("a crossing into a device whose daemon is not ready is refused",
       left_pc is False
       and broker.active_target == "device-1"
@@ -133,7 +140,8 @@ broker.target_ready["device-3"] = True
 broker.vx = -2500.0
 broker.vy = 8.0
 broker.buttons = 1
-left_pc = broker._route_motion(0, -20)
+broker._last_transition = 0.0
+left_pc = broker._route_motion(0, -80)
 check("a held mouse button never tears a drag across devices",
       left_pc is False and broker.active_target == "device-1")
 broker.buttons = 0
@@ -144,7 +152,8 @@ broker.vx = -1925.0
 broker.vy = 200.0
 exits = []
 broker.leave = lambda exit_to=None: exits.append(exit_to)
-left_pc = broker._route_motion(20, 0)
+broker._last_transition = 0.0
+left_pc = broker._route_motion(80, 0)
 check("crossing the edge shared with the PC still returns to the PC",
       left_pc is True and len(exits) == 1
       and exits[0][0] == -1917)
