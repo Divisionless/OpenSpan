@@ -13,6 +13,7 @@ import math
 import os
 import queue
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -273,6 +274,49 @@ def dark_confirm(parent, title, message, yes="Yes", no="No"):
 def dark_alert(parent, title, message, ok="OK"):
     """Dark drop-in for messagebox.showwarning/showinfo — single OK button."""
     _dialog(parent, title, message, [(ok, True, "Accent.TButton")])
+
+
+def dark_prompt(parent, title, message, default=""):
+    """Dark single-line text prompt. Returns the string, or None on cancel.
+    Native dialogs are light-themed, so this stays in the app's own look."""
+    win = tk.Toplevel(parent)
+    win.withdraw()
+    win.title(title)
+    win.configure(bg=CARD)
+    win.transient(parent)
+    win.resizable(False, False)
+    _paint_dark_titlebar(win)
+    tk.Label(win, text=title, bg=CARD, fg=FG,
+             font=("Segoe UI Semibold", 11)).pack(
+        anchor="w", padx=18, pady=(16, 2))
+    tk.Label(win, text=message, bg=CARD, fg=MUTED, font=("Segoe UI", 9),
+             wraplength=380, justify="left").pack(anchor="w", padx=18)
+    var = tk.StringVar(value=str(default or ""))
+    entry = ttk.Entry(win, textvariable=var, width=40)
+    entry.pack(fill="x", padx=18, pady=(10, 4))
+    result = {"v": None}
+    buttons = tk.Frame(win, bg=CARD)
+    buttons.pack(anchor="e", padx=18, pady=(6, 16))
+
+    def ok(*_a):
+        result["v"] = var.get()
+        win.destroy()
+
+    ttk.Button(buttons, text="OK", style="Accent.TButton",
+               command=ok).pack(side="left", padx=(0, 6))
+    ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="left")
+    win.bind("<Return>", ok)
+    win.bind("<Escape>", lambda *_a: win.destroy())
+    win.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_width()) // 2
+    y = parent.winfo_rooty() + 120
+    win.geometry(f"+{max(0, x)}+{max(0, y)}")
+    win.deiconify()
+    entry.focus_set()
+    entry.select_range(0, "end")
+    win.grab_set()
+    parent.wait_window(win)
+    return result["v"]
 
 
 def _theme_startup_buttons():
@@ -633,6 +677,28 @@ def _ensure_one_forward(device_id, port, info):
     _emit("err", f"couldn't expose device control port {port}: "
                  + detail[-180:])
     return False
+
+
+def _migrate_radio_assignments(config):
+    """One-time: move the old fixed hid_radio/mac_radio slots onto the devices
+    that inherited those lanes. After this the DEVICE owns its radio and the
+    legacy slots are only read, never required."""
+    devices = config.get("devices", [])
+    if not devices or any(d.get("radio") for d in devices):
+        return config
+    prefs = load_bt_prefs()
+    legacy = {"ipad": str(prefs.get("hid_radio", "") or "").upper(),
+              "mac": str(prefs.get("mac_radio", "") or "").upper()}
+    changed = False
+    for device in devices:
+        radio = legacy.get(device.get("id"), "")
+        if radio:
+            device["radio"] = radio
+            changed = True
+    if changed:
+        _emit("event", "migrated radio assignments onto the devices "
+                       "(each device now owns its own radio).")
+    return config
 
 
 def load_bt_prefs():
@@ -1670,6 +1736,7 @@ class MultiArrangeCanvas(tk.Canvas):
         except (OSError, ValueError):
             pass
         self.config = normalize_config(raw, live)
+        _migrate_radio_assignments(self.config)
         self.monitors = self.config["monitors"]
         self.targets = self.config["devices"]
         # No device is privileged. `ipad` here is simply "the first display of
@@ -2110,11 +2177,13 @@ class MultiArrangeCanvas(tk.Canvas):
 
 
 class MacDisplayEditor:
-    """Dark, modal editor for Mac count/resolution/rotation/Hz/physical size."""
+    """Dark, modal editor for a DEVICE's displays (count/resolution/rotation/
+    Hz/physical size). Works on any device -- `device_id` selects which."""
 
-    def __init__(self, parent, canvas):
+    def __init__(self, parent, canvas, device_id=None):
         self.parent = parent
         self.canvas = canvas
+        self.device_id = device_id
         self.rows = []
         self.top = tk.Toplevel(parent)
         self.top.title("Managed Mac displays")
@@ -2579,7 +2648,7 @@ class BtPanel(tk.Frame):
             else:
                 self._log("managed Mac radio assigned and ready.")
             if self.app:
-                self.app._refresh_target_paired("mac")
+                self.app._refresh_all_device_paired()
         threading.Thread(target=apply, daemon=True).start()
 
     def _on_scan_radio(self, _event=None):
@@ -2637,7 +2706,7 @@ class BtPanel(tk.Frame):
                 self._log("all three radio lanes are active.")
             if self.app:
                 self.app._refresh_paired()
-                self.app._refresh_target_paired("mac")
+                self.app._refresh_all_device_paired()
         threading.Thread(target=apply, daemon=True).start()
 
     def _assign_radio(self, controller):
@@ -3153,12 +3222,11 @@ class App:
         self._ipad_paired = False      # iPad (non-audio) bonded? -> Connect/Unpair
         self._paired_gen = 0           # generation token: newest read wins
         self._pair_lock = threading.Lock()  # atomic pair-commit vs cancel-clear
-        self._mac_paired = False
-        self._mac_paired_gen = 0
-        self._mac_pair_inflight = False
-        self.mac_broadcasting = False
-        self._mac_conn = None
-        self._mac_pair_lock = threading.Lock()
+        # per-device pairing state, keyed by device id (created on demand)
+        self._dev_states = {}
+        self._dev_rows = {}
+        self._dev_conn = {}
+        self._dev_status = {}   # device id -> last daemon status dict
         root.after(50, self._drain_ui)
         self._theme()
 
@@ -3364,38 +3432,25 @@ class App:
         for c in range(4):
             ctl.columnconfigure(c, weight=1)
 
-        mac_ctl = ttk.LabelFrame(
-            bridge, text="Managed Mac · Bluetooth only", padding=7)
-        mac_ctl.pack(fill="x", padx=16, pady=(3, 2))
-        self.mac_pair_btn = ttk.Button(
-            mac_ctl, text="Pair", command=self._pair_mac)
-        self.mac_pair_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
-        self.mac_conn_btn = ttk.Button(
-            mac_ctl, text="Connect", command=self._connect_mac)
-        self.mac_conn_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
-        self.mac_disc_btn = ttk.Button(
-            mac_ctl, text="Disconnect", command=self._disconnect_mac)
-        self.mac_disc_btn.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
-        self.mac_unpair_btn = ttk.Button(
-            mac_ctl, text="Unpair", command=self._unpair_mac)
-        self.mac_unpair_btn.grid(row=0, column=3, sticky="ew", padx=3, pady=3)
-        ttk.Button(
-            mac_ctl, text="Re-pair (reset bond)",
-            command=lambda: self._pair_mac(reset=True)).grid(
-                row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=3)
-        tk.Label(
-            mac_ctl,
-            text="No software is installed on the Mac. Display geometry "
-                 "guides edge routing; Bluetooth HID carries keyboard/mouse.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 8),
-            wraplength=430, justify="left").grid(
-                row=1, column=2, columnspan=2, sticky="w", padx=5)
-        for button in (
-                self.mac_pair_btn, self.mac_conn_btn,
-                self.mac_disc_btn, self.mac_unpair_btn):
-            button.state(["disabled"])
-        for column in range(4):
-            mac_ctl.columnconfigure(column, weight=1)
+        # ---- Devices: one row per device, built from the config ------------
+        # Nothing here is per-device-type. Every device the user has added gets
+        # the identical four verbs against its own radio, port and bonds.
+        self._dev_frame = ttk.LabelFrame(
+            bridge, text="Devices", padding=7)
+        self._dev_frame.pack(fill="x", padx=16, pady=(3, 2))
+        self._dev_rows = {}
+        self._dev_body = tk.Frame(self._dev_frame, bg=BG)
+        self._dev_body.pack(fill="x")
+        addrow = tk.Frame(self._dev_frame, bg=BG)
+        addrow.pack(fill="x", pady=(6, 0))
+        ttk.Button(addrow, text="＋  Add device",
+                   command=self._add_device_dialog).pack(side="left")
+        tk.Label(addrow,
+                 text="Each device gets its own radio, its own advertisement "
+                      "and its own bonds. No software is installed on it.",
+                 bg=BG, fg=MUTED, font=("Segoe UI", 8)).pack(
+            side="left", padx=(10, 0))
+        self._rebuild_device_rows()
 
         # ---- System control: every backend action, nothing hidden ----
         sysf = ttk.LabelFrame(bridge, text="System control", padding=8)
@@ -4395,6 +4450,8 @@ class App:
                  "/opt/openspan/set-hid-radio.sh"),
                 (os.path.join("..", "guest", "set-hid-target.sh"),
                  "/opt/openspan/set-hid-target.sh"),
+                (os.path.join("..", "guest", "set-hid-device.sh"),
+                 "/opt/openspan/set-hid-device.sh"),
                 (os.path.join("..", "guest", "ensure-dualmode.sh"),
                  "/opt/openspan/ensure-dualmode.sh"),
                 (os.path.join("..", "guest", "wait-hci0.sh"),
@@ -4506,7 +4563,7 @@ class App:
                 if r.returncode == 0:
                     _emit("event", "saved managed Mac radio resolved for this "
                                    f"boot ({mac_controller}).")
-                    self._refresh_target_paired("mac")
+                    self._refresh_all_device_paired()
                 else:
                     detail = (r.stderr or r.stdout or "").strip()
                     _emit("err", "saved managed Mac radio could not be applied: "
@@ -4819,50 +4876,74 @@ class App:
                 pass
         threading.Thread(target=work, daemon=True).start()
 
-    def _pair_mac(self, reset=False, confirm=True):
-        prefs = load_bt_prefs()
-        controller = prefs.get("mac_radio", "")
-        if not multi_radio_enabled(prefs) or not controller:
+    # ---- generic per-device verbs -------------------------------------------
+    # ONE implementation for every device. A device is identified only by its
+    # id; its radio, port and advertised name all come from its own config
+    # record, so adding the Nth device needs no new code.
+
+    def device_record(self, device_id):
+        return device_by_id(self.canvas.config, device_id)
+
+    def device_lane(self, device_id):
+        """(record, controller_mac, port, advertised_name) for a device."""
+        record = self.device_record(device_id) or {}
+        return (record,
+                str(record.get("radio", "") or "").upper(),
+                int(record.get("port", BASE_PORT)),
+                f"OpenSpan {record.get('name', device_id)}")
+
+    def _dev_state(self, device_id):
+        """Mutable per-device pairing state, created on demand."""
+        return self._dev_states.setdefault(device_id, {
+            "inflight": False, "broadcasting": False, "paired": False,
+            "gen": 0, "started": 0.0, "lock": threading.Lock(),
+        })
+
+    def _pair_device(self, device_id, reset=False, confirm=True):
+        record, controller, _port, _name = self.device_lane(device_id)
+        if not record:
+            return
+        label = record.get("name", device_id)
+        if not controller:
             dark_alert(
-                self.root, "Assign the Mac radio first",
-                "Open Radio options, choose Multiple radios, then assign the "
-                "external TP-Link radio to Managed Mac.")
+                self.root, f"Assign a radio to {label}",
+                f"Every device needs its OWN Bluetooth radio. Open Radio "
+                f"options and assign one to “{label}” first.")
             return
-        if controller == prefs.get("hid_radio"):
+        clash = next(
+            (other for other in self.canvas.devices()
+             if other.get("id") != device_id
+             and str(other.get("radio", "")).upper() == controller), None)
+        if clash:
             dark_alert(
-                self.root, "Choose another radio",
-                "The managed Mac and iPad each require their own Bluetooth "
-                "radio. Move the iPad to the internal backup radio first.")
+                self.root, "That radio is already in use",
+                f"“{clash.get('name')}” is already using this radio. Each "
+                f"device needs its own, so give “{label}” a different one.")
             return
-        if self._mac_pair_inflight or self.mac_broadcasting:
+        state = self._dev_state(device_id)
+        if state["inflight"] or state["broadcasting"]:
             return
-        title = (
-            "Reset and re-pair the managed Mac?"
-            if reset else "Pair the managed Mac now?")
+        title = (f"Reset and re-pair {label}?" if reset
+                 else f"Pair {label} now?")
         body = (
-            "This forgets the saved Mac bond on its assigned radio, then "
-            "broadcasts “OpenSpan Mac Control” for a clean pairing. Pair only "
-            "from the Mac; for the first pairing, temporarily turn off the "
-            "iPad’s Bluetooth."
+            f"This forgets the saved bond for “{label}” on its own radio, then "
+            f"broadcasts for a clean pairing. Pair only from that device."
             if reset else
-            "The assigned external TP-Link radio will broadcast “OpenSpan "
-            "Mac Control”. Pair only from the Mac—do not tap this name on the "
-            "iPad. For the first Mac pairing, temporarily turn off the iPad’s "
-            "Bluetooth. Audio remains on its own radio.")
+            f"“{label}” has its own Bluetooth radio, which will now broadcast. "
+            f"Pair only from that device — do not select this name on any "
+            f"other. Your other devices and audio are untouched.")
         if confirm and not dark_confirm(self.root, title, body):
             return
-        self._mac_pair_inflight = True
-        self._mac_broadcast_started = time.time()
-        for button in (
-                self.mac_pair_btn, self.mac_conn_btn, self.mac_unpair_btn):
-            button.state(["disabled"])
-        self.mac_disc_btn.state(["!disabled"])
-        self.status.set(
-            "Working — preparing the managed Mac Bluetooth radio…")
-        threading.Thread(
-            target=self._pair_mac_worker, args=(reset,), daemon=True).start()
+        state["inflight"] = True
+        state["started"] = time.time()
+        self.status.set(f"Working — preparing the Bluetooth radio for {label}…")
+        threading.Thread(target=self._pair_device_worker,
+                         args=(device_id, reset), daemon=True).start()
 
-    def _pair_mac_worker(self, reset=False):
+    def _pair_device_worker(self, device_id, reset=False):
+        record, controller, port, adv_name = self.device_lane(device_id)
+        label = record.get("name", device_id)
+        state = self._dev_state(device_id)
         if not vm_running():
             start_vm_clean()
             for _ in range(45):
@@ -4870,138 +4951,307 @@ class App:
                         "echo ok", timeout=5, quiet=True).stdout.strip() == "ok":
                     break
                 threading.Event().wait(2)
-        prefs = load_bt_prefs()
-        controller = prefs.get("mac_radio", "")
-        if not re.match(
-                r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
+        if not re.match(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
             r = subprocess.CompletedProcess(
-                [], 1, "", "No managed Mac radio is assigned")
+                [], 1, "", f"No radio is assigned to {label}")
         else:
             reset_arg = " --reset" if reset else ""
-            restart = "systemctl restart openspanble-mac; " if reset else ""
+            unit = f"openspanble@{device_id}"
+            restart = f"systemctl restart {unit}; " if reset else ""
             command = (
-                "bash /opt/openspan/set-hid-target.sh mac "
-                f"{controller}; "
+                f"bash /opt/openspan/set-hid-device.sh {device_id} "
+                f"{controller} {port} {shlex.quote(adv_name)}; "
                 "python3 /opt/openspan/openspan_bt.py prepare-hid "
-                f"--controller {controller} --target mac{reset_arg}; "
+                f"--controller {controller} --target {device_id}{reset_arg}; "
                 f"{restart}"
                 "for i in $(seq 25); do "
-                "ss -ltn 2>/dev/null | grep -q ':9956' && exit 0; "
+                f"ss -ltn 2>/dev/null | grep -q ':{port}' && exit 0; "
                 "sleep 1; done; exit 1")
             r = ssh_guest(command, timeout=55)
         if r.returncode:
-            set_target_advertising("mac", False)
-            self._mac_pair_inflight = False
+            set_target_advertising(device_id, False)
+            state["inflight"] = False
             detail = (r.stderr or r.stdout or "guest command failed").strip()
-            _emit("err", "managed Mac pair FAILED before advertising — "
+            _emit("err", f"{label} pair FAILED before advertising — "
                   f"{detail[-220:]}. Nothing is advertising.")
-            self.ui(lambda: self.status.set(
-                "Managed Mac pair failed — see console."))
+            self.ui(lambda: self.status.set(f"{label} pair failed — see console."))
             return
-        if not self._mac_pair_inflight:
-            _emit("event", "managed Mac pair cancelled before advertising.")
+        if not state["inflight"]:
+            _emit("event", f"{label} pair cancelled before advertising.")
             return
-        _emit("event", "managed Mac radio ready — starting its independent "
+        _emit("event", f"{label} radio ready — starting its independent "
                        "Bluetooth HID broadcast…")
-        adv_ok = set_target_advertising("mac", True)
-        state = target_daemon_status("mac")
-        really_adv = bool(state and state.get("advertising"))
+        adv_ok = set_target_advertising(device_id, True)
+        status = target_daemon_status(device_id)
+        really_adv = bool(status and status.get("advertising"))
         if not adv_ok or not really_adv:
-            cleanup_ok = set_target_advertising("mac", False)
-            self.mac_broadcasting = False
-            self._mac_pair_inflight = False
-            _emit("err", "MANAGED MAC BROADCAST DID NOT START. "
+            cleanup_ok = set_target_advertising(device_id, False)
+            state["broadcasting"] = False
+            state["inflight"] = False
+            _emit("err", f"{label.upper()} BROADCAST DID NOT START. "
                   f"Cleanup-off confirmed={cleanup_ok}.")
             self.ui(lambda: self.status.set(
-                "Managed Mac advertising didn't start — see console."))
+                f"{label} advertising didn't start — see console."))
             return
-        with self._mac_pair_lock:
-            cancelled = not self._mac_pair_inflight
+        with state["lock"]:
+            cancelled = not state["inflight"]
             if not cancelled:
-                self.mac_broadcasting = True
+                state["broadcasting"] = True
         if cancelled:
-            set_target_advertising("mac", False)
+            set_target_advertising(device_id, False)
             return
-        _emit(
-            "event",
-            "✅ MANAGED MAC NOW BROADCASTING — on the Mac, open Bluetooth "
-            "and connect “OpenSpan Mac Control”. Do not select it on the iPad.")
+        _emit("event", f"✅ {label.upper()} NOW BROADCASTING — on that device, "
+                       f"open Bluetooth and connect “{adv_name}”. Do not "
+                       f"select it on any other device.")
         self.ui(lambda: self.status.set(
-            "📡 Mac only — connect “OpenSpan Mac Control” from the Mac."))
+            f"📡 {label} — connect “{adv_name}” from that device."))
 
-    def _connect_mac(self):
-        self._pair_mac(reset=False, confirm=False)
+    def _connect_device(self, device_id):
+        self._pair_device(device_id, reset=False, confirm=False)
 
-    def _disconnect_mac(self):
+    def _disconnect_device(self, device_id):
+        record, _controller, _port, _name = self.device_lane(device_id)
+        label = record.get("name", device_id)
+        state = self._dev_state(device_id)
+
         def work():
-            with self._mac_pair_lock:
-                self.mac_broadcasting = False
-                self._mac_pair_inflight = False
-            set_target_advertising("mac", False)
-            reply = target_daemon_cmd("mac", {"cmd": "disconnect"})
+            with state["lock"]:
+                state["broadcasting"] = False
+                state["inflight"] = False
+            set_target_advertising(device_id, False)
+            reply = target_daemon_cmd(device_id, {"cmd": "disconnect"})
             if reply and reply.get("ok"):
-                _emit(
-                    "event",
-                    f"Managed Mac DISCONNECTED "
-                    f"({reply.get('disconnected', 0)} link).")
+                _emit("event", f"{label} DISCONNECTED "
+                               f"({reply.get('disconnected', 0)} link) — "
+                               "advertising off, its on-screen keyboard returns.")
             else:
-                _emit("err", "couldn't disconnect the managed Mac.")
-            self._refresh_target_paired("mac")
+                _emit("err", f"couldn't disconnect {label}.")
+            self._refresh_device_paired(device_id)
         threading.Thread(target=work, daemon=True).start()
 
-    def _unpair_mac(self):
+    def _unpair_device(self, device_id):
+        record, controller, _port, _name = self.device_lane(device_id)
+        label = record.get("name", device_id)
         if not dark_confirm(
-                self.root, "Unpair the managed Mac?",
-                "This forgets the Mac bond on its assigned radio. Remove "
-                "“OpenSpan Mac Control” in the Mac’s Bluetooth settings too."):
+                self.root, f"Unpair {label}?",
+                f"This forgets the bond for “{label}” on its own radio. Remove "
+                f"OpenSpan in that device's Bluetooth settings too. No other "
+                f"device is affected."):
             return
+        state = self._dev_state(device_id)
 
         def work():
-            with self._mac_pair_lock:
-                self.mac_broadcasting = False
-                self._mac_pair_inflight = False
-            set_target_advertising("mac", False)
-            target_daemon_cmd("mac", {"cmd": "disconnect"})
-            prefs = load_bt_prefs()
-            controller = prefs.get("mac_radio", "")
+            with state["lock"]:
+                state["broadcasting"] = False
+                state["inflight"] = False
+            set_target_advertising(device_id, False)
+            target_daemon_cmd(device_id, {"cmd": "disconnect"})
             r = ssh_guest(
                 "python3 /opt/openspan/openspan_bt.py forget-hid "
-                f"--controller {controller} --target mac",
+                f"--controller {controller} --target {device_id}",
                 timeout=25)
             if r.returncode == 0:
-                self._mac_paired = False
-                _emit("event", "Managed Mac UNPAIRED on the OpenSpan side.")
+                state["paired"] = False
+                _emit("event", f"{label} UNPAIRED on the OpenSpan side.")
             else:
-                _emit("err", "managed Mac unpair failed — see console.")
-            self._refresh_target_paired("mac")
+                _emit("err", f"{label} unpair failed — see console.")
+            self._refresh_device_paired(device_id)
         threading.Thread(target=work, daemon=True).start()
 
-    def _refresh_target_paired(self, target):
-        if target == "ipad":
-            self._refresh_paired()
-            return
-        self._mac_paired_gen += 1
-        generation = self._mac_paired_gen
+    def _refresh_device_paired(self, device_id):
+        """Read the real bond state for ONE device from its own radio."""
+        _record, controller, _port, _name = self.device_lane(device_id)
+        state = self._dev_state(device_id)
+        state["gen"] += 1
+        generation = state["gen"]
 
         def work():
             try:
-                prefs = load_bt_prefs()
-                controller = prefs.get("mac_radio", "")
-                if not multi_radio_enabled(prefs) or not controller:
-                    if generation == self._mac_paired_gen:
-                        self._mac_paired = False
+                if not controller:
+                    if generation == state["gen"]:
+                        state["paired"] = False
                     return
                 r = ssh_guest(
                     "python3 /opt/openspan/openspan_bt.py hid-status "
-                    f"--controller {controller} --target mac",
+                    f"--controller {controller} --target {device_id}",
                     timeout=8, quiet=True)
-                if r.returncode == 0 and generation == self._mac_paired_gen:
-                    output = r.stdout or ""
-                    self._mac_paired = (
-                        "PAIRED" in output and "NOT_PAIRED" not in output)
+                if r.returncode == 0 and generation == state["gen"]:
+                    state["paired"] = "PAIRED" in (r.stdout or "").upper()
             except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=work, daemon=True).start()
+
+    # ---- device panel (dynamic: one row per configured device) -------------
+    def _apply_device_rows(self, portal_on):
+        """Colour + gate every device row from ITS OWN live state. One loop for
+        N devices; no branch anywhere depends on what kind of device it is."""
+        devices = self.canvas.devices()
+        if set(self._dev_rows) != {d["id"] for d in devices}:
+            self._rebuild_device_rows()
+        for device in devices:
+            device_id = device["id"]
+            row = self._dev_rows.get(device_id)
+            if not row:
+                continue
+            state = self._dev_state(device_id)
+            status = self._dev_status.get(device_id)
+            live = bool(status and status.get("kbd_subscribed"))
+            paired = bool(state["paired"])
+            up = status is not None
+            busy = state["inflight"] or state["broadcasting"]
+            radio = str(device.get("radio", "") or "")
+            # grey = not paired · amber = paired/idle · green = live
+            if live and portal_on:
+                colour, text = ACCENT, "connected"
+            elif live:
+                colour, text = WARN, "portal off"
+            elif paired:
+                colour, text = WARN, "paired"
+            elif not radio:
+                colour, text = MUTED, "no radio assigned"
+            else:
+                colour, text = MUTED, "not paired"
+            row["dot"].config(fg=colour)
+            row["name"].config(text=f"{device.get('name', device_id)}  ·  {text}")
+            row["radio"].config(
+                text=(f"{radio}  :{device.get('port')}" if radio
+                      else f":{device.get('port')}"))
+            buttons = row["buttons"]
+            buttons["pair"].state(
+                ["!disabled"] if (radio and up and not busy and not live)
+                else ["disabled"])
+            buttons["connect"].state(
+                ["!disabled"] if (radio and up and not busy and paired
+                                  and not live) else ["disabled"])
+            # Disconnect doubles as CANCEL for an in-flight attempt
+            buttons["disconnect"].state(
+                ["!disabled"] if (live or busy) else ["disabled"])
+            buttons["unpair"].state(
+                ["!disabled"] if (radio and up and not busy and paired)
+                else ["disabled"])
+            self.canvas.set_target_state(device_id, live and portal_on, paired)
+
+    def _refresh_all_device_paired(self):
+        for device in self.canvas.devices():
+            self._refresh_device_paired(device["id"])
+
+    def _poll_device_status(self):
+        """Probe every device's own daemon. Runs on a worker thread."""
+        return {
+            device["id"]: target_daemon_status(device["id"])
+            for device in self.canvas.devices()
+            if device.get("enabled", True)
+        }
+
+    def _rebuild_device_rows(self):
+        """Render one identical control row per device. Called whenever the
+        device list changes -- adding the Nth device needs no new UI code."""
+        for child in list(self._dev_body.winfo_children()):
+            child.destroy()
+        self._dev_rows = {}
+        devices = self.canvas.devices()
+        if not devices:
+            tk.Label(self._dev_body,
+                     text="No devices yet — add the machines you want to "
+                          "drive from this PC.",
+                     bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
+                anchor="w", pady=4)
+            return
+        for device in devices:
+            self._build_device_row(device)
+
+    def _build_device_row(self, device):
+        device_id = device["id"]
+        row = tk.Frame(self._dev_body, bg=BG)
+        row.pack(fill="x", pady=(2, 4))
+        head = tk.Frame(row, bg=BG)
+        head.pack(fill="x")
+        dot = tk.Label(head, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 11))
+        dot.pack(side="left")
+        name = tk.Label(head, text=device.get("name", device_id), bg=BG, fg=FG,
+                        font=("Segoe UI Semibold", 10))
+        name.pack(side="left", padx=(4, 8))
+        radio = tk.Label(head, text="", bg=BG, fg=MUTED, font=("Consolas", 8))
+        radio.pack(side="left")
+        ttk.Button(head, text="Rename",
+                   command=lambda d=device_id: self._rename_device(d)).pack(
+            side="right", padx=(4, 0))
+        ttk.Button(head, text="Displays…",
+                   command=lambda d=device_id: self._edit_device_displays(d)
+                   ).pack(side="right", padx=(4, 0))
+        ttk.Button(head, text="Remove",
+                   command=lambda d=device_id: self._remove_device(d)).pack(
+            side="right", padx=(4, 0))
+        verbs = tk.Frame(row, bg=BG)
+        verbs.pack(fill="x", pady=(3, 0))
+        buttons = {}
+        for column, (key, text, command) in enumerate((
+                ("pair", "Pair",
+                 lambda d=device_id: self._pair_device(d)),
+                ("connect", "Connect",
+                 lambda d=device_id: self._connect_device(d)),
+                ("disconnect", "Disconnect",
+                 lambda d=device_id: self._disconnect_device(d)),
+                ("unpair", "Unpair",
+                 lambda d=device_id: self._unpair_device(d)))):
+            button = ttk.Button(verbs, text=text, command=command)
+            button.grid(row=0, column=column, sticky="ew", padx=3)
+            button.state(["disabled"])
+            buttons[key] = button
+        for column in range(4):
+            verbs.columnconfigure(column, weight=1)
+        self._dev_rows[device_id] = {
+            "dot": dot, "name": name, "radio": radio, "buttons": buttons}
+
+    def _add_device_dialog(self):
+        name = dark_prompt(
+            self.root, "Add a device",
+            "What do you want to call it? (Any machine you can pair a "
+            "Bluetooth keyboard to — nothing is installed on it.)",
+            default="")
+        if name is None:
+            return
+        device = self.canvas.add_device(name.strip() or None)
+        self._dev_state(device["id"])
+        self._rebuild_device_rows()
+        _emit("event", f"added device “{device['name']}” on port "
+                       f"{device['port']} — assign it a radio in Radio options.")
+
+    def _rename_device(self, device_id):
+        record = self.device_record(device_id)
+        if not record:
+            return
+        name = dark_prompt(self.root, "Rename device",
+                           "The name is only a label — the device keeps its "
+                           "radio, port and bonds.",
+                           default=record.get("name", ""))
+        if name is None or not name.strip():
+            return
+        record["name"] = name.strip()
+        self.canvas.save()
+        self._rebuild_device_rows()
+
+    def _remove_device(self, device_id):
+        record = self.device_record(device_id)
+        if not record:
+            return
+        label = record.get("name", device_id)
+        if not dark_confirm(
+                self.root, f"Remove {label}?",
+                f"This removes “{label}” from OpenSpan, including its screens "
+                f"in the arrangement. Unpair it first if it is still bonded."):
+            return
+        self.canvas.remove_device(device_id)
+        self._dev_states.pop(device_id, None)
+        self._rebuild_device_rows()
+        _emit("event", f"removed device “{label}”.")
+
+    def _edit_device_displays(self, device_id):
+        record = self.device_record(device_id)
+        if not record:
+            return
+        MacDisplayEditor(self.root, self.canvas, device_id=device_id)
+        self._rebuild_device_rows()
 
     def _stop_portal_if_running(self):
         """Stop the input portal if it's running (Tk-touching -> UI thread)."""
@@ -5020,11 +5270,10 @@ class App:
             return  # shutting down: never respawn anything past _full_stop
         running = vm_running()
         st = daemon_status() if running else None
-        prefs = load_bt_prefs()
-        mac_st = (
-            target_daemon_status("mac")
-            if running and multi_radio_enabled(prefs)
-            and prefs.get("mac_radio") else None)
+        # probe EVERY device's own daemon (worker thread; no Tk here)
+        dev_status = self._poll_device_status() if running else {}
+        self._dev_status = dev_status
+        mac_st = None
         on = bool(self.portal_proc and self.portal_proc.poll() is None)
         self._ensure_audio()  # watchdog: relaunch the sender if it died
         aud = bool(self.audio_proc and self.audio_proc.poll() is None)
@@ -5034,7 +5283,7 @@ class App:
         if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
             self._refresh_paired()             # keep bond state fresh; self-heals
-            self._refresh_target_paired("mac")
+            self._refresh_all_device_paired()
         if running and self._poll_n % 20 == 0:
             # flush the VM disk every ~60s so a bond (or any state) can't be
             # lost to an unclean poweroff/crash between the connect-edge sync
@@ -5063,22 +5312,18 @@ class App:
             setind("ipad", "iPad ○ daemon starting", False)
         else:
             setind("ipad", "iPad ○ off", False)
-        if mac_st:
-            mac_subscribed = bool(mac_st.get("kbd_subscribed"))
-            if mac_subscribed and on:
-                self._ind["mac"].config(
-                    text="Mac ● connected", fg=ACCENT)
-            elif mac_subscribed:
-                self._ind["mac"].config(
-                    text="Mac ◐ portal off", fg=WARN)
-            elif self._mac_paired:
-                self._ind["mac"].config(text="Mac ◐ paired", fg=WARN)
-            else:
-                self._ind["mac"].config(text="Mac ○ not paired", fg=MUTED)
-        elif running and load_bt_prefs().get("mac_radio"):
-            setind("mac", "Mac ○ daemon starting", False)
+        # one summary token for ALL devices -- the per-device detail lives in
+        # the Devices panel, so the row does not grow a column per machine.
+        _devs = self.canvas.devices()
+        if _devs:
+            _liveN = sum(
+                1 for d in _devs
+                if (self._dev_status.get(d["id"]) or {}).get("kbd_subscribed"))
+            self._ind["mac"].config(
+                text=f"devices {_liveN}/{len(_devs)}",
+                fg=(ACCENT if _liveN else MUTED))
         else:
-            setind("mac", "Mac ○ not assigned", False)
+            self._ind["mac"].config(text="no devices", fg=MUTED)
         setind("portal", f"portal {'● ON' if on else '○ off'}", on)
         setind("audio", f"audio {'●' if aud else '○'}", aud)
         # Honest broadcast state, read straight from the daemon -- never a UI
@@ -5148,8 +5393,6 @@ class App:
                        "aud": aud, "paired": self._ipad_paired,
                        "busy": self._pair_inflight or self.broadcasting}
         self.canvas.set_ipad_state(connected and on, self._ipad_paired)
-        self.canvas.set_target_state(
-            "mac", mac_connected and on, self._mac_paired)
         # gate the four verbs by REAL state. Pair: daemon up + not mid-pair.
         # Connect: bonded but not connected. Disconnect: connected. Unpair:
         # bonded. Never fight the pair flow while it owns the radio.
@@ -5168,25 +5411,7 @@ class App:
                              else ["disabled"])
         self.unpair_btn.state(["!disabled"] if (_up and not busy
                               and self._ipad_paired) else ["disabled"])
-        prefs = load_bt_prefs()
-        mac_assigned = bool(
-            multi_radio_enabled(prefs) and prefs.get("mac_radio"))
-        mac_busy = self._mac_pair_inflight or self.mac_broadcasting
-        mac_up = mac_st is not None
-        self.mac_pair_btn.state(
-            ["!disabled"] if (
-                mac_assigned and mac_up and not mac_busy
-                and not mac_connected) else ["disabled"])
-        self.mac_conn_btn.state(
-            ["!disabled"] if (
-                mac_assigned and mac_up and not mac_busy
-                and self._mac_paired and not mac_connected) else ["disabled"])
-        self.mac_disc_btn.state(
-            ["!disabled"] if (mac_connected or mac_busy) else ["disabled"])
-        self.mac_unpair_btn.state(
-            ["!disabled"] if (
-                mac_assigned and mac_up and not mac_busy
-                and self._mac_paired) else ["disabled"])
+        self._apply_device_rows(on)
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
             if self._ipad_conn is not None or connected:
@@ -5203,19 +5428,40 @@ class App:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
             self._refresh_paired()   # a bond may have just formed or dropped
-        if mac_connected != self._mac_conn:
-            if self._mac_conn is not None or mac_connected:
-                if mac_connected:
-                    _emit("event", "Managed Mac CONNECTED — Bluetooth "
-                                   "keyboard/mouse subscribed and live.")
+        # connect/disconnect edge for EVERY device, reported by its own name
+        for _dev in self.canvas.devices():
+            _did = _dev["id"]
+            _live = bool(
+                (self._dev_status.get(_did) or {}).get("kbd_subscribed"))
+            if _live == self._dev_conn.get(_did):
+                continue
+            if _did in self._dev_conn or _live:
+                _label = _dev.get("name", _did)
+                if _live:
+                    _emit("event", f"{_label} CONNECTED — keyboard/mouse "
+                                   "subscribed and live.")
+                    # flush the VM disk so a fresh bond survives a hard stop
                     threading.Thread(
-                        target=lambda: ssh_guest(
-                            "sync", timeout=8, quiet=True),
+                        target=lambda: ssh_guest("sync", timeout=8, quiet=True),
                         daemon=True).start()
-                elif mac_st is not None:
-                    _emit("event", "Managed Mac disconnected.")
-            self._mac_conn = mac_connected
-            self._refresh_target_paired("mac")
+                    _st = self._dev_state(_did)
+                    if _st["broadcasting"] or _st["inflight"]:
+                        _st["broadcasting"] = False
+                        _st["inflight"] = False
+                        threading.Thread(
+                            target=set_target_advertising, args=(_did, False),
+                            daemon=True).start()
+                        if not (self.portal_proc
+                                and self.portal_proc.poll() is None):
+                            self.toggle_portal()
+                            _emit("event", f"{_label} paired — portal "
+                                           "auto-started.")
+                        on = bool(self.portal_proc
+                                  and self.portal_proc.poll() is None)
+                else:
+                    _emit("event", f"{_label} disconnected.")
+            self._dev_conn[_did] = _live
+            self._refresh_device_paired(_did)
         # once the iPad connects: settle the button to a check, auto-start the
         # portal (no manual click), and bring the earbuds back — full steady
         # state without another button press. Clearing broadcasting/_pair_
@@ -5242,16 +5488,6 @@ class App:
             self._auto_conn_last = 0.0
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("iPad paired — reconnecting the earbuds")
-        if mac_connected and self.mac_broadcasting:
-            threading.Thread(
-                target=set_target_advertising, args=("mac", False),
-                daemon=True).start()
-            self.mac_broadcasting = False
-            self._mac_pair_inflight = False
-            if not (self.portal_proc and self.portal_proc.poll() is None):
-                self.toggle_portal()
-                _emit("event", "Managed Mac paired — portal auto-started.")
-            on = bool(self.portal_proc and self.portal_proc.poll() is None)
         # an abandoned broadcast must not suppress auto-reconnect forever
         if (self.broadcasting or self._pair_inflight) and \
                 time.time() - self._broadcast_started > 300:
@@ -5270,18 +5506,18 @@ class App:
             self._auto_conn_last = 0.0
             self._auto_conn_fails = 0
             self._auto_reconnect_audio("broadcast expired — restoring audio")
-        if (self.mac_broadcasting or self._mac_pair_inflight) and \
-                time.time() - getattr(
-                    self, "_mac_broadcast_started", time.time()) > 300:
-            threading.Thread(
-                target=set_target_advertising, args=("mac", False),
-                daemon=True).start()
-            self.mac_broadcasting = False
-            self._mac_pair_inflight = False
-            _emit(
-                "event",
-                "managed Mac advertising window expired — press Pair or "
-                "Connect again when ready.")
+        # an abandoned attempt must never leave a device's radio beaconing
+        for _dev in self.canvas.devices():
+            _st = self._dev_state(_dev["id"])
+            if (_st["broadcasting"] or _st["inflight"]) and                     time.time() - _st["started"] > 300:
+                threading.Thread(
+                    target=set_target_advertising, args=(_dev["id"], False),
+                    daemon=True).start()
+                _st["broadcasting"] = False
+                _st["inflight"] = False
+                _emit("event", f"{_dev.get('name', _dev['id'])} advertising "
+                               "window expired — press Pair or Connect again "
+                               "when ready.")
         # secondary status readout — set AFTER the connect-edge auto-start so
         # `on` reflects the portal we may have just started this tick
         try:
@@ -5332,8 +5568,12 @@ class App:
         self._ind["portal"].config(text=f"portal {'● ON' if on else '○ off'}",
                                    fg=(ACCENT if on else MUTED))
         cur = self.status.get()
+        _any_busy = any(
+            self._dev_state(d["id"])["broadcasting"]
+            or self._dev_state(d["id"])["inflight"]
+            for d in self.canvas.devices())
         if not self.broadcasting and not self._pair_inflight \
-                and not self.mac_broadcasting and not self._mac_pair_inflight \
+                and not _any_busy \
                 and "fail" not in cur.lower() and "didn't" not in cur:
             if not running:
                 self.status.set("Bridge stopped — click Bridge VM to start.")
@@ -5342,8 +5582,7 @@ class App:
             elif connected:
                 self.status.set("iPad connected — keyboard & mouse bridging.")
             elif mac_connected:
-                self.status.set(
-                    "Managed Mac connected — keyboard & mouse bridging.")
+                self.status.set("Device connected — keyboard & mouse bridging.")
             else:
                 self.status.set(
                     "Ready — pair or connect the iPad or managed Mac.")

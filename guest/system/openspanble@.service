@@ -1,0 +1,26 @@
+[Unit]
+Description=OpenSpan BLE HID peripheral daemon (device %i)
+After=bluetooth.service openspan-btready.service
+Requires=bluetooth.service
+# An instance is a LANE, not a device type. Until set-hid-device.sh has written
+# the per-instance drop-in the lane has no radio/port/name of its own, and
+# starting it would fall back on the daemon defaults (hci0:9955) and collide
+# with a real lane. No drop-in, no start.
+ConditionPathExists=/etc/systemd/system/openspanble@%i.service.d/20-device.conf
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+# Deliberately NO port/adapter/name here: every value that identifies this lane
+# comes from 20-device.conf. Only the instance id is known statically.
+Environment=OPENSPAN_DEVICE_ID=%i
+# wait-hci0.sh / ensure-dualmode.sh both read OPENSPAN_ADAPTER, so they act on
+# this instance's radio and never power-cycle another lane's.
+ExecStartPre=/opt/openspan/wait-hci0.sh
+ExecStartPre=/opt/openspan/ensure-dualmode.sh
+ExecStart=/usr/bin/python3 /opt/openspan/openspan_ble.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

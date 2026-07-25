@@ -57,7 +57,8 @@ stage1_base() {
   install -m 755 "$HERE/openspan_ble.py" "$OPT/openspan_ble.py"
   install -m 755 "$HERE/udp_to_sink.py"  "$OPT/udp_to_sink.py"
   for s in bt-connect.sh bt-list.sh btready.sh openspan_bt.py \
-           set-hid-radio.sh set-hid-target.sh ensure-dualmode.sh wait-hci0.sh \
+           set-hid-radio.sh set-hid-target.sh set-hid-device.sh \
+           ensure-dualmode.sh wait-hci0.sh \
            install-authorized-key.sh; do
     install -m 755 "$HERE/$s" "$OPT/$s"
   done
@@ -102,6 +103,10 @@ stage2_ble() {
   install -m 644 "$HERE/system/openspanble.service" "$SD/openspanble.service"
   install -m 644 "$HERE/system/openspanble-mac.service" \
     "$SD/openspanble-mac.service"
+  # generic per-device lane: openspanble@<id>, one instance per device, each
+  # configured by set-hid-device.sh. The two legacy units above stay installed
+  # so already-bonded iPad/Mac lanes survive the migration.
+  install -m 644 "$HERE/system/openspanble@.service" "$SD/openspanble@.service"
   install -d "$SD/openspanble.service.d"
   install -m 644 "$HERE/system/openspanble.service.d/10-wait.conf" \
     "$SD/openspanble.service.d/10-wait.conf"
