@@ -3102,10 +3102,9 @@ class App:
         _t2 = tk.Label(head, text="PC → iPad + Mac bridge", bg=BG, fg=MUTED,
                        font=("Segoe UI", 10))
         _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
-        # window controls: the caption is removed (frameless), so THIS row is the
-        # title bar. These are Tk buttons -> commands run on the Tk thread (R1-
-        # safe); the DRAG is native via WM_NCHITTEST HTCAPTION (Windows drives
-        # the move -- no geometry jitter, no SendMessage modal loop).
+        # window controls: the caption is stripped (frameless), so THIS row is
+        # the title bar. Tk buttons -> commands on the Tk thread (R1-safe); the
+        # drag is the SetWindowPos header binding below (callback-free).
         _cl = tk.Button(head, text="✕", command=self._confirm_close, bg=BG,
                         fg=MUTED, bd=0, relief="flat", width=3, cursor="hand2",
                         font=("Segoe UI", 12), activebackground=DANGER,
@@ -3348,12 +3347,15 @@ class App:
         # push app-bundled guest scripts to the VM so a fix in the app also
         # updates the VM-side connection logic (no manual deploy, no reliance)
         self._sync_guest_scripts()
-        # Keep the native Tk/Windows window procedure. The earlier frameless
-        # treatment replaced GWLP_WNDPROC with a Python ctypes callback; rapid
-        # pointer traffic over the arrangement canvas repeatedly faulted in
-        # _ctypes.pyd (0xc0000005). DWM dark paint is cosmetic and does not
-        # install a callback, so it is safe under the same workload.
-        self.root.after(120, lambda: _paint_dark_titlebar(self.root))
+        # FRAMELESS, the crash-safe way. The earlier frameless treatment
+        # subclassed GWLP_WNDPROC with a Python ctypes callback; heavy pointer
+        # traffic (WM_NCHITTEST fires on every move) faulted it in _ctypes.pyd
+        # (0xc0000005). _frameless_safe drops the caption with a ONE-SHOT style
+        # strip -- NO callback, native window procedure kept -- so that fault
+        # cannot recur. DWM dark paint sits cosmetically on top; the header row
+        # above is the title bar.
+        self.root.after(120, lambda: (self._frameless_safe(),
+                                      _paint_dark_titlebar(self.root)))
         # Runtime tray creation is deliberately disabled. Its pure-ctypes
         # WNDPROC also access-violated during a live soak despite passing short
         # self-tests. Native taskbar minimize needs no Python Windows callback.
@@ -3665,8 +3667,36 @@ class App:
             # Fallback (maximized, or ctypes unavailable): the original Tk move.
             self.root.geometry(f"+{x}+{y}")
 
+    def _frameless_safe(self):
+        """Frameless the CRASH-SAFE way: a ONE-SHOT Win32 style strip that drops
+        WS_CAPTION -- NO ctypes WNDPROC subclass, so the _ctypes.pyd 0xc0000005
+        the old WM_NCCALCSIZE/HTCAPTION callback hit under heavy pointer traffic
+        cannot recur (there is no callback to fault). WS_THICKFRAME stays, so the
+        window keeps a native resize border, minimize/maximize, snap and taskbar.
+        The header row is the title bar; the drag is the SetWindowPos header
+        binding (also callback-free). Wrapped so any failure just leaves the
+        native caption -- never a crash."""
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+            u = ctypes.windll.user32
+            u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+            u.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+            u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            u.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int,
+                                            ctypes.c_ssize_t]
+            hwnd = u.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+            GWL_STYLE, WS_CAPTION = -16, 0x00C00000  # WS_BORDER | WS_DLGFRAME
+            style = u.GetWindowLongPtrW(hwnd, GWL_STYLE)
+            u.SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_CAPTION)
+            # FRAMECHANGED|NOSIZE|NOMOVE|NOZORDER so the strip takes effect in place
+            u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0027)
+        except Exception:  # noqa: BLE001 -- fall back to the native caption
+            pass
+
     def _dark_titlebar(self):
-        """Fully FRAMELESS, the SAFE way (rule R1). NO overrideredirect, NO style
+        """[SUPERSEDED by _frameless_safe -- NOT called. Kept for reference only.]
+        Fully FRAMELESS, the SAFE way (rule R1). NO overrideredirect, NO style
         flip, NO SendMessage modal drag -- every one of those crashed. The window
         stays a NORMAL top-level (native taskbar / minimize / maximize / snap /
         Alt-Tab intact). We subclass its window-proc only to (a) drop the caption

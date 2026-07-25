@@ -26,6 +26,19 @@ time-sharing two roles. "One antenna, two jobs" is the whole saga.
 
 ## Rough timeline
 
+### Jul 25 — validated end-to-end; frameless restored (safely)
+- **Validated over several days (Jul 23–25) of real-hardware use — every
+  tested path passed.** iPad input, managed-Mac input, Bluetooth audio,
+  controller isolation, and seamless iPad↔Mac edge handoff all worked together
+  and survived restarts across the run, with no regression in the original
+  single-radio iPad path.
+- Restored the frameless window the crash-safe way: a one-shot Win32 style
+  strip (drop `WS_CAPTION`) with **no ctypes window procedure** — so the
+  `_ctypes.pyd` access-violation the old `WM_NCCALCSIZE`/`HTCAPTION` callback
+  hit under heavy pointer traffic cannot recur. The header row is the title
+  bar; the drag stays the callback-free `SetWindowPos` blit; native resize,
+  minimize, snap, and the taskbar are all kept.
+
 ### Jul 24 — independent managed-Mac lane
 - The three-radio bench passed: iPad input, Bluetooth audio, and controller
   isolation all worked after restart.
