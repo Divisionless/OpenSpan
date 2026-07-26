@@ -2617,7 +2617,7 @@ class BtPanel(tk.Frame):
             else:
                 self._log("iPad keyboard radio assigned.")
             if self.app:
-                self.app._refresh_paired()
+                self.app._refresh_all_device_paired()
         threading.Thread(target=apply, daemon=True).start()
 
     def _on_mac_radio(self, _event=None):
@@ -2705,7 +2705,7 @@ class BtPanel(tk.Frame):
             else:
                 self._log("all three radio lanes are active.")
             if self.app:
-                self.app._refresh_paired()
+                self.app._refresh_all_device_paired()
                 self.app._refresh_all_device_paired()
         threading.Thread(target=apply, daemon=True).start()
 
@@ -3387,49 +3387,29 @@ class App:
             command=lambda: MacDisplayEditor(self.root, self.canvas)).pack(
                 side="right")
 
-        # controls (Bridge tab) -- the iPad is managed like a normal Bluetooth
-        # device: Pair / Connect / Disconnect / Unpair on top. Portal (input
-        # routing) folds into Connect/Disconnect. The VM + keymap + reset are a
-        # secondary "troubleshooting" row, there only if the four verbs can't
-        # finish the job.
+        # Bridge controls. The four connection verbs live ONLY on each device's
+        # own row in the Devices panel below -- there is deliberately no second
+        # global copy of them here. A duplicate row kept its own separate
+        # paired-state, so unpairing via one left the other still showing the
+        # device as paired.
         ctl = tk.Frame(bridge, bg=BG)
         ctl.pack(fill="x", padx=16, pady=(2, 4))
-        self.pair_btn = ttk.Button(ctl, text="Pair", command=self.pair)
-        self.pair_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
-        self.conn_btn = ttk.Button(ctl, text="Connect",
-                                   command=self._connect_ipad)
-        self.conn_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
-        self._disc_btn = ttk.Button(ctl, text="Disconnect",
-                                    command=self._disconnect_ipad)
-        self._disc_btn.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
-        self.unpair_btn = ttk.Button(ctl, text="Unpair",
-                                     command=self._unpair_ipad)
-        self.unpair_btn.grid(row=0, column=3, sticky="ew", padx=3, pady=3)
         self.broadcasting = False
-
-        # secondary / troubleshooting row
         self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
-        self.vm_btn.grid(row=1, column=0, sticky="ew", padx=3, pady=(8, 3))
+        self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
         self.portal_btn = ttk.Button(ctl, text="Start portal",
                                      command=self.toggle_portal)
-        self.portal_btn.grid(row=1, column=1, sticky="ew", padx=3, pady=(8, 3))
+        self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
         ttk.Button(ctl, text="Edit keymap",
                    command=lambda: os.startfile(KEYMAP)).grid(
-            row=1, column=2, sticky="ew", padx=3, pady=(8, 3))
-        ttk.Button(ctl, text="↻ Re-pair (reset bond)",
-                   command=lambda: self.pair(reset=True)).grid(
-            row=1, column=3, sticky="ew", padx=3, pady=(8, 3))
+            row=0, column=2, sticky="ew", padx=3, pady=3)
         self.invert_scroll = tk.BooleanVar(
             value=bool(load_setting("scroll_invert", False)))
         ttk.Checkbutton(ctl, text="⇅  Invert scroll wheel",
                         variable=self.invert_scroll,
                         command=self._on_invert_scroll).grid(
-            row=2, column=0, columnspan=4, sticky="w", padx=5, pady=(2, 3))
-        # start gated; _apply_poll manages enable/disable by real state
-        for _b in (self.pair_btn, self.conn_btn, self._disc_btn,
-                   self.unpair_btn):
-            _b.state(["disabled"])
-        for c in range(4):
+            row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
+        for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
         # ---- Devices: one row per device, built from the config ------------
@@ -4316,23 +4296,24 @@ class App:
                         font=("Segoe UI", 10))
             m.add_command(label=f"Open {APP_LABEL}", command=self._from_tray)
             m.add_separator()
-            m.add_command(label="Pair iPad",
-                          command=lambda: self.pair(confirm=False),
-                          state=("normal" if (run and not c.get("connected"))
-                                 else "disabled"))
-            m.add_command(label="Connect iPad",
-                          command=self._connect_ipad,
-                          state=("normal" if (run and c.get("paired")
-                                 and not c.get("connected")) else "disabled"))
-            m.add_command(label="Disconnect iPad",
-                          command=self._disconnect_ipad,
-                          state=("normal" if (c.get("connected")
-                                 or c.get("busy")) else "disabled"))
-            m.add_command(label="Unpair iPad",
-                          command=lambda: (self._from_tray(), self.root.after(
-                              250, self._unpair_ipad)),
-                          state=("normal" if (run and c.get("paired"))
-                                 else "disabled"))
+            # One Connect/Disconnect per DEVICE, driven by the same per-device
+            # verbs and the same per-device state the Devices panel uses -- so
+            # the tray can never disagree with the window.
+            for _d in (self.canvas.devices() if run else []):
+                _id, _label = _d["id"], _d.get("name", _d["id"])
+                _s = self._dev_state(_id)
+                _liveN = bool(
+                    (self._dev_status.get(_id) or {}).get("kbd_subscribed"))
+                _busy = _s["inflight"] or _s["broadcasting"]
+                m.add_command(
+                    label=f"Connect {_label}",
+                    command=lambda i=_id: self._connect_device(i),
+                    state=("normal" if (_s["paired"] and not _liveN
+                                        and not _busy) else "disabled"))
+                m.add_command(
+                    label=f"Disconnect {_label}",
+                    command=lambda i=_id: self._disconnect_device(i),
+                    state=("normal" if (_liveN or _busy) else "disabled"))
             m.add_command(
                 label=("■  Stop portal" if c.get("on") else "▶  Start portal"),
                 command=self.toggle_portal,
@@ -4554,7 +4535,7 @@ class App:
                 if r.returncode == 0:
                     _emit("event", "saved iPad radio resolved for this boot "
                                    f"({controller}).")
-                    self._refresh_paired()
+                    self._refresh_all_device_paired()
                 else:
                     detail = (r.stderr or r.stdout or "").strip()
                     _emit("err", "saved iPad radio could not be applied: "
@@ -4614,9 +4595,6 @@ class App:
         self._broadcast_started = time.time()
         # disable the connection verbs while the radio work runs; _apply_poll
         # re-gates them by real state once _pair_inflight clears.
-        for _b in (self.pair_btn, self.conn_btn, self.unpair_btn):
-            _b.state(["disabled"])
-        self._disc_btn.state(["!disabled"])   # doubles as Cancel while working
         self.status.set("Working — freeing the radio to (re)connect the iPad…")
         threading.Thread(target=self._pair_worker, args=(reset,),
                          daemon=True).start()
@@ -4766,83 +4744,6 @@ class App:
         self.ui(lambda: self.status.set(
             "📡 Advertising — on the iPad, tap \"OpenSpan Keyboard\" to "
             "connect."))
-
-    def _connect_ipad(self):
-        """CONNECT verb: advertise so the BONDED iPad reconnects; the input
-        portal auto-starts on the connect edge (_apply_poll). Same machinery as
-        Pair, minus the confirm dialog -- this is a return, not a first pair."""
-        self.pair(reset=False, confirm=False)
-
-    def _disconnect_ipad(self):
-        """DISCONNECT verb: drop the iPad's BLE link AND stop advertising, so the
-        iPad's on-screen keyboard comes back and STAYS back (nothing left to
-        reconnect to). The bond is KEPT -> Connect brings it right back. The
-        shared input broker stays alive for the managed Mac; its independent
-        iPad channel notices the disconnect and becomes unavailable."""
-        def work():
-            # clear the flags under the lock FIRST so an in-flight pair worker's
-            # commit sees the cancel; then drop advertising + the link.
-            with self._pair_lock:
-                self.broadcasting = False
-                self._pair_inflight = False
-            set_advertising(False)               # nothing to re-attach to
-            r = daemon_cmd({"cmd": "disconnect"})
-            if r and r.get("ok"):
-                _emit("event", f"iPad DISCONNECTED ({r.get('disconnected', 0)} "
-                               "link) — advertising off, its on-screen keyboard "
-                               "returns. Press Connect to bring it back.")
-            else:
-                _emit("err", "couldn't disconnect the iPad — see console.")
-            self._refresh_paired()
-            # if this was a CANCEL of an in-flight pair, the burst dropped the
-            # earbuds -- bring them back (a no-op if they're already connected)
-            self._auto_conn_last = 0.0
-            self._auto_conn_fails = 0
-            self._auto_reconnect_audio("disconnect — restoring audio")
-        threading.Thread(target=work, daemon=True).start()
-
-    def _unpair_ipad(self):
-        """UNPAIR verb: forget the iPad's bond on THIS side (+ disconnect + stop
-        advertising for the iPad lane only). The Mac radio, Mac daemon, and
-        shared input broker stay live. You also tap 'Forget This Device' on the
-        iPad. Earbuds (Icon: audio) are never touched."""
-        if not dark_confirm(
-                self.root, "Unpair the iPad?",
-                "This forgets the iPad's saved pairing on this side and "
-                "disconnects it — you'll also tap 'Forget This Device' on the "
-                "iPad itself. Your earbuds are not affected."):
-            return
-        def work():
-            set_advertising(False)
-            self.broadcasting = False
-            self._pair_inflight = False
-            daemon_cmd({"cmd": "disconnect"})
-            # forget every bonded NON-audio device (the iPad); earbuds exempt
-            prefs = load_bt_prefs()
-            controller = prefs.get("hid_radio", "")
-            if multi_radio_enabled(prefs) and controller:
-                command = (
-                    "python3 /opt/openspan/openspan_bt.py forget-hid "
-                    f"--controller {controller} --target ipad")
-            else:
-                command = (
-                    'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-                    'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
-                    '[ "$d" = "$AUD" ] && continue; '
-                    'info=$(bluetoothctl info "$d" 2>/dev/null); '
-                    'echo "$info" | grep -qi "Icon: audio" && continue; '
-                    'bluetoothctl remove "$d" >/dev/null 2>&1; '
-                    'done; echo done')
-            r = ssh_guest(command, timeout=25)
-            if r.returncode == 0:
-                self._ipad_paired = False   # authoritative: the bond is gone
-                _emit("event", "iPad UNPAIRED — bond forgotten on this side. Now "
-                               "tap 'Forget This Device' on the iPad, then Pair "
-                               "to start fresh.")
-            else:
-                _emit("err", "unpair failed — see console.")
-            self._refresh_paired()   # confirm (newest generation wins)
-        threading.Thread(target=work, daemon=True).start()
 
     def _refresh_paired(self):
         """Read-only: is the iPad (a NON-audio device) bonded? Cheap bluetoothctl
@@ -5291,7 +5192,7 @@ class App:
         self._poll_n = getattr(self, "_poll_n", 0) + 1
         if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
-            self._refresh_paired()             # keep bond state fresh; self-heals
+            self._refresh_all_device_paired()             # keep bond state fresh; self-heals
             self._refresh_all_device_paired()
         if running and self._poll_n % 20 == 0:
             # flush the VM disk every ~60s so a bond (or any state) can't be
@@ -5388,7 +5289,7 @@ class App:
                 # detect a returning bond at first-ready (don't wait ~15s for the
                 # periodic tick) so Connect/Unpair light up right away; the
                 # periodic read is still the self-heal.
-                self._refresh_paired()
+                self._refresh_all_device_paired()
             if r_state == "ready" and not self.broadcasting \
                     and not self._pair_inflight:
                 # the buds try to reconnect on their own during the ~90s
@@ -5407,19 +5308,6 @@ class App:
         # bonded. Never fight the pair flow while it owns the radio.
         busy = self._pair_inflight or self.broadcasting
         _up = st is not None
-        self.pair_btn.state(["!disabled"] if (_up and not busy and not connected)
-                            else ["disabled"])
-        self.conn_btn.state(["!disabled"] if (_up and not busy
-                            and self._ipad_paired and not connected)
-                            else ["disabled"])
-        # Disconnect doubles as CANCEL: enabled while connected OR while a
-        # pair/connect is in flight, so an abandoned attempt is abortable at
-        # once (it clears advertising + broadcasting/_pair_inflight and restores
-        # audio) instead of a 300s lockout.
-        self._disc_btn.state(["!disabled"] if (connected or busy)
-                             else ["disabled"])
-        self.unpair_btn.state(["!disabled"] if (_up and not busy
-                              and self._ipad_paired) else ["disabled"])
         self._apply_device_rows(on)
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
@@ -5436,7 +5324,7 @@ class App:
                 elif st is not None:
                     _emit("event", "iPad disconnected.")
             self._ipad_conn = connected
-            self._refresh_paired()   # a bond may have just formed or dropped
+            self._refresh_all_device_paired()   # a bond may have just formed or dropped
         # connect/disconnect edge for EVERY device, reported by its own name
         for _dev in self.canvas.devices():
             _did = _dev["id"]

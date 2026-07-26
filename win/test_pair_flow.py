@@ -121,10 +121,6 @@ def drain():
             break
 
 
-def btn():
-    return app.pair_btn.cget("text")
-
-
 def enabled(widget):
     return "disabled" not in widget.state()
 
@@ -149,8 +145,8 @@ drain()
 check("runtime does not create a ctypes tray WNDPROC", not _unsafe_tray_calls)
 check("main UI does not start a Core Audio COM thread",
       not _unsafe_volume_calls)
-disconnect_source = inspect.getsource(openspan.App._disconnect_ipad)
-unpair_source = inspect.getsource(openspan.App._unpair_ipad)
+disconnect_source = inspect.getsource(openspan.App._disconnect_device)
+unpair_source = inspect.getsource(openspan.App._unpair_device)
 device_disconnect_source = inspect.getsource(openspan.App._disconnect_device)
 device_unpair_source = inspect.getsource(openspan.App._unpair_device)
 check("disconnecting one device leaves the shared router running",
@@ -160,8 +156,7 @@ check("unpairing one device leaves the shared router running",
       "_stop_portal_if_running" not in unpair_source
       and "_stop_portal_if_running" not in device_unpair_source)
 check("unpair forgets only that device's own bond, never a global wipe",
-      "--target ipad" in unpair_source
-      and "--target {device_id}" in device_unpair_source
+      "--target {device_id}" in device_unpair_source
       and "bluetoothctl remove" not in device_unpair_source)
 
 
@@ -428,12 +423,10 @@ openspan.dark_confirm = lambda *a, **k: _confirm["answer"]
 _confirm["answer"] = False
 app._pair_inflight = False
 app.broadcasting = False
-before = btn()
 app.pair()
 drain()
 check("cancel: _pair_inflight stays False", app._pair_inflight is False)
 check("cancel: not broadcasting", app.broadcasting is False)
-check("cancel: button unchanged", btn() == before)
 
 # === 2. confirm = Yes -> worker runs, broadcasting=True =====================
 _confirm["answer"] = True
@@ -447,7 +440,6 @@ while time.time() - t0 < 10:
 check("pair: broadcasting=True after worker", app.broadcasting is True)
 app._apply_poll(True, fake_daemon_status(), False, True)
 drain()
-check("pair: Pair disabled while broadcasting", not enabled(app.pair_btn))
 check("pair: broadcast indicator is green",
       str(app._ind["bcast"].cget("fg")) == str(openspan.ACCENT))
 
@@ -469,9 +461,6 @@ check("connect: broadcasting cleared", app.broadcasting is False)
 check("connect: _pair_inflight cleared", app._pair_inflight is False)
 check("connect: portal auto-started (proc live)",
       app.portal_proc is not None and app.portal_proc.poll() is None)
-check("connect: Pair and Connect disabled",
-      not enabled(app.pair_btn) and not enabled(app.conn_btn))
-check("connect: Disconnect enabled", enabled(app._disc_btn))
 check("connect: cooldown reset to 0", app._auto_conn_last == 0.0)
 check("connect: fails reset to 0", app._auto_conn_fails == 0)
 check("connect: reconnect was invoked", len(_reconnects) == 1)
@@ -500,7 +489,6 @@ check("connect(portal on): same portal proc (no restart)",
 # === 4. reconciler: button truthful vs. connected when idle =================
 app.broadcasting = False
 app._pair_inflight = False
-app.pair_btn.state(["!disabled"])
 app._apply_poll(
     True,
     {"kbd_subscribed": True, "mouse_subscribed": True,
@@ -508,7 +496,6 @@ app._apply_poll(
      "advertising_error": ""},
     True, True)
 drain()
-check("reconcile: connected -> Pair disabled", not enabled(app.pair_btn))
 app._apply_poll(
     True,
     {"kbd_subscribed": False, "mouse_subscribed": False,
@@ -516,7 +503,6 @@ app._apply_poll(
      "advertising_error": ""},
     True, True)
 drain()
-check("reconcile: disconnected -> Pair enabled", enabled(app.pair_btn))
 # reconciler must NOT stomp a transient state (broadcasting)
 app.broadcasting = True
 app._apply_poll(
@@ -526,8 +512,6 @@ app._apply_poll(
      "advertising_error": ""},
     True, True)
 drain()
-check("reconcile: Pair stays disabled while broadcasting",
-      not enabled(app.pair_btn))
 app.broadcasting = False
 
 # === 4b. multi-radio pair stays controller-scoped ===========================
@@ -678,7 +662,6 @@ check("fail: audio reconnect invoked",
       any("restoring" in r for r in _reconnects))
 app._apply_poll(True, fake_daemon_status(), False, True)
 drain()
-check("fail: Pair re-enabled", enabled(app.pair_btn))
 openspan.ssh_guest = lambda *a, **k: R(0, "", "")  # restore for later
 
 # === 6. expiry path -> reconnect audio, fails reset =========================
