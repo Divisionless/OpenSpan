@@ -4986,7 +4986,12 @@ class App:
                     f"--controller {controller} --target {device_id}",
                     timeout=8, quiet=True)
                 if r.returncode == 0 and generation == state["gen"]:
-                    state["paired"] = "PAIRED" in (r.stdout or "").upper()
+                    out = (r.stdout or "").upper()
+                    # The guest prints exactly PAIRED or NOT_PAIRED. A bare
+                    # substring test is TRUE for "NOT_PAIRED", which pinned
+                    # every device to "paired" forever -- match the whole token.
+                    state["paired"] = ("PAIRED" in out
+                                       and "NOT_PAIRED" not in out)
             except Exception:  # noqa: BLE001
                 pass
         threading.Thread(target=work, daemon=True).start()

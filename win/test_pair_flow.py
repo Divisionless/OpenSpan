@@ -155,6 +155,27 @@ check("disconnecting one device leaves the shared router running",
 check("unpairing one device leaves the shared router running",
       "_stop_portal_if_running" not in unpair_source
       and "_stop_portal_if_running" not in device_unpair_source)
+# REGRESSION: the guest prints exactly PAIRED or NOT_PAIRED. A bare substring
+# test ("PAIRED" in out) is TRUE for "NOT_PAIRED", which pinned every device to
+# "paired" forever -- a device stayed yellow after a successful Unpair.
+_paired_src = inspect.getsource(openspan.App._refresh_device_paired)
+check("paired parse rejects the NOT_PAIRED substring",
+      "NOT_PAIRED" in _paired_src)
+
+
+def _parse_paired(out):
+    """Mirror of the app's token test, exercised on the guest's real strings."""
+    out = out.upper()
+    return "PAIRED" in out and "NOT_PAIRED" not in out
+
+
+check("paired parse: guest 'PAIRED' -> paired", _parse_paired("PAIRED") is True)
+check("paired parse: guest 'NOT_PAIRED' -> NOT paired",
+      _parse_paired("NOT_PAIRED") is False)
+check("paired parse: trailing newline tolerated",
+      _parse_paired("NOT_PAIRED\n") is False
+      and _parse_paired("PAIRED\n") is True)
+
 check("unpair forgets only that device's own bond, never a global wipe",
       "--target {device_id}" in device_unpair_source
       and "bluetoothctl remove" not in device_unpair_source)
