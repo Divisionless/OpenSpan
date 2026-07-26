@@ -428,14 +428,14 @@ def build_parser():
     prep = sub.add_parser("prepare-hid")
     prep.add_argument("--controller", required=True)
     prep.add_argument("--reset", action="store_true")
-    prep.add_argument("--target", choices=("ipad", "mac"), default="")
+    prep.add_argument("--target", default="")
     paired = sub.add_parser("hid-status")
     paired.add_argument("--controller", required=True)
-    paired.add_argument("--target", choices=("ipad", "mac"), default="")
+    paired.add_argument("--target", default="")
     forget_hid = sub.add_parser("forget-hid")
     forget_hid.add_argument("--controller", required=True)
     forget_hid.add_argument(
-        "--target", choices=("ipad", "mac"), default="")
+        "--target", default="")
     sub.add_parser("reconnect-audio")
     return parser
 

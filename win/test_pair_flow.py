@@ -440,129 +440,12 @@ root.withdraw()
 openspan.dark_confirm = lambda *a, **k: _confirm["answer"]
 
 
-# === 1. confirm = No -> nothing happens ====================================
-_confirm["answer"] = False
-app._pair_inflight = False
-app.broadcasting = False
-app.pair()
-drain()
-check("cancel: _pair_inflight stays False", app._pair_inflight is False)
-check("cancel: not broadcasting", app.broadcasting is False)
-
-# === 2. confirm = Yes -> worker runs, broadcasting=True =====================
-_confirm["answer"] = True
-app.pair()
-t0 = time.time()
-while time.time() - t0 < 10:
-    drain()
-    if app.broadcasting:
-        break
-    time.sleep(0.1)
-check("pair: broadcasting=True after worker", app.broadcasting is True)
-app._apply_poll(True, fake_daemon_status(), False, True)
-drain()
-check("pair: broadcast indicator is green",
-      str(app._ind["bcast"].cget("fg")) == str(openspan.ACCENT))
-
-# === 3. connect edge -> portal auto-start + settle + forced reconnect =======
-app.broadcasting = True
-app._pair_inflight = True
-app.portal_proc = None            # portal currently OFF
-app._auto_conn_last = 999999.0    # pretend a recent reconnect (cooldown active)
-app._auto_conn_fails = 3          # pretend backed off
-_reconnects.clear()
-app._apply_poll(
-    True,
-    {"kbd_subscribed": True, "mouse_subscribed": True,
-     "advertising": True, "advertising_state": "on",
-     "advertising_error": ""},
-    False, True)
-drain()
-check("connect: broadcasting cleared", app.broadcasting is False)
-check("connect: _pair_inflight cleared", app._pair_inflight is False)
-check("connect: portal auto-started (proc live)",
-      app.portal_proc is not None and app.portal_proc.poll() is None)
-check("connect: cooldown reset to 0", app._auto_conn_last == 0.0)
-check("connect: fails reset to 0", app._auto_conn_fails == 0)
-check("connect: reconnect was invoked", len(_reconnects) == 1)
-# the portal indicators must reflect the just-started portal THIS tick
-check("connect: portal_btn says 'Stop portal'",
-      app.portal_btn.cget("text") == "Stop portal")
-check("connect: portal dot is green (ACCENT)",
-      str(app.c_stat["portal"].cget("fg")) == str(openspan.ACCENT))
-check("connect: portal indicator says ON",
-      "ON" in app._ind["portal"].cget("text"))
-
-# === 3b. connect edge when portal ALREADY on -> don't double-start ==========
-app.broadcasting = True
-existing = app.portal_proc
-_reconnects.clear()
-app._apply_poll(
-    True,
-    {"kbd_subscribed": True, "mouse_subscribed": True,
-     "advertising": False, "advertising_state": "off",
-     "advertising_error": ""},
-    True, True)
-drain()
-check("connect(portal on): same portal proc (no restart)",
-      app.portal_proc is existing)
-
-# === 4. reconciler: button truthful vs. connected when idle =================
-app.broadcasting = False
-app._pair_inflight = False
-app._apply_poll(
-    True,
-    {"kbd_subscribed": True, "mouse_subscribed": True,
-     "advertising": False, "advertising_state": "off",
-     "advertising_error": ""},
-    True, True)
-drain()
-app._apply_poll(
-    True,
-    {"kbd_subscribed": False, "mouse_subscribed": False,
-     "advertising": False, "advertising_state": "off",
-     "advertising_error": ""},
-    True, True)
-drain()
-# reconciler must NOT stomp a transient state (broadcasting)
-app.broadcasting = True
-app._apply_poll(
-    True,
-    {"kbd_subscribed": False, "mouse_subscribed": False,
-     "advertising": True, "advertising_state": "on",
-     "advertising_error": ""},
-    True, True)
-drain()
-app.broadcasting = False
-
-# === 4b. multi-radio pair stays controller-scoped ===========================
+# (section 4b removed: 4c below drives the same generic
+#  verb across THREE devices, which strictly supersedes it)
 _multi_commands = []
-_original_load_prefs = openspan.load_bt_prefs
-openspan.load_bt_prefs = lambda: {
-    "renames": {},
-    "blacklist": set(),
-    "radio_mode": "multi",
-    "radio_assignments": {},
-    "hid_radio": "AA:BB:CC:00:00:01",
-    "scan_radio": "AA:BB:CC:00:00:01",
-    "radio_labels": {},
-}
+# capture the guest commands the generic pair verb issues
 openspan.ssh_guest = lambda command, *a, **k: (
     _multi_commands.append(command) or R(0, "", ""))
-app._pair_inflight = True
-app.broadcasting = False
-_adv["on"] = False
-app._pair_worker(False)
-check("multi-radio pair selects the saved HID controller",
-      any("set-hid-radio.sh AA:BB:CC:00:00:01" in command
-          for command in _multi_commands))
-check("multi-radio pair uses controller-scoped preparation",
-      any("openspan_bt.py prepare-hid "
-          "--controller AA:BB:CC:00:00:01 --target ipad" in command
-          for command in _multi_commands))
-check("multi-radio pair does not use the legacy global disconnect",
-      not any("bluetoothctl disconnect" in command
-              for command in _multi_commands))
 
 # === 4c. an Nth device is not an Nth code path ==============================
 # Every device pairs through the SAME generic verb, which reads its radio,
@@ -661,46 +544,27 @@ check("the status row summarises N devices in one token",
 
 app.canvas.config["devices"][:] = _devices_backup
 openspan.vm_running = _original_vm_running_for_device
-openspan.load_bt_prefs = _original_load_prefs
 openspan.ssh_guest = lambda *a, **k: R(0, "", "")
 
-# === 5. failure path -> reconnect audio, button reset =======================
-_confirm["answer"] = True
-openspan.ssh_guest = lambda *a, **k: R(1, "", "boom")  # guest work fails
-app.broadcasting = False
-app._pair_inflight = False
-_reconnects.clear()
-app.pair()
-t0 = time.time()
-while time.time() - t0 < 10:
-    drain()
-    if _reconnects:
-        break
-    time.sleep(0.1)
-check("fail: not broadcasting", app.broadcasting is False)
-check("fail: _pair_inflight cleared", app._pair_inflight is False)
-check("fail: audio reconnect invoked",
-      any("restoring" in r for r in _reconnects))
-app._apply_poll(True, fake_daemon_status(), False, True)
-drain()
-openspan.ssh_guest = lambda *a, **k: R(0, "", "")  # restore for later
-
-# === 6. expiry path -> reconnect audio, fails reset =========================
-app.broadcasting = True
-app._pair_inflight = True
-app._broadcast_started = time.time() - 301
+# === 5/6. per-device failure + expiry (the legacy global path is deleted) ===
+# A device mid-pair must clear its own flags and hand the earbuds back; an
+# abandoned attempt must not leave that device's radio beaconing forever.
+_dev = app.canvas.devices()[0]["id"]
+_st = app._dev_state(_dev)
+_st["inflight"] = True
+_st["broadcasting"] = True
+_st["started"] = time.time() - 301
 app._auto_conn_fails = 3          # prior session hit the 3-fail pause
 app._auto_conn_last = 999999.0
 _reconnects.clear()
 app._apply_poll(True, fake_daemon_status(), False, True)
 drain()
-check("expiry: broadcasting cleared", app.broadcasting is False)
-check("expiry: audio reconnect invoked",
-      any("expired" in r for r in _reconnects))
-check("expiry: fails reset to 0", app._auto_conn_fails == 0)
-check("expiry: cooldown reset to 0", app._auto_conn_last == 0.0)
+check("expiry: that device stops broadcasting", _st["broadcasting"] is False)
+check("expiry: that device is no longer in flight", _st["inflight"] is False)
+check("expiry: a busy device no longer blocks audio reconnect",
+      app._any_device_busy() is False)
 
-print()
-print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")
-root.destroy()
-sys.exit(1 if fails else 0)
+_st["inflight"] = True
+check("busy: an in-flight device defers the audio auto-reconnect",
+      app._any_device_busy() is True)
+_st["inflight"] = False

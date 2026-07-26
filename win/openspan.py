@@ -911,8 +911,11 @@ def target_daemon_status(target=None):
 
 
 def daemon_status():
-    """Backward-compatible iPad daemon status."""
-    return target_daemon_status("ipad")
+    """Status of the FIRST configured device's daemon -- used only for the
+    global 'is the bridge up' banner. No device id is assumed; per-device state
+    comes from _poll_device_status()."""
+    first = first_device_id()
+    return target_daemon_status(first) if first else None
 
 
 def target_daemon_cmd(target, obj, timeout=2):
@@ -1863,9 +1866,10 @@ class MultiArrangeCanvas(tk.Canvas):
             next_x = display["x"] + display["w"]
             displays.append(display)
         target["displays"] = displays
-        if self.selected and self.selected[1] == "mac":
+        if self.selected and self.selected[1] == target["id"]:
             self.selected = (
-                "target", "mac", displays[0]["id"]) if displays else None
+                ("target", target["id"], displays[0]["id"])
+                if displays else None)
         self.redraw()
         self.save()
 
@@ -2216,7 +2220,7 @@ class MacDisplayEditor:
                      bg=BG, fg=MUTED,
                      font=("Segoe UI", 8, "bold")).pack(
                          side="left", padx=(0, 5))
-        for display in canvas.mac_displays():
+        for display in canvas.mac_displays(device_id):
             self._add_row(display)
         bar = tk.Frame(self.top, bg=BG)
         bar.pack(fill="x", padx=18, pady=14)
@@ -2298,7 +2302,7 @@ class MacDisplayEditor:
                 "physical_width": row["physical_width"].get(),
             })
         try:
-            self.canvas.replace_mac_displays(raw)
+            self.canvas.replace_mac_displays(raw, self.device_id)
         except ValueError as exc:
             dark_alert(self.top, "Check the display values", str(exc))
             return
@@ -2705,7 +2709,6 @@ class BtPanel(tk.Frame):
             else:
                 self._log("all three radio lanes are active.")
             if self.app:
-                self.app._refresh_all_device_paired()
                 self.app._refresh_all_device_paired()
         threading.Thread(target=apply, daemon=True).start()
 
@@ -3217,10 +3220,7 @@ class App:
         self._auto_conn_fails = 0      # 3 failed rounds -> pause for session
         self._manual_bt_ops = 0        # in-flight manual BT actions
         self._bt_ops_lock = threading.Lock()
-        self._pair_inflight = False    # Broadcast pressed, iPad not yet in
         self._broadcast_started = 0.0
-        self._ipad_paired = False      # iPad (non-audio) bonded? -> Connect/Unpair
-        self._paired_gen = 0           # generation token: newest read wins
         self._pair_lock = threading.Lock()  # atomic pair-commit vs cancel-clear
         # per-device pairing state, keyed by device id (created on demand)
         self._dev_states = {}
@@ -3394,7 +3394,6 @@ class App:
         # device as paired.
         ctl = tk.Frame(bridge, bg=BG)
         ctl.pack(fill="x", padx=16, pady=(2, 4))
-        self.broadcasting = False
         self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
         self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
         self.portal_btn = ttk.Button(ctl, text="Start portal",
@@ -4044,7 +4043,7 @@ class App:
         rounds so it can never sit there paging powered-off buds forever."""
         now = time.time()
         if (self._auto_conn_busy or self._manual_bt_ops > 0
-                or self.broadcasting or self._pair_inflight
+                or self._any_device_busy()
                 or now - self._auto_conn_last < self._auto_conn_cooldown
                 or self._auto_conn_fails >= 3):
             return
@@ -4427,10 +4426,6 @@ class App:
                  "/opt/openspan/btready.sh"),
                 (os.path.join("..", "guest", "openspan_bt.py"),
                  "/opt/openspan/openspan_bt.py"),
-                (os.path.join("..", "guest", "set-hid-radio.sh"),
-                 "/opt/openspan/set-hid-radio.sh"),
-                (os.path.join("..", "guest", "set-hid-target.sh"),
-                 "/opt/openspan/set-hid-target.sh"),
                 (os.path.join("..", "guest", "set-hid-device.sh"),
                  "/opt/openspan/set-hid-device.sh"),
                 (os.path.join("..", "guest", "bt-preflight.sh"),
@@ -4444,10 +4439,7 @@ class App:
                 (os.path.join("..", "guest", "wait-hci0.sh"),
                  "/opt/openspan/wait-hci0.sh"),
                 (os.path.join("..", "guest", "openspan_ble.py"),
-                 "/opt/openspan/openspan_ble.py"),
-                (os.path.join("..", "guest", "system",
-                              "openspanble-mac.service"),
-                 "/etc/systemd/system/openspanble-mac.service")]
+                 "/opt/openspan/openspan_ble.py")]
         def work():
             reachable = False
             for _ in range(60):
@@ -4500,20 +4492,26 @@ class App:
                                      f"{detail[-180:]}")
                     elif (remote.endswith("/openspan_ble.py")
                           or remote.endswith("/openspanble-mac.service")) \
-                            and b"CHANGED" in (r.stdout or b""):
+                            and b"CHANGED" in (r.stdout or b"").split():
+                        # WHOLE TOKEN. The guest prints CHANGED or UNCHANGED and
+                        # a substring test matches BOTH -- so the HID daemon was
+                        # restarted on EVERY launch, wiping GATT subscription
+                        # state exactly when a bonded host reconnects (the
+                        # no-input ghost this file warns about elsewhere).
                         daemon_changed = True
                 except Exception as exc:  # noqa: BLE001
                     _emit("err", f"guest sync failed for "
                                  f"{os.path.basename(remote)}: {exc}")
             if daemon_changed:
+                # Restart the PER-DEVICE lanes only. The legacy single-lane
+                # units are retired below; restarting them here re-armed a
+                # daemon on a port a real device owns.
                 r = ssh_guest(
                     "systemctl daemon-reload; "
-                    "systemctl restart openspanble; "
-                    "systemctl is-enabled --quiet openspanble-mac && "
-                    "systemctl restart openspanble-mac || true; "
-                    "for i in $(seq 20); do "
-                    "ss -ltn 2>/dev/null | grep -q ':9955' && exit 0; "
-                    "sleep 1; done; exit 1",
+                    "for u in $(systemctl list-units --no-legend "
+                    "--state=active 'openspanble@*' 2>/dev/null "
+                    "| awk '{print $1}'); do systemctl restart \"$u\"; done; "
+                    "exit 0",
                     timeout=35, quiet=True)
                 if r.returncode == 0:
                     _emit("event", "guest HID daemon updated and restarted "
@@ -4522,271 +4520,28 @@ class App:
                     detail = (r.stderr or r.stdout or "").strip()
                     _emit("err", "guest HID daemon update did not restart "
                                  f"cleanly: {detail[-180:]}")
-            # hciN ordering is not stable across boots. The preference stores
-            # the controller MAC, so re-resolve it every time the VM becomes
-            # reachable and refresh the systemd drop-in before the user pairs.
-            prefs = load_bt_prefs()
-            controller = prefs.get("hid_radio", "")
-            if multi_radio_enabled(prefs) and re.match(
-                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
-                r = ssh_guest(
-                    "bash /opt/openspan/set-hid-radio.sh " + controller,
-                    timeout=35, quiet=True)
-                if r.returncode == 0:
-                    _emit("event", "saved iPad radio resolved for this boot "
-                                   f"({controller}).")
-                    self._refresh_all_device_paired()
-                else:
-                    detail = (r.stderr or r.stdout or "").strip()
-                    _emit("err", "saved iPad radio could not be applied: "
-                                 f"{detail[-180:]}")
-            mac_controller = prefs.get("mac_radio", "")
-            if multi_radio_enabled(prefs) and re.match(
-                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", mac_controller):
-                r = ssh_guest(
-                    "bash /opt/openspan/set-hid-target.sh mac "
-                    + mac_controller,
-                    timeout=45, quiet=True)
-                if r.returncode == 0:
-                    _emit("event", "saved managed Mac radio resolved for this "
-                                   f"boot ({mac_controller}).")
-                    self._refresh_all_device_paired()
-                else:
-                    detail = (r.stderr or r.stdout or "").strip()
-                    _emit("err", "saved managed Mac radio could not be applied: "
-                                 f"{detail[-180:]}")
+            # Retire the legacy single-lane units ONCE. This is required, not
+            # cosmetic: set-hid-device.sh refuses a controller that another
+            # lane's drop-in already claims, and it greps the FILES -- so a
+            # stale openspanble{,-mac}.service.d/20-radio.conf makes every real
+            # lane fail with exit 3 while the legacy daemon still holds the
+            # port, hiding the failure. Idempotent.
+            ssh_guest(
+                "systemctl disable --now openspanble openspanble-mac "
+                ">/dev/null 2>&1; "
+                "rm -f /etc/systemd/system/openspanble.service.d/20-radio.conf "
+                "/etc/systemd/system/openspanble-mac.service.d/20-radio.conf; "
+                "systemctl daemon-reload; exit 0",
+                timeout=30, quiet=True)
+            # NOTE: the per-device lanes are configured by _pair_device_worker
+            # via set-hid-device.sh, which owns the drop-in for each
+            # openspanble@<id>. There is deliberately no boot-time re-apply of
+            # a global iPad/Mac radio here: it wrote the LEGACY drop-ins with
+            # the same radios the real lanes use, and set-hid-device.sh then
+            # refused that controller (exit 3) so the real lane was never
+            # created -- silently, because the port probe was satisfied by the
+            # legacy daemon still holding it.
         threading.Thread(target=work, daemon=True).start()
-
-    def pair(self, reset=False, confirm=True):
-        # Broadcast frees the radio (drops the earbud link briefly) so the iPad
-        # connects fast. Default KEEPS the bond -> a good iPad RECONNECTS.
-        # reset=True FORGETS the iPad's stale bond first, for a clean re-pair
-        # when a kept bond has gone bad (iPad forgotten / key mismatch).
-        # already pairing/broadcasting? ignore re-entry (tray Pair/Connect, a
-        # double-click, or Re-pair mid-flight) -- one radio op at a time.
-        if self._pair_inflight or self.broadcasting:
-            return
-        separate_radios = multi_radio_enabled()
-        if reset:
-            title = "Reset and re-pair the iPad?"
-            body = ("Use this only when the iPad won't connect. It FORGETS the "
-                    "iPad's saved pairing on this side so you can pair from "
-                    "scratch (you'll re-add \"OpenSpan Keyboard\" on the iPad). "
-                    "Earbuds are untouched. "
-                    + ("Audio assigned to another radio stays live."
-                       if separate_radios else
-                       "Audio drops briefly, then returns."))
-        else:
-            title = "Pair the iPad now?"
-            body = (
-                "The iPad will broadcast through its assigned radio. Audio on "
-                "another radio stays live."
-                if separate_radios else
-                "This briefly disconnects Bluetooth audio so the iPad finds "
-                "the keyboard fast — it reconnects automatically the moment "
-                "the iPad pairs.")
-        if confirm and not dark_confirm(self.root, title, body):
-            return
-        # immediate visual acknowledgement (the work runs in a thread).
-        # _pair_inflight is set HERE, before the worker: the openspanble
-        # restart flaps :9955 (ready -> booting -> ready), and the READY
-        # re-edge must not fire auto-reconnect into the middle of it.
-        self._pair_inflight = True
-        self._broadcast_started = time.time()
-        # disable the connection verbs while the radio work runs; _apply_poll
-        # re-gates them by real state once _pair_inflight clears.
-        self.status.set("Working — freeing the radio to (re)connect the iPad…")
-        threading.Thread(target=self._pair_worker, args=(reset,),
-                         daemon=True).start()
-
-    def _pair_worker(self, reset=False):
-        if not vm_running():
-            start_vm_clean()
-            for _ in range(45):
-                if daemon_status() is not None:
-                    break
-                threading.Event().wait(2)
-        prefs = load_bt_prefs()
-        multi = multi_radio_enabled(prefs)
-        # The daemon restart is FRESH-PAIR-ONLY. Restarting it on a plain
-        # Broadcast was the reconnect input-killer: it wiped the daemon's
-        # GATT subscription state at the exact moment the kept-bond iPad
-        # reconnects -- and a bonded iPad does NOT re-subscribe (per BLE
-        # spec it assumes the peripheral persisted its CCCD), so the link
-        # came up with nobody notifying = "connected but no input". The
-        # restart also killed the running portal's daemon socket mid-
-        # session (its sender then loops in _connect forever). This restart
-        # is very likely the ORIGINAL cause of the old no-input ghost that
-        # the blanket bond-wipe was papering over.
-        if multi:
-            controller = prefs.get("hid_radio", "")
-            if not re.match(
-                    r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$", controller):
-                r = subprocess.CompletedProcess(
-                    [], 1, "", "No iPad keyboard radio is assigned")
-            else:
-                reset_arg = " --reset" if reset else ""
-                restart = (
-                    "systemctl restart openspanble; "
-                    if reset else "")
-                command = (
-                    "bash /opt/openspan/set-hid-radio.sh "
-                    f"{controller}; "
-                    "python3 /opt/openspan/openspan_bt.py prepare-hid "
-                    f"--controller {controller} --target ipad{reset_arg}; "
-                    f"{restart}"
-                    "for i in $(seq 20); do "
-                    "ss -ltn 2>/dev/null | grep -q ':9955' && exit 0; "
-                    "sleep 1; done; exit 1")
-                r = ssh_guest(command, timeout=45)
-        elif reset:
-            # fresh pair: forget every disconnected non-audio bond (the
-            # iPad) so it re-pairs clean -- earbuds ("Icon: audio") always
-            # exempt -- then restart for a truly fresh GATT server.
-            r = ssh_guest(
-                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-                '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" '
-                '>/dev/null 2>&1; '
-                'for d in $(bluetoothctl devices | awk \'{print $2}\'); do '
-                '[ "$d" = "$AUD" ] && continue; '
-                'info=$(bluetoothctl info "$d" 2>/dev/null); '
-                'echo "$info" | grep -q "Connected: no" || continue; '
-                'echo "$info" | grep -qi "Icon: audio" && continue; '
-                'bluetoothctl remove "$d" >/dev/null 2>&1; '
-                'done; '
-                'systemctl restart openspanble; '
-                'for i in $(seq 20); do ss -ltn 2>/dev/null | grep -q ":9955" '
-                '&& break; sleep 1; done; sleep 1; '
-                'bluetoothctl pairable on',
-                timeout=40)
-        else:
-            # reconnect: daemon left RUNNING (portal socket + GATT
-            # subscription continuity stay intact) -- just free the radio
-            # and let the bonded iPad back in.
-            r = ssh_guest(
-                'AUD=$(cat /opt/openspan/audio-device.txt 2>/dev/null); '
-                '[ -n "$AUD" ] && bluetoothctl disconnect "$AUD" '
-                '>/dev/null 2>&1; '
-                'bluetoothctl pairable on',
-                timeout=40)
-        if r.returncode != 0:
-            # be honest: the guest work failed, so we are NOT broadcasting
-            set_advertising(False)
-            self._pair_inflight = False
-            detail = (r.stderr or r.stdout or "guest command failed").strip()
-            _emit("err", "pair FAILED before advertising — "
-                  f"{detail[-220:]}. Nothing is advertising.")
-            # we may have already dropped the earbud audio for the burst — the
-            # pair isn't happening, so put it back (force past the cooldown)
-            self._auto_conn_last = 0.0
-            self._auto_conn_fails = 0
-            self._auto_reconnect_audio("broadcast failed — restoring audio")
-            # keep the 'fail' keyword so _apply_poll's status guard won't stomp it
-            self.ui(lambda: self.status.set(
-                "iPad pair failed — see console."))
-            return
-        # NOW start advertising. The button goes green ONLY if the daemon
-        # CONFIRMS it is advertising -- a silent failure can never masquerade as
-        # "Broadcasting" again. Every step is logged to the console so a failure
-        # is visible + reportable, not hidden behind a green button.
-        if not self._pair_inflight:      # cancelled while we freed the radio
-            _emit("event", "pair cancelled before advertising.")
-            return
-        prep_note = (
-            "iPad radio isolated; other-radio audio left alone"
-            if multi else "audio paused")
-        _emit("event", f"guest ready ({prep_note}) — telling the daemon to "
-                       "broadcast…")
-        adv_ok = set_advertising(True)
-        st = daemon_status()
-        really_adv = bool(st and st.get("advertising"))
-        adv_state = st.get("advertising_state", "unknown") if st else "offline"
-        adv_error = st.get("advertising_error", "") if st else ""
-        _emit("event", f"broadcast command: daemon ack={adv_ok}, daemon now "
-                       f"reports advertising={really_adv}, state={adv_state}"
-                       f"{f', error={adv_error}' if adv_error else ''}")
-        if not adv_ok or not really_adv:
-            # A TCP timeout can race a late BlueZ success callback. Explicitly
-            # request OFF before restoring audio so a failed/late Pair can never
-            # leave an invisible keyboard beacon behind.
-            cleanup_ok = set_advertising(False)
-            _emit("err", "BROADCAST DID NOT START. The daemon didn't accept the "
-                  "adv command or BlueZ rejected/timed it out. "
-                  f"Cleanup-off confirmed={cleanup_ok}. Press Pair/Connect "
-                  "again; if it keeps failing, report this line.")
-            self.broadcasting = False
-            self._pair_inflight = False
-            self._auto_conn_last = 0.0
-            self._auto_conn_fails = 0
-            self._auto_reconnect_audio("broadcast didn't start — restoring audio")
-
-            self.ui(lambda: self.status.set(
-                "Advertising didn't start — see console."))
-            return
-        # Commit broadcasting under the lock so a Disconnect (Cancel) clearing
-        # the flags can't interleave with this check-then-set: either we win and
-        # go live, or the cancel won -- we undo the advertise we enabled and bail.
-        with self._pair_lock:
-            cancelled = not self._pair_inflight
-            if not cancelled:
-                self.broadcasting = True
-        if cancelled:
-            set_advertising(False)
-            _emit("event", "pair cancelled — advertising off.")
-            return
-        audio_note = (
-            " Other-radio audio remains independent."
-            if multi else " Audio returns when it pairs.")
-        _emit("event", "✅ NOW BROADCASTING at full power (daemon confirmed) — "
-                       "on the iPad, tap \"OpenSpan Keyboard\"."
-                       + audio_note)
-
-        self.ui(lambda: self.status.set(
-            "📡 Advertising — on the iPad, tap \"OpenSpan Keyboard\" to "
-            "connect."))
-
-    def _refresh_paired(self):
-        """Read-only: is the iPad (a NON-audio device) bonded? Cheap bluetoothctl
-        read cached in self._ipad_paired -> drives grey-vs-amber + Connect/Unpair
-        gating. Earbuds (Icon: audio) never count. Off the UI thread. Called on
-        bond-changing edges/actions AND periodically from _poll, so it self-heals
-        a guest-side Forget, an empty boot-time read, or a transient ssh failure.
-
-        The remote command ALWAYS exits 0 on a completed scan (trailing
-        'echo done'), so a NONZERO returncode means the ssh/transport itself
-        failed -- then we leave the cache untouched rather than clobber a
-        known-good value. A generation token means a stale in-flight read can't
-        overwrite a newer result (the Unpair-vs-edge race)."""
-        gen = self._paired_gen = self._paired_gen + 1
-        def work():
-            try:
-                prefs = load_bt_prefs()
-                controller = prefs.get("hid_radio", "")
-                if multi_radio_enabled(prefs) and controller:
-                    command = (
-                        "python3 /opt/openspan/openspan_bt.py hid-status "
-                        f"--controller {controller} --target ipad")
-                else:
-                    command = (
-                        'for d in $(bluetoothctl devices '
-                        '| awk \'{print $2}\'); do '
-                        'info=$(bluetoothctl info "$d" 2>/dev/null); '
-                        'echo "$info" | grep -qi "Icon: audio" && continue; '
-                        'echo "$info" | grep -q "Paired: yes" && '
-                        '{ echo IPAD_PAIRED; break; }; done; echo done')
-                r = ssh_guest(command, timeout=8, quiet=True)
-                if r.returncode == 0 and gen == self._paired_gen:
-                    out = r.stdout or ""
-                    self._ipad_paired = (
-                        "PAIRED" in out and "NOT_PAIRED" not in out)
-            except Exception:  # noqa: BLE001
-                pass
-        threading.Thread(target=work, daemon=True).start()
-
-    # ---- generic per-device verbs -------------------------------------------
-    # ONE implementation for every device. A device is identified only by its
-    # id; its radio, port and advertised name all come from its own config
-    # record, so adding the Nth device needs no new code.
 
     def device_record(self, device_id):
         return device_by_id(self.canvas.config, device_id)
@@ -5046,6 +4801,14 @@ class App:
                 else ["disabled"])
             self.canvas.set_target_state(device_id, live and portal_on, paired)
 
+    def _any_device_busy(self):
+        """True while ANY device is mid-pair/broadcast -- replaces the old
+        global broadcasting/_pair_inflight pair, which no path sets any more."""
+        return any(
+            self._dev_state(d["id"])["inflight"]
+            or self._dev_state(d["id"])["broadcasting"]
+            for d in self.canvas.devices())
+
     def _refresh_all_device_paired(self):
         for device in self.canvas.devices():
             self._refresh_device_paired(device["id"])
@@ -5088,6 +4851,12 @@ class App:
         name.pack(side="left", padx=(4, 8))
         radio = tk.Label(head, text="", bg=BG, fg=MUTED, font=("Consolas", 8))
         radio.pack(side="left")
+        # The DEVICE record is the single writer of its radio. Assigning it
+        # here (rather than in a fixed global slot) is what lets a device added
+        # at runtime ever get one.
+        ttk.Button(head, text="Radio…",
+                   command=lambda d=device_id: self._assign_device_radio(d)
+                   ).pack(side="right", padx=(4, 0))
         ttk.Button(head, text="Rename",
                    command=lambda d=device_id: self._rename_device(d)).pack(
             side="right", padx=(4, 0))
@@ -5117,6 +4886,55 @@ class App:
             verbs.columnconfigure(column, weight=1)
         self._dev_rows[device_id] = {
             "dot": dot, "name": name, "radio": radio, "buttons": buttons}
+
+    def _assign_device_radio(self, device_id):
+        """Give ONE device its own radio. The device record is the single
+        source of truth -- the pair path reads device["radio"], so this is the
+        only thing that can bring a newly added device's lane to life."""
+        record = self.device_record(device_id)
+        if not record:
+            return
+        radios = list(getattr(self.bt_panel, "_radios", []) or [])
+        if not radios:
+            dark_alert(self.root, "No radios found yet",
+                       "The VM hasn't reported its Bluetooth controllers yet. "
+                       "Wait for the bridge to finish booting, then try again.")
+            return
+        taken = {str(d.get("radio", "")).upper(): d.get("name", d["id"])
+                 for d in self.canvas.devices() if d.get("id") != device_id
+                 and d.get("radio")}
+        lines, options = [], []
+        for index, radio in enumerate(radios, 1):
+            address = str(radio.get("address", "")).upper()
+            label = (radio.get("hardware") or radio.get("alias")
+                     or radio.get("hci") or address)
+            owner = taken.get(address)
+            lines.append(f"  {index}. {label} — {address}"
+                         + (f"   [in use by {owner}]" if owner else ""))
+            options.append(address)
+        answer = dark_prompt(
+            self.root, f"Radio for {record.get('name', device_id)}",
+            "Each device needs its OWN radio. Enter the number:\n"
+            + "\n".join(lines),
+            default="")
+        if answer is None or not answer.strip():
+            return
+        try:
+            address = options[int(answer.strip()) - 1]
+        except (ValueError, IndexError):
+            dark_alert(self.root, "Not a listed number",
+                       f"Enter 1–{len(options)}.")
+            return
+        if address in taken:
+            dark_alert(self.root, "That radio is already in use",
+                       f"“{taken[address]}” is using it. Each device needs "
+                       f"its own radio.")
+            return
+        record["radio"] = address
+        self.canvas.save()
+        self._rebuild_device_rows()
+        _emit("event", f"{record.get('name', device_id)} assigned radio "
+                       f"{address}. Press Pair to bring its lane up.")
 
     def _add_device_dialog(self):
         name = dark_prompt(
@@ -5197,8 +5015,7 @@ class App:
         self._poll_n = getattr(self, "_poll_n", 0) + 1
         if running and self._poll_n % 5 == 0:
             self.bt_panel.refresh(quiet=True)  # routine poll: no console line
-            self._refresh_all_device_paired()             # keep bond state fresh; self-heals
-            self._refresh_all_device_paired()
+            self._refresh_all_device_paired()   # keep bond state fresh; self-heals
         if running and self._poll_n % 20 == 0:
             # flush the VM disk every ~60s so a bond (or any state) can't be
             # lost to an unclean poweroff/crash between the connect-edge sync
@@ -5219,7 +5036,8 @@ class App:
                 self._ind["ipad"].config(text="iPad ● connected", fg=ACCENT)
             elif _sub:                       # link up but portal off -> amber
                 self._ind["ipad"].config(text="iPad ◐ portal off", fg=WARN)
-            elif self._ipad_paired:          # bonded but not connected -> amber
+            elif any(self._dev_state(d["id"])["paired"]
+                     for d in self.canvas.devices()):
                 self._ind["ipad"].config(text="iPad ◐ paired", fg=WARN)
             else:
                 self._ind["ipad"].config(text="iPad ○ not paired", fg=MUTED)
@@ -5295,8 +5113,7 @@ class App:
                 # periodic tick) so Connect/Unpair light up right away; the
                 # periodic read is still the self-heal.
                 self._refresh_all_device_paired()
-            if r_state == "ready" and not self.broadcasting \
-                    and not self._pair_inflight:
+            if r_state == "ready" and not self._any_device_busy():
                 # the buds try to reconnect on their own during the ~90s
                 # boot, give up before the stack is up, and then just sit
                 # there -- so reconnect them ourselves once we're READY
@@ -5305,14 +5122,12 @@ class App:
         mac_connected = bool(mac_st and mac_st.get("kbd_subscribed"))
         # snapshot for the tray menu (built on the Tk thread; must never block)
         self._cache = {"running": running, "connected": connected, "on": on,
-                       "aud": aud, "paired": self._ipad_paired,
-                       "busy": self._pair_inflight or self.broadcasting}
-        self.canvas.set_ipad_state(connected and on, self._ipad_paired)
+                       "aud": aud,
+                       "busy": self._any_device_busy()}
+        self.canvas.set_ipad_state(connected and on, False)
         # gate the four verbs by REAL state. Pair: daemon up + not mid-pair.
         # Connect: bonded but not connected. Disconnect: connected. Unpair:
         # bonded. Never fight the pair flow while it owns the radio.
-        busy = self._pair_inflight or self.broadcasting
-        _up = st is not None
         self._apply_device_rows(on)
         # console confirmation on the iPad connect/disconnect edge
         if connected != self._ipad_conn:
@@ -5369,45 +5184,6 @@ class App:
         # state without another button press. Clearing broadcasting/_pair_
         # inflight FIRST is required: _auto_reconnect_audio early-returns while
         # either is set.
-        if connected and self.broadcasting:
-            # the iPad is in -- stop beaconing immediately. Nothing should be
-            # advertising as a keyboard once it has served its purpose.
-            threading.Thread(target=set_advertising, args=(False,),
-                             daemon=True).start()
-            self.broadcasting = False
-            self._pair_inflight = False
-            # auto-start the portal so keyboard/mouse bridge immediately
-            if not (self.portal_proc and self.portal_proc.poll() is None):
-                self.toggle_portal()
-                _emit("event", "iPad paired — portal auto-started; "
-                               "keyboard/mouse are bridging.")
-            # the `on` snapshot predates this auto-start; refresh it so the rest
-            # of this tick renders the portal ON (dot + "Stop portal") and never
-            # invites a click that would stop what we just started
-            on = bool(self.portal_proc and self.portal_proc.poll() is None)
-            # WE deliberately dropped audio for the burst, so force the
-            # reconnect past its cooldown/backoff: steady state means audio on
-            self._auto_conn_last = 0.0
-            self._auto_conn_fails = 0
-            self._auto_reconnect_audio("iPad paired — reconnecting the earbuds")
-        # an abandoned broadcast must not suppress auto-reconnect forever
-        if (self.broadcasting or self._pair_inflight) and \
-                time.time() - self._broadcast_started > 300:
-            # never leave the radio beaconing after an abandoned pair attempt
-            threading.Thread(target=set_advertising, args=(False,),
-                             daemon=True).start()
-            self.broadcasting = False
-            self._pair_inflight = False
-            _emit("event", "advertising window expired — press Pair or Connect "
-                           "again when you're ready.")
-            # the burst may have left the earbuds off and no pair ever landed —
-            # restore audio so the user isn't stranded without sound. Reset the
-            # fail counter too (not just the cooldown): if a prior session hit
-            # the 3-fail pause, _auto_reconnect_audio would otherwise no-op and
-            # leave the audio we dropped dead — same as the two sibling paths.
-            self._auto_conn_last = 0.0
-            self._auto_conn_fails = 0
-            self._auto_reconnect_audio("broadcast expired — restoring audio")
         # an abandoned attempt must never leave a device's radio beaconing
         for _dev in self.canvas.devices():
             _st = self._dev_state(_dev["id"])
@@ -5470,12 +5246,7 @@ class App:
         self._ind["portal"].config(text=f"portal {'● ON' if on else '○ off'}",
                                    fg=(ACCENT if on else MUTED))
         cur = self.status.get()
-        _any_busy = any(
-            self._dev_state(d["id"])["broadcasting"]
-            or self._dev_state(d["id"])["inflight"]
-            for d in self.canvas.devices())
-        if not self.broadcasting and not self._pair_inflight \
-                and not _any_busy \
+        if not self._any_device_busy() \
                 and "fail" not in cur.lower() and "didn't" not in cur:
             if not running:
                 self.status.set("Bridge stopped — click Bridge VM to start.")
