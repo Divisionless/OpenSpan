@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
     BASE_PORT, add_device, compute_adjacencies, compute_portals, device_by_id,
+    physical_size,
     normalize_config, oriented_resolution, refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
@@ -2082,13 +2083,11 @@ class MultiArrangeCanvas(tk.Canvas):
             return
         key, item, x, y, width, height = hit
         self.selected = key
-        handle = max(10 / max(scale, 0.001), 12)
-        if world_x >= x + width - handle and world_y >= y + height - handle:
-            self.action = "resize"
-            self._resize_anchor = (x, y)
-        else:
-            self.action = "move"
-            self.drag_off = (world_x - x, world_y - y)
+        # No corner resize. A screen's size is its real DIAGONAL in inches
+        # (set in "Screen sizes..."), so dragging a corner could only make the
+        # drawing disagree with the stated hardware. Dragging moves only.
+        self.action = "move"
+        self.drag_off = (world_x - x, world_y - y)
         # Remember the rect at press so _release can tell a real drag from a
         # bare select-click. A click that moves nothing must not snap, must not
         # save, and must not restart the portal.
@@ -2102,13 +2101,9 @@ class MultiArrangeCanvas(tk.Canvas):
         if not item:
             return
         world_x, world_y = self.c2w(event.x, event.y)
-        if self.action == "move":
-            self._set_position(
-                self.selected, item,
-                world_x - self.drag_off[0], world_y - self.drag_off[1])
-        else:
-            anchor_x, _anchor_y = self._resize_anchor
-            self._set_width(self.selected, item, world_x - anchor_x)
+        self._set_position(
+            self.selected, item,
+            world_x - self.drag_off[0], world_y - self.drag_off[1])
         self.redraw()
 
     @staticmethod
@@ -3364,9 +3359,9 @@ class App:
         # arrangement — always visible (Bridge tab)
         arr_wrap = tk.Frame(bridge, bg=CARD, bd=0)
         arr_wrap.pack(fill="both", expand=True, padx=8, pady=6)
-        tk.Label(arr_wrap, text="Drag any screen to match your desk. Drag a "
-                                "yellow corner to resize its physical drawing; "
-                                "resolution stays unchanged.",
+        tk.Label(arr_wrap, text="Drag any screen to match your desk. Sizes "
+                                "come from each screen's real diagonal — set "
+                                "them in “Screen sizes…”.",
                  bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(
             anchor="w", padx=8, pady=(6, 0))
         self.canvas = MultiArrangeCanvas(
@@ -3381,6 +3376,9 @@ class App:
                           values=list(IPAD_PRESETS), state="readonly")
         cb.pack(side="left", padx=6)
         cb.bind("<<ComboboxSelected>>", self._pick_model)
+        ttk.Button(row, text="Screen sizes…",
+                   command=self._screen_sizes_dialog).pack(
+            side="right", padx=(6, 0))
         ttk.Button(row, text="Rotate",
                    command=self.canvas.rotate).pack(side="left")
         ttk.Button(
@@ -4919,6 +4917,102 @@ class App:
             verbs.columnconfigure(column, weight=1)
         self._dev_rows[device_id] = {
             "dot": dot, "name": name, "radio": radio, "buttons": buttons}
+
+    def _screen_sizes_dialog(self):
+        """Type each screen's real diagonal in inches. Size is DERIVED from it
+        (with the aspect its resolution and rotation imply), so the arrangement
+        is physically truthful instead of being drawn to taste."""
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.title("Screen sizes")
+        win.configure(bg=CARD)
+        win.transient(self.root)
+        win.resizable(False, False)
+        _paint_dark_titlebar(win)
+        tk.Label(win, text="Screen sizes", bg=CARD, fg=FG,
+                 font=("Segoe UI Semibold", 12)).pack(
+            anchor="w", padx=18, pady=(16, 2))
+        tk.Label(win,
+                 text="Enter each screen's diagonal in inches. Everything is "
+                      "drawn to the same physical scale, so a 32\" really is "
+                      "about twice the width of a 17\". Resolution is not "
+                      "changed.",
+                 bg=CARD, fg=MUTED, font=("Segoe UI", 9), wraplength=440,
+                 justify="left").pack(anchor="w", padx=18, pady=(0, 10))
+        rows = []
+
+        def add_row(parent, label, detail, current):
+            box = tk.Frame(parent, bg=CARD)
+            box.pack(fill="x", padx=18, pady=2)
+            tk.Label(box, text=label, bg=CARD, fg=FG, width=22, anchor="w",
+                     font=("Segoe UI", 10)).pack(side="left")
+            var = tk.StringVar(value=f"{float(current or 0):g}"
+                               if current else "")
+            ttk.Entry(box, textvariable=var, width=7).pack(side="left")
+            tk.Label(box, text="in", bg=CARD, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left", padx=(4, 10))
+            tk.Label(box, text=detail, bg=CARD, fg=MUTED,
+                     font=("Consolas", 8)).pack(side="left")
+            return var
+
+        tk.Label(win, text="This PC", bg=CARD, fg=ACCENT,
+                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=18,
+                                                      pady=(6, 2))
+        for monitor in self.canvas.monitors:
+            var = add_row(win, monitor["name"].replace("\\\\.\\", ""),
+                          f"{monitor['w']}x{monitor['h']}",
+                          monitor.get("diagonal_in"))
+            rows.append(("monitor", monitor, var))
+        for device in self.canvas.devices():
+            tk.Label(win, text=device.get("name", device["id"]), bg=CARD,
+                     fg=ACCENT, font=("Segoe UI Semibold", 10)).pack(
+                anchor="w", padx=18, pady=(8, 2))
+            for display in device.get("displays", []):
+                var = add_row(
+                    win, display.get("name", display["id"]),
+                    f"{display['res_w']}x{display['res_h']}"
+                    + (f" @{display['rotation']}°" if display.get("rotation")
+                       else ""),
+                    display.get("diagonal_in"))
+                rows.append(("display", display, var))
+
+        def apply_and_close():
+            changed = 0
+            for kind, obj, var in rows:
+                text = var.get().strip()
+                if not text:
+                    continue
+                try:
+                    inches = max(1.0, min(120.0, float(text)))
+                except ValueError:
+                    dark_alert(self.root, "Not a number",
+                               f"“{text}” is not a screen size in inches.")
+                    return
+                obj["diagonal_in"] = inches
+                if kind == "monitor":
+                    obj["layout_w"], obj["layout_h"] = physical_size(
+                        inches, obj["w"], obj["h"], 0)
+                else:
+                    obj["w"], obj["h"] = physical_size(
+                        inches, obj["res_w"], obj["res_h"],
+                        obj.get("rotation", 0))
+                changed += 1
+            win.destroy()
+            self.canvas.redraw()
+            self.canvas.save()
+            _emit("event", f"screen sizes updated ({changed}) — drag them "
+                           "into your desk arrangement.")
+
+        row = tk.Frame(win, bg=CARD)
+        row.pack(anchor="e", padx=18, pady=(16, 16))
+        ttk.Button(row, text="Apply", style="Accent.TButton",
+                   command=apply_and_close).pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(side="left")
+        win.update_idletasks()
+        win.geometry(
+            f"+{self.root.winfo_rootx() + 110}+{self.root.winfo_rooty() + 60}")
+        win.deiconify()
+        win.grab_set()
 
     def _device_input_dialog(self, device_id):
         """Per-device input settings with real sliders. Everything here is
