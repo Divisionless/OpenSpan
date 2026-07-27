@@ -5095,6 +5095,19 @@ class App:
                "0 = perfectly linear. Applied here, so the pointer position "
                "stays exact — unlike the device's own acceleration.")
 
+        comp = tk.BooleanVar(
+            value=bool(record.get("compensate_target_accel", False)))
+        ttk.Checkbutton(
+            win, text="Compensate for this device's own pointer acceleration",
+            variable=comp).pack(anchor="w", padx=18, pady=(14, 0))
+        tk.Label(win,
+                 text="Leave the DEVICE's acceleration switched on. OpenSpan "
+                      "inverts its curve — asking for a distance and sending "
+                      "the exact report that produces it — so the pointer "
+                      "stays accurate without changing anything on the device.",
+                 bg=CARD, fg=MUTED, font=("Segoe UI", 8), wraplength=430,
+                 justify="left").pack(anchor="w", padx=38)
+
         inv = tk.BooleanVar(value=bool(record.get("scroll_invert", False)))
         ttk.Checkbutton(win, text="Invert scroll wheel on this device",
                         variable=inv).pack(anchor="w", padx=18, pady=(12, 0))
@@ -5119,6 +5132,7 @@ class App:
             record["pointer_accel"] = round(
                 float(state["pointer_accel"].get()), 3)
             record["scroll_invert"] = bool(inv.get())
+            record["compensate_target_accel"] = bool(comp.get())
             choice = alt_var.get()
             record["modifier_remap"] = (
                 {} if choice == "option"

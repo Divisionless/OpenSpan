@@ -56,6 +56,48 @@ SWITCH_COOLDOWN = 0.30
 ACCEL_PIVOT = 12.0
 ACCEL_MAX = 5.0
 
+# --- Apple's pointer-acceleration curve, and its inverse ------------------
+# macOS transforms EVERY HID report by a function of that report's MAGNITUDE
+# alone -- no time or rate term (a BlueZ GATT peripheral publishes no report
+# rate, so Apple's rateMultiplier is 1). The curve below is Apple's shipped
+# acceleration table at the default setting, reconstructed and checked against
+# six measured points to under 0.06 px.
+#
+# Because it depends only on per-report magnitude, and because WE choose how
+# motion is split into reports, it is INVERTIBLE: ask for a pixel distance,
+# solve for the single report magnitude that produces it, and send exactly
+# that one report. Apple then accelerates it into precisely the distance we
+# wanted. The user keeps macOS acceleration ON and the pointer stays exact.
+# Saturation begins at 206 counts, beyond our 8-bit field, so we never reach
+# the flat part where the inverse would not exist.
+_APPLE_CURVE = ((0.0, 0.0), (2.6388, 0.5373), (25.7194, 23.6418),
+                (71.6418, 136.1194), (136.8537, 199.1642),
+                (205.7313, 214.9254))
+
+
+def _piecewise(value, points, inverse=False):
+    lo_i, hi_i = (1, 0) if inverse else (0, 1)
+    if value <= points[0][hi_i]:
+        return points[0][lo_i]
+    for (ax, ay), (bx, by) in zip(points, points[1:]):
+        a_in, a_out = (ay, ax) if inverse else (ax, ay)
+        b_in, b_out = (by, bx) if inverse else (bx, by)
+        if value <= b_in:
+            span = b_in - a_in
+            frac = 0.0 if span <= 0 else (value - a_in) / span
+            return a_out + frac * (b_out - a_out)
+    return points[-1][lo_i]
+
+
+def apple_pixels(counts):
+    """Pixels macOS moves for ONE report of this magnitude."""
+    return _piecewise(abs(float(counts)), _APPLE_CURVE)
+
+
+def apple_counts(pixels):
+    """Report magnitude that yields this many pixels after Apple's curve."""
+    return _piecewise(abs(float(pixels)), _APPLE_CURVE, inverse=True)
+
 # FKA chords bound (on the iPad, Settings > Accessibility > Keyboards >
 # Full Keyboard Access > Commands) to the two clipboard Shortcuts -- see
 # CLIPBOARD_DESIGN.md / CLIPBOARD_SETUP.md. (mods byte, HID usage):
@@ -261,6 +303,7 @@ class Portal:
     _device_gain = {}           # device id -> points per HID unit
     _device_accel = {}          # device id -> acceleration strength (0 = off)
     _device_sens = {}           # device id -> feel multiplier
+    _device_compensate = {}     # device id -> invert the target's own curve
     _rem_x = 0.0                # sub-unit remainders: slow motion must not be
     _rem_y = 0.0                # truncated away to nothing
 
@@ -332,6 +375,10 @@ class Portal:
         self._device_sens = {
             device["id"]: max(0.1, min(4.0, float(
                 device.get("sensitivity", 1.0) or 1.0)))
+            for device in self.cfg.get("devices", [])
+        }
+        self._device_compensate = {
+            device["id"]: bool(device.get("compensate_target_accel", False))
             for device in self.cfg.get("devices", [])
         }
         self._device_remap = {
@@ -849,6 +896,32 @@ class Portal:
                     # movement truncates to zero and the pointer feels sticky
                     fx += self._rem_x
                     fy += self._rem_y
+                    if self._device_compensate.get(self.active_target):
+                        # The TARGET accelerates and we cannot switch it off.
+                        # Ask for a pixel distance and solve for the single
+                        # report magnitude that Apple will turn into exactly
+                        # that -- so the model advances by PIXELS while the
+                        # wire carries COUNTS, and the two still agree.
+                        want = math.hypot(fx, fy)
+                        if want > 0.0:
+                            counts = apple_counts(want)
+                            scale = counts / want
+                            dx, dy = int(round(fx * scale)), int(round(fy * scale))
+                            dx = max(-127, min(127, dx))
+                            dy = max(-127, min(127, dy))
+                            got = apple_pixels(math.hypot(dx, dy))
+                            unit = 0.0 if want <= 0 else got / want
+                            mx, my = fx * unit, fy * unit
+                        else:
+                            dx = dy = 0
+                            mx = my = 0.0
+                        self._rem_x, self._rem_y = fx - mx, fy - my
+                        if dx or dy:
+                            self.q.put((self.active_target, "m", dx, dy, 0))
+                            if self._route_motion(mx, my):
+                                return 1
+                        user32.SetCursorPos(self.cx, self.cy)
+                        return 1
                     dx, dy = int(fx), int(fy)
                     self._rem_x, self._rem_y = fx - dx, fy - dy
                     if dx or dy:

@@ -146,6 +146,7 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "pointer_gain": 1.0,    # points per HID unit (1.0 = accel off)
         "pointer_accel": 0.0,   # our own acceleration; 0.0 = linear
         "sensitivity": 1.0,     # per-device feel multiplier
+        "compensate_target_accel": False,
         "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
@@ -331,6 +332,10 @@ def normalize_config(raw, live_monitors):
             # standalone -- so the correction lives here instead.
             "sensitivity": max(0.1, min(4.0, float(
                 target.get("sensitivity", 1.0) or 1.0))),
+            # Invert the TARGET's own acceleration curve instead of asking the
+            # user to switch it off. Only meaningful where that curve is known.
+            "compensate_target_accel": bool(
+                target.get("compensate_target_accel", False)),
             # None = inherit the global keymap (today's behaviour); a dict --
             # even an empty one -- is an explicit per-device override, which is
             # how a Mac gets physical Alt delivered as Option instead of Cmd.
