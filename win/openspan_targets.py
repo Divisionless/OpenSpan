@@ -117,6 +117,7 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "enabled": True,
         "clipboard": False,   # opt-in; needs helper shortcuts on the device
         "scroll_invert": False,
+        "pointer_gain": 1.0,    # points per HID unit (1.0 = accel off)
         "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
@@ -272,6 +273,11 @@ def normalize_config(raw, live_monitors):
             # as Option, an iPad wants it as Command, and scroll direction is a
             # per-device preference. {} means "send modifiers through as-is".
             "scroll_invert": bool(target.get("scroll_invert", False)),
+            # Target POINTS produced per HID unit. Exactly 1.0 once the target's
+            # pointer acceleration is OFF; below 1.0 biases the real cursor to
+            # reach an edge first, where the clamp re-syncs both cursors.
+            "pointer_gain": max(0.05, min(8.0, float(
+                target.get("pointer_gain", 1.0) or 1.0))),
             # None = inherit the global keymap (today's behaviour); a dict --
             # even an empty one -- is an explicit per-device override, which is
             # how a Mac gets physical Alt delivered as Option instead of Cmd.

@@ -126,5 +126,28 @@ kbd3 = [e for e in drain(p3) if e[1] == "k"]
 check("re-entering still announces the modifier (out-and-back survives)",
       bool(kbd3) and kbd3[-1][2] == P.IPAD_MOD_BIT["ctrl"])
 
+# --- pointer position must RESUME, not teleport ----------------------------
+# A relative HID link cannot move a target's cursor "to" a position. Asserting
+# an entry point on every crossing was the single largest source of drift: the
+# target's pointer stays where you left it while the model jumps to the edge
+# you just crossed -- worst case, a whole screen out.
+p4 = make_portal(clipboard_capable=False)
+p4._last_pos = {}
+p4.enter(p4.portals[0], 100)
+p4.active_display = "dev-1"
+p4.vx, p4.vy = 640.0, 480.0          # where the user left that device
+p4.leave()
+check("leaving remembers where that device's pointer was",
+      p4._last_pos.get("dev", (None, 0, 0))[1:] == (640.0, 480.0))
+p4.enter(p4.portals[0], 100)
+check("re-entering RESUMES that position instead of teleporting",
+      (p4.vx, p4.vy) == (640.0, 480.0))
+
+p5 = make_portal(clipboard_capable=False)
+p5._last_pos = {}
+p5.enter(p5.portals[0], 100)
+check("a first-ever entry still falls back to the entry point",
+      isinstance(p5.vx, float) and isinstance(p5.vy, float))
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

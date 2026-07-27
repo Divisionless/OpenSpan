@@ -244,6 +244,12 @@ class Portal:
     _pressure = 0.0
     _device_remap = {}          # device id -> remap dict, or None to inherit
     _device_scroll_invert = {}  # device id -> bool
+    # Where each device's pointer was when we last left it. A relative HID link
+    # cannot move the target's cursor "to" a position, so ASSERTING one on entry
+    # is the single largest source of drift: the target's pointer is still where
+    # you left it while the model jumps to the edge you just crossed.
+    _last_pos = {}              # device id -> (display_id, vx, vy)
+    _device_gain = {}           # device id -> points per HID unit
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -299,6 +305,10 @@ class Portal:
         # keymap so existing behaviour is unchanged.
         self._device_scroll_invert = {
             device["id"]: bool(device.get("scroll_invert", False))
+            for device in self.cfg.get("devices", [])
+        }
+        self._device_gain = {
+            device["id"]: float(device.get("pointer_gain", 1.0) or 1.0)
             for device in self.cfg.get("devices", [])
         }
         self._device_remap = {
@@ -547,6 +557,8 @@ class Portal:
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
+        if target != old_target and old_target is not None:
+            self._last_pos[old_target] = (old_display, self.vx, self.vy)
         if target != old_target:
             # One Windows hook broker, independent target channels. Release the
             # old HID lane before changing sockets so no modifier can stick.
@@ -585,8 +597,12 @@ class Portal:
                 return True
             return False
         res_w, res_h = oriented_resolution(display)
-        scale_x = float(display["w"]) / max(1.0, float(res_w))
-        scale_y = float(display["h"]) / max(1.0, float(res_h))
+        # points-per-HID-unit for THIS device. 1.0 is exact once the target's
+        # pointer acceleration is off; bias LOW so the real cursor reaches an
+        # edge first and pins there, letting the clamp re-converge both cursors.
+        gain = float(self._device_gain.get(self.active_target, 1.0))
+        scale_x = gain * float(display["w"]) / max(1.0, float(res_w))
+        scale_y = gain * float(display["h"]) / max(1.0, float(res_h))
         nx = self.vx + dx * scale_x
         ny = self.vy + dy * scale_y
         x, y = float(display["x"]), float(display["y"])
@@ -644,7 +660,13 @@ class Portal:
         self.active_display = portal.get("target_display")
         self.entry_along = along
         self.perp = ENTER_MARGIN
-        self.vx, self.vy = self._entry_point(portal, along)
+        # RESUME this device's pointer where we left it. Only fall back to the
+        # entry point the first time we ever enter it (nothing to resume).
+        saved = self._last_pos.get(self.active_target)
+        if saved and saved[0] == self.active_display:
+            self.vx, self.vy = saved[1], saved[2]
+        else:
+            self.vx, self.vy = self._entry_point(portal, along)
         user32.SetCursorPos(self.cx, self.cy)
         self._last_transition = time.monotonic()
         self._press_side = None
@@ -695,6 +717,10 @@ class Portal:
         # until a restart reinstalls the hook. The sender thread owns the
         # socket and is the only place allowed to block on it.
         target = self.active_target
+        # remember where this device's pointer really is, so re-entering
+        # resumes instead of teleporting the model somewhere it is not
+        if target is not None:
+            self._last_pos[target] = (self.active_display, self.vx, self.vy)
         self.q.put((target, "k", 0, [], 0))
         self.q.put((target, "b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
