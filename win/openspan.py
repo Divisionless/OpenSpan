@@ -26,8 +26,8 @@ from tkinter import ttk, messagebox, simpledialog
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
-    BASE_PORT, add_device, compute_adjacencies, compute_portals, device_by_id,
-    physical_size,
+    BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
+    compute_portals, device_by_id, physical_size,
     normalize_config, oriented_resolution, refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
@@ -1727,7 +1727,9 @@ class MultiArrangeCanvas(tk.Canvas):
     rectangle cannot alter the target's display mode.
     """
 
-    UNITS_PER_INCH = 40.0
+    # Single source of truth -- the schema sizes screens with this same
+    # constant, so the drawing and the labels can never disagree again.
+    UNITS_PER_INCH = DESK_UNITS_PER_INCH
 
     def __init__(self, master, on_change=None, **kw):
         super().__init__(master, bg=PANEL, highlightthickness=0, **kw)
