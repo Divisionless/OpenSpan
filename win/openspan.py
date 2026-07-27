@@ -4887,6 +4887,9 @@ class App:
         ttk.Button(head, text="Radio…",
                    command=lambda d=device_id: self._assign_device_radio(d)
                    ).pack(side="right", padx=(4, 0))
+        ttk.Button(head, text="Input…",
+                   command=lambda d=device_id: self._device_input_dialog(d)
+                   ).pack(side="right", padx=(4, 0))
         ttk.Button(head, text="Rename",
                    command=lambda d=device_id: self._rename_device(d)).pack(
             side="right", padx=(4, 0))
@@ -4916,6 +4919,63 @@ class App:
             verbs.columnconfigure(column, weight=1)
         self._dev_rows[device_id] = {
             "dot": dot, "name": name, "radio": radio, "buttons": buttons}
+
+    def _device_input_dialog(self, device_id):
+        """Per-device input settings: scroll direction and how physical Alt is
+        delivered. These are per DEVICE because the right answer differs: an
+        iPad wants Alt as Command, a Mac wants it as Option."""
+        record = self.device_record(device_id)
+        if not record:
+            return
+        label = record.get("name", device_id)
+        remap = record.get("modifier_remap")
+        alt_now = ("command" if (remap or {}).get("alt") in ("cmd", "gui",
+                                                            "win")
+                   else ("option" if isinstance(remap, dict) else "inherit"))
+        answer = dark_prompt(
+            self.root, f"Input settings — {label}",
+            "1. Invert scroll wheel:  "
+            f"[{'ON' if record.get('scroll_invert') else 'off'}]\n"
+            f"2. Send physical Alt as:  [{alt_now}]\n"
+            "     option  = macOS Option/Alt  (correct for a Mac)\n"
+            "     command = Command/GUI       (correct for an iPad)\n"
+            "     inherit = use the shared keymap\n\n"
+            "Type: 1 to toggle scroll, or 2 option / 2 command / 2 inherit",
+            default="")
+        if answer is None or not answer.strip():
+            return
+        parts = answer.strip().lower().split()
+        if parts[0] == "1":
+            record["scroll_invert"] = not bool(record.get("scroll_invert"))
+            _emit("event", f"{label}: scroll wheel "
+                           f"{'INVERTED' if record['scroll_invert'] else 'normal'}.")
+        elif parts[0] == "2" and len(parts) > 1:
+            choice = parts[1]
+            if choice == "option":
+                # explicit empty override -> physical Alt passes through as
+                # the HID Alt bit, which macOS reports as Option
+                record["modifier_remap"] = {}
+            elif choice == "command":
+                record["modifier_remap"] = {"alt": "cmd"}
+            elif choice == "inherit":
+                record["modifier_remap"] = None
+            else:
+                dark_alert(self.root, "Not a choice",
+                           "Use: 2 option, 2 command, or 2 inherit.")
+                return
+            _emit("event", f"{label}: physical Alt is sent as {choice}.")
+        else:
+            return
+        self.canvas.save()
+        self._restart_portal_for_input()
+
+    def _restart_portal_for_input(self):
+        """The portal reads input settings once at start, so reload it."""
+        if self.portal_proc and self.portal_proc.poll() is None:
+            _terminate_role_process(self.portal_proc)
+            self.portal_proc = None
+            self._start_portal_process()
+            self.log("event", "input settings reloaded.")
 
     def _assign_device_radio(self, device_id):
         """Give ONE device its own radio. The device record is the single

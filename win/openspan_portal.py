@@ -242,6 +242,8 @@ class Portal:
     _last_transition = 0.0
     _press_side = None
     _pressure = 0.0
+    _device_remap = {}          # device id -> remap dict, or None to inherit
+    _device_scroll_invert = {}  # device id -> bool
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -287,6 +289,22 @@ class Portal:
         # not a hardcoded device name.
         self._clipboard_devices = {
             device["id"]: bool(device.get("clipboard", False))
+            for device in self.cfg.get("devices", [])
+        }
+        # INPUT settings are per device. Scroll direction is a plain per-device
+        # preference. The modifier remap matters more: {"alt": "cmd"} is an
+        # iPad convention, and sending it to a Mac delivers physical Alt as the
+        # GUI bit -- which a Mac with Command/Control swapped reports as
+        # CONTROL, so Option becomes unreachable. None inherits the global
+        # keymap so existing behaviour is unchanged.
+        self._device_scroll_invert = {
+            device["id"]: bool(device.get("scroll_invert", False))
+            for device in self.cfg.get("devices", [])
+        }
+        self._device_remap = {
+            device["id"]: (dict(device["modifier_remap"])
+                           if isinstance(device.get("modifier_remap"), dict)
+                           else None)
             for device in self.cfg.get("devices", [])
         }
         if not self._target_ports:
@@ -748,7 +766,8 @@ class Portal:
                     self.q.put((self.active_target, "b", 0, 0, 0)); return 1
                 elif wParam == WM_MOUSEWHEEL:
                     delta = ctypes.c_short(ms.mouseData >> 16).value // 120
-                    if SCROLL_INVERT:
+                    if self._device_scroll_invert.get(
+                            self.active_target, SCROLL_INVERT):
                         delta = -delta
                     self.q.put((self.active_target, "w", 0, 0, delta)); return 1
         return user32.CallNextHookEx(None, nCode, wParam, lParam)
@@ -911,7 +930,7 @@ class Portal:
                 # resync the iPad with what is still physically held
                 out_mods = 0
                 for name in self._phys_mod_names():
-                    tgt = self.remap.get(name, name)
+                    tgt = self._active_remap().get(name, name)
                     out_mods |= IPAD_MOD_BIT.get(tgt, 0)
                 self.q.put((target, "k", out_mods,
                             list(self.raw_keys.values())[:6], 0))
@@ -929,6 +948,12 @@ class Portal:
             n.add("win")
         return n
 
+    def _active_remap(self):
+        """Modifier remap for the device currently being driven. A per-device
+        dict (even an empty one) overrides; None inherits the global keymap."""
+        own = self._device_remap.get(self.active_target)
+        return self.remap if own is None else own
+
     def _emit_kbd(self):
         if time.time() < self._chord_until:
             return  # an FKA chord is in flight; don't clobber it
@@ -945,7 +970,7 @@ class Portal:
         # 2) passthrough with modifier remap
         out_mods = 0
         for name in mod_names:
-            tgt = self.remap.get(name, name)
+            tgt = self._active_remap().get(name, name)
             out_mods |= IPAD_MOD_BIT.get(tgt, 0)
         self.q.put((self.active_target, "k", out_mods, key_usages[:6], 0))
 

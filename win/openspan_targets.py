@@ -116,6 +116,8 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "radio": "",          # controller MAC; "" = not assigned yet
         "enabled": True,
         "clipboard": False,   # opt-in; needs helper shortcuts on the device
+        "scroll_invert": False,
+        "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
     }
@@ -266,6 +268,16 @@ def normalize_config(raw, live_monitors):
             # Capability, not a device type: the clipboard bridge needs helper
             # shortcuts installed ON the device, so it is opt-in per device.
             "clipboard": bool(target.get("clipboard", False)),
+            # INPUT settings are per device: a Mac wants physical Alt to arrive
+            # as Option, an iPad wants it as Command, and scroll direction is a
+            # per-device preference. {} means "send modifiers through as-is".
+            "scroll_invert": bool(target.get("scroll_invert", False)),
+            # None = inherit the global keymap (today's behaviour); a dict --
+            # even an empty one -- is an explicit per-device override, which is
+            # how a Mac gets physical Alt delivered as Option instead of Cmd.
+            "modifier_remap": (
+                dict(target["modifier_remap"])
+                if isinstance(target.get("modifier_remap"), dict) else None),
             "displays": displays,
         })
 
