@@ -505,6 +505,25 @@ def snap_rect_to_neighbors(rect, neighbors, threshold=None):
     y_candidates = []
 
     def align(pos, size, other_pos, other_size):
+        """Level this screen against its neighbour on the PERPENDICULAR axis.
+
+        Edge contact alone is not enough: touching a neighbour while sitting a
+        few units high is exactly what makes lining screens up fiddly. Snap to
+        the three alignments people actually want -- tops level, bottoms level,
+        centres level -- and only fall back to clamping into a legal overlap
+        when none of them is close.
+        """
+        targets = (
+            other_pos,                                       # tops level
+            other_pos + other_size - size,                    # bottoms level
+            other_pos + (other_size - size) / 2.0,            # centres level
+        )
+        best = min(targets, key=lambda t: abs(pos - t))
+        # Alignment is stickier than edge contact: getting screens LEVEL is the
+        # fiddly part, and being a little generous here is what makes it feel
+        # intuitive rather than fought-for.
+        if abs(pos - best) < threshold * 2.0:
+            return int(round(best))
         return max(
             other_pos - size + 24,
             min(pos, other_pos + other_size - 24))
