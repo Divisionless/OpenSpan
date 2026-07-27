@@ -259,6 +259,7 @@ class Portal:
     _last_pos = {}              # device id -> (display_id, vx, vy)
     _device_gain = {}           # device id -> points per HID unit
     _device_accel = {}          # device id -> acceleration strength (0 = off)
+    _device_sens = {}           # device id -> feel multiplier
     _rem_x = 0.0                # sub-unit remainders: slow motion must not be
     _rem_y = 0.0                # truncated away to nothing
 
@@ -325,6 +326,11 @@ class Portal:
         self._device_accel = {
             device["id"]: max(0.0, min(4.0, float(
                 device.get("pointer_accel", 0.0) or 0.0)))
+            for device in self.cfg.get("devices", [])
+        }
+        self._device_sens = {
+            device["id"]: max(0.1, min(4.0, float(
+                device.get("sensitivity", 1.0) or 1.0)))
             for device in self.cfg.get("devices", [])
         }
         self._device_remap = {
@@ -787,8 +793,12 @@ class Portal:
                 if ms.flags & LLMHF_INJECTED:
                     return 1
                 if wParam == WM_MOUSEMOVE:
-                    fx = (ms.pt.x - self.cx) * MOUSE_SENS
-                    fy = (ms.pt.y - self.cy) * MOUSE_SENS
+                    # per-device sensitivity FIRST, so acceleration below and
+                    # the virtual cursor both see the same corrected motion
+                    _sens = MOUSE_SENS * self._device_sens.get(
+                        self.active_target, 1.0)
+                    fx = (ms.pt.x - self.cx) * _sens
+                    fy = (ms.pt.y - self.cy) * _sens
                     # OUR acceleration, applied before anything else, so the
                     # identical value drives the device AND the virtual cursor.
                     accel = self._device_accel.get(self.active_target, 0.0)

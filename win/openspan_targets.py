@@ -119,6 +119,7 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "scroll_invert": False,
         "pointer_gain": 1.0,    # points per HID unit (1.0 = accel off)
         "pointer_accel": 0.0,   # our own acceleration; 0.0 = linear
+        "sensitivity": 1.0,     # per-device feel multiplier
         "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
@@ -284,6 +285,12 @@ def normalize_config(raw, live_monitors):
             # virtual cursor exact: the same curve drives wire and model.
             "pointer_accel": max(0.0, min(4.0, float(
                 target.get("pointer_accel", 0.0) or 0.0))),
+            # Per-device FEEL knob. Devices differ (a Mac and an iPad apply
+            # different internal scaling we cannot read), and the target's own
+            # settings must stay untouched so it remains pleasant to use
+            # standalone -- so the correction lives here instead.
+            "sensitivity": max(0.1, min(4.0, float(
+                target.get("sensitivity", 1.0) or 1.0))),
             # None = inherit the global keymap (today's behaviour); a dict --
             # even an empty one -- is an explicit per-device override, which is
             # how a Mac gets physical Alt delivered as Option instead of Cmd.

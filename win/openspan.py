@@ -4921,6 +4921,109 @@ class App:
             "dot": dot, "name": name, "radio": radio, "buttons": buttons}
 
     def _device_input_dialog(self, device_id):
+        """Per-device input settings with real sliders. Everything here is
+        applied on THIS side so the device's own settings stay untouched and it
+        remains pleasant to use standalone."""
+        record = self.device_record(device_id)
+        if not record:
+            return
+        label = record.get("name", device_id)
+        win = tk.Toplevel(self.root)
+        win.withdraw()
+        win.title(f"Input — {label}")
+        win.configure(bg=CARD)
+        win.transient(self.root)
+        win.resizable(False, False)
+        _paint_dark_titlebar(win)
+        tk.Label(win, text=f"Input settings — {label}", bg=CARD, fg=FG,
+                 font=("Segoe UI Semibold", 12)).pack(
+            anchor="w", padx=18, pady=(16, 2))
+        tk.Label(win,
+                 text="Applied by OpenSpan, not by the device — so the "
+                      "device keeps its own settings and stays usable on its "
+                      "own.",
+                 bg=CARD, fg=MUTED, font=("Segoe UI", 9), wraplength=430,
+                 justify="left").pack(anchor="w", padx=18, pady=(0, 10))
+
+        state = {}
+
+        def slider(key, title, lo, hi, default, hint):
+            box = tk.Frame(win, bg=CARD)
+            box.pack(fill="x", padx=18, pady=(6, 0))
+            head = tk.Frame(box, bg=CARD)
+            head.pack(fill="x")
+            tk.Label(head, text=title, bg=CARD, fg=FG,
+                     font=("Segoe UI", 10)).pack(side="left")
+            val = tk.Label(head, text="", bg=CARD, fg=ACCENT,
+                           font=("Consolas", 10))
+            val.pack(side="right")
+            var = tk.DoubleVar(value=float(record.get(key, default)))
+
+            def on_move(_v=None):
+                val.config(text=f"{var.get():.2f}")
+            var.trace_add("write", lambda *_a: on_move())
+            ttk.Scale(box, from_=lo, to=hi, variable=var,
+                      orient="horizontal").pack(fill="x", pady=(2, 0))
+            tk.Label(box, text=hint, bg=CARD, fg=MUTED,
+                     font=("Segoe UI", 8), wraplength=430,
+                     justify="left").pack(anchor="w")
+            on_move()
+            state[key] = var
+
+        slider("sensitivity", "Mouse sensitivity", 0.1, 3.0, 1.0,
+               "How far the pointer travels on this device for the same hand "
+               "movement. Lower it if this device feels too fast.")
+        slider("pointer_accel", "Pointer acceleration", 0.0, 4.0, 0.0,
+               "0 = perfectly linear. Applied here, so the pointer position "
+               "stays exact — unlike the device's own acceleration.")
+
+        inv = tk.BooleanVar(value=bool(record.get("scroll_invert", False)))
+        ttk.Checkbutton(win, text="Invert scroll wheel on this device",
+                        variable=inv).pack(anchor="w", padx=18, pady=(12, 0))
+
+        alt_now = record.get("modifier_remap")
+        alt_var = tk.StringVar(
+            value=("command" if (alt_now or {}).get("alt") in ("cmd", "gui")
+                   else ("option" if isinstance(alt_now, dict) else "inherit")))
+        altbox = tk.Frame(win, bg=CARD)
+        altbox.pack(fill="x", padx=18, pady=(10, 0))
+        tk.Label(altbox, text="Send physical Alt as", bg=CARD, fg=FG,
+                 font=("Segoe UI", 10)).pack(side="left")
+        ttk.Combobox(altbox, textvariable=alt_var, width=12, state="readonly",
+                     values=("option", "command", "inherit")).pack(
+            side="left", padx=(10, 0))
+        tk.Label(win, text="option = macOS Option  ·  command = iPad Command",
+                 bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(
+            anchor="w", padx=18)
+
+        def apply_and_close():
+            record["sensitivity"] = round(float(state["sensitivity"].get()), 3)
+            record["pointer_accel"] = round(
+                float(state["pointer_accel"].get()), 3)
+            record["scroll_invert"] = bool(inv.get())
+            choice = alt_var.get()
+            record["modifier_remap"] = (
+                {} if choice == "option"
+                else ({"alt": "cmd"} if choice == "command" else None))
+            self.canvas.save()
+            win.destroy()
+            _emit("event", f"{label}: sensitivity "
+                           f"{record['sensitivity']:.2f}, acceleration "
+                           f"{record['pointer_accel']:.2f}, Alt={choice}.")
+            self._restart_portal_for_input()
+
+        row = tk.Frame(win, bg=CARD)
+        row.pack(anchor="e", padx=18, pady=(16, 16))
+        ttk.Button(row, text="Apply", style="Accent.TButton",
+                   command=apply_and_close).pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(side="left")
+        win.update_idletasks()
+        win.geometry(
+            f"+{self.root.winfo_rootx() + 120}+{self.root.winfo_rooty() + 90}")
+        win.deiconify()
+        win.grab_set()
+
+    def _device_input_dialog_legacy(self, device_id):
         """Per-device input settings: scroll direction and how physical Alt is
         delivered. These are per DEVICE because the right answer differs: an
         iPad wants Alt as Command, a Mac wants it as Option."""
