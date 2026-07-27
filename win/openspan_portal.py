@@ -542,11 +542,23 @@ class Portal:
             return link
         return None
 
-    def _position_inside(self, destination, to_side, along):
+    def _position_inside(self, destination, to_side, along, span=None):
         display = self._displays.get((
             destination.get("target"), destination.get("display")))
         if not display:
             return self.vx, self.vy
+        if span:
+            # Map the exit point PROPORTIONALLY onto the destination edge:
+            # 30% down the edge you left is 30% down the edge you arrive on.
+            # Without this, a physically shorter screen only receives the
+            # slice that literally overlaps and the rest of the edge is dead.
+            lo, hi = float(span[0]), float(span[1])
+            frac = 0.5 if hi <= lo else (
+                min(1.0, max(0.0, (float(along) - lo) / (hi - lo))))
+            if to_side in ("left", "right"):
+                along = float(display["y"]) + frac * float(display["h"])
+            else:
+                along = float(display["x"]) + frac * float(display["w"])
         x, y = float(display["x"]), float(display["y"])
         width, height = float(display["w"]), float(display["h"])
         margin_x = min(float(ENTER_MARGIN), max(2.0, width * 0.1))
@@ -582,7 +594,7 @@ class Portal:
                  else monitor["y"] + monitor["h"] - 3)
         return int(round(x)), int(round(y))
 
-    def _switch_target(self, destination, to_side, along):
+    def _switch_target(self, destination, to_side, along, span=None):
         target = destination.get("target")
         display = destination.get("display")
         old_target = self.active_target
@@ -603,7 +615,7 @@ class Portal:
         self.cur = self._portal_for(target, display) or self.cur
         self.entry_along = float(along)
         self.vx, self.vy = self._position_inside(
-            destination, to_side, along)
+            destination, to_side, along, span)
         self._last_transition = time.monotonic()
         self._press_side = None
         self._pressure = 0.0
@@ -689,7 +701,8 @@ class Portal:
             # the physical button is released.
             if self.buttons:
                 break
-            self._switch_target(destination, link["to_side"], along)
+            self._switch_target(destination, link["to_side"], along,
+                                span=link.get("span"))
             return False
         self.vx = self._clamp(nx, x, right)
         self.vy = self._clamp(ny, y, bottom)
