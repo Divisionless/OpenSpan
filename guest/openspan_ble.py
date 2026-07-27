@@ -641,7 +641,12 @@ class OpenSpanBLE:
         """
         self._hid_paths.add(path)
         self._hid_connected.discard(path)
-        self._resub_tries.pop(path, None)
+        # DO NOT clear the re-subscribe counter here. The bounce below IS a
+        # disconnect, so clearing it let the "give up after 2" cap reset itself
+        # every cycle: try 1 -> bounce -> disconnect -> counter cleared ->
+        # try 1 again, forever. That loop re-registered the GATT database tens
+        # of thousands of times and tore down BOTH devices' links. The counter
+        # is cleared only when the device actually subscribes (_check_resub).
         if not self.hid:
             return
         was_subscribed = bool(self.hid.kbd.notifying
