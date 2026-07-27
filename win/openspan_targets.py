@@ -26,6 +26,32 @@ CONFIG_VERSION = 3
 # Ports are allocated from BASE_PORT upward; nothing is reserved for a "kind".
 BASE_PORT = 9955
 MIN_LAYOUT_SIZE = 120
+# Desk units per PHYSICAL INCH. The desk layout exists only to describe how
+# screens sit next to each other, and pointer travel is independent of it
+# (traverse = resolution / gain -- the rectangle cancels), so sizing it from
+# real inches costs nothing and makes the arrangement actually truthful. A
+# 32" screen then really is ~1.9x the width of a 17" one, instead of the user
+# having to inflate rectangles to fight a monitor whose size was pinned to its
+# pixel count.
+DESK_UNITS_PER_INCH = 100.0
+
+
+def physical_size(diagonal_in, res_w, res_h, rotation=0):
+    """Desk (w, h) for a screen of this DIAGONAL with this aspect ratio.
+
+    Aspect comes from the pixel resolution, rotation included, so a portrait
+    32" panel is tall and narrow while a landscape one is wide and short --
+    both correctly ~1.9x a 17" monitor."""
+    width_px = max(1.0, float(res_w))
+    height_px = max(1.0, float(res_h))
+    if int(rotation) % 180 == 90:
+        width_px, height_px = height_px, width_px
+    hyp = (width_px ** 2 + height_px ** 2) ** 0.5
+    diagonal_in = max(1.0, float(diagonal_in))
+    w_in = diagonal_in * width_px / hyp
+    h_in = diagonal_in * height_px / hyp
+    return (max(MIN_LAYOUT_SIZE, int(round(w_in * DESK_UNITS_PER_INCH))),
+            max(MIN_LAYOUT_SIZE, int(round(h_in * DESK_UNITS_PER_INCH))))
 
 
 def oriented_resolution(display):
@@ -159,6 +185,14 @@ def _normalize_monitor(live, saved):
     row["layout_h"] = max(
         MIN_LAYOUT_SIZE, int(saved.get("layout_h", live["h"])))
     row["refresh_hz"] = float(saved.get("refresh_hz", 60))
+    diagonal = saved.get("diagonal_in")
+    if diagonal:
+        # A local monitor's desk size was its PIXEL count, which made a 17"
+        # 1080p panel 1920 units wide and forced every real screen to be
+        # inflated to match. Physical inches make them comparable.
+        row["diagonal_in"] = float(diagonal)
+        row["layout_w"], row["layout_h"] = physical_size(
+            diagonal, live["w"], live["h"], 0)
     return row
 
 
@@ -174,6 +208,12 @@ def _normalize_display(display, fallback_id, fallback_name):
     row["rotation"] = int(row.get("rotation", 0)) % 360
     if row["rotation"] not in (0, 90, 180, 270):
         row["rotation"] = 0
+    diagonal = row.get("diagonal_in")
+    if diagonal:
+        row["diagonal_in"] = float(diagonal)
+        row["w"], row["h"] = physical_size(
+            diagonal, row["res_w"], row["res_h"], row["rotation"])
+        return row
     if "w" not in row or "h" not in row:
         effective_w, effective_h = oriented_resolution(row)
         row["w"] = max(MIN_LAYOUT_SIZE, int(effective_w / 4))
