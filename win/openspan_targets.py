@@ -118,6 +118,7 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "clipboard": False,   # opt-in; needs helper shortcuts on the device
         "scroll_invert": False,
         "pointer_gain": 1.0,    # points per HID unit (1.0 = accel off)
+        "pointer_accel": 0.0,   # our own acceleration; 0.0 = linear
         "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
@@ -278,6 +279,11 @@ def normalize_config(raw, live_monitors):
             # reach an edge first, where the clamp re-syncs both cursors.
             "pointer_gain": max(0.05, min(8.0, float(
                 target.get("pointer_gain", 1.0) or 1.0))),
+            # Acceleration applied by US, on Windows. 0.0 = linear. Doing it
+            # here (rather than letting the target OS do it) is what keeps the
+            # virtual cursor exact: the same curve drives wire and model.
+            "pointer_accel": max(0.0, min(4.0, float(
+                target.get("pointer_accel", 0.0) or 0.0))),
             # None = inherit the global keymap (today's behaviour); a dict --
             # even an empty one -- is an explicit per-device override, which is
             # how a Mac gets physical Alt delivered as Option instead of Cmd.

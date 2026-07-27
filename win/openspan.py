@@ -4940,7 +4940,8 @@ class App:
             "     option  = macOS Option/Alt  (correct for a Mac)\n"
             "     command = Command/GUI       (correct for an iPad)\n"
             "     inherit = use the shared keymap\n\n"
-            "Type: 1 to toggle scroll, or 2 option / 2 command / 2 inherit",
+            "Type: 1 to toggle scroll, 2 option|command|inherit, "
+            "or 3 <number>",
             default="")
         if answer is None or not answer.strip():
             return
@@ -4964,6 +4965,15 @@ class App:
                            "Use: 2 option, 2 command, or 2 inherit.")
                 return
             _emit("event", f"{label}: physical Alt is sent as {choice}.")
+        elif parts[0] == "3" and len(parts) > 1:
+            try:
+                value = max(0.0, min(4.0, float(parts[1])))
+            except ValueError:
+                dark_alert(self.root, "Not a number", "Use: 3 1.0")
+                return
+            record["pointer_accel"] = value
+            _emit("event", f"{label}: pointer acceleration "
+                           f"{'OFF (linear)' if value == 0 else value}.")
         else:
             return
         self.canvas.save()

@@ -17,6 +17,7 @@ Pure ctypes; closing this console unhooks everything (safety net).
 import ctypes
 import ctypes.wintypes as wt
 import json
+import math
 import os
 import socket
 import sys
@@ -47,6 +48,13 @@ EXIT_PRESSURE = 45.0
 # Seconds after a transition during which no further crossing may fire. Stops
 # ping-ponging between two surfaces at the shared edge.
 SWITCH_COOLDOWN = 0.30
+# Pointer acceleration applied HERE, on Windows, rather than by the target OS.
+# That is the whole point: because we compute it, the SAME accelerated delta
+# feeds both the wire and the virtual cursor, so the model cannot drift from
+# reality the way it does when the target accelerates behind our back.
+# factor = 1 + accel * (magnitude / ACCEL_PIVOT), clamped to ACCEL_MAX.
+ACCEL_PIVOT = 12.0
+ACCEL_MAX = 5.0
 
 # FKA chords bound (on the iPad, Settings > Accessibility > Keyboards >
 # Full Keyboard Access > Commands) to the two clipboard Shortcuts -- see
@@ -250,6 +258,9 @@ class Portal:
     # you left it while the model jumps to the edge you just crossed.
     _last_pos = {}              # device id -> (display_id, vx, vy)
     _device_gain = {}           # device id -> points per HID unit
+    _device_accel = {}          # device id -> acceleration strength (0 = off)
+    _rem_x = 0.0                # sub-unit remainders: slow motion must not be
+    _rem_y = 0.0                # truncated away to nothing
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -309,6 +320,11 @@ class Portal:
         }
         self._device_gain = {
             device["id"]: float(device.get("pointer_gain", 1.0) or 1.0)
+            for device in self.cfg.get("devices", [])
+        }
+        self._device_accel = {
+            device["id"]: max(0.0, min(4.0, float(
+                device.get("pointer_accel", 0.0) or 0.0)))
             for device in self.cfg.get("devices", [])
         }
         self._device_remap = {
@@ -699,6 +715,7 @@ class Portal:
         self._last_transition = time.monotonic()
         self._press_side = None
         self._pressure = 0.0
+        self._rem_x = self._rem_y = 0.0
         self.active = False
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
         # mode by _kbd_proc. Zeroing it here corrupted it while the key was
@@ -770,8 +787,24 @@ class Portal:
                 if ms.flags & LLMHF_INJECTED:
                     return 1
                 if wParam == WM_MOUSEMOVE:
-                    dx = int((ms.pt.x - self.cx) * MOUSE_SENS)
-                    dy = int((ms.pt.y - self.cy) * MOUSE_SENS)
+                    fx = (ms.pt.x - self.cx) * MOUSE_SENS
+                    fy = (ms.pt.y - self.cy) * MOUSE_SENS
+                    # OUR acceleration, applied before anything else, so the
+                    # identical value drives the device AND the virtual cursor.
+                    accel = self._device_accel.get(self.active_target, 0.0)
+                    if accel > 0.0:
+                        mag = math.hypot(fx, fy)
+                        if mag > 0.0:
+                            factor = min(
+                                ACCEL_MAX, 1.0 + accel * mag / ACCEL_PIVOT)
+                            fx *= factor
+                            fy *= factor
+                    # carry the sub-unit remainder, otherwise slow, precise
+                    # movement truncates to zero and the pointer feels sticky
+                    fx += self._rem_x
+                    fy += self._rem_y
+                    dx, dy = int(fx), int(fy)
+                    self._rem_x, self._rem_y = fx - dx, fy - dy
                     if dx or dy:
                         self.q.put((self.active_target, "m", dx, dy, 0))
                         if self._route_motion(dx, dy):

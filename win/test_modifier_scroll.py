@@ -149,5 +149,38 @@ p5.enter(p5.portals[0], 100)
 check("a first-ever entry still falls back to the entry point",
       isinstance(p5.vx, float) and isinstance(p5.vy, float))
 
+# --- our acceleration must be identical on the wire and in the model -------
+# This is the whole reason acceleration belongs on THIS side: when the target
+# OS accelerates, we cannot see what it did and the model drifts. When we do
+# it, the same number drives the device and the virtual cursor.
+def accel_factor(fx, fy, accel):
+    mag = (fx * fx + fy * fy) ** 0.5
+    if accel <= 0.0 or mag <= 0.0:
+        return 1.0
+    return min(P.ACCEL_MAX, 1.0 + accel * mag / P.ACCEL_PIVOT)
+
+
+check("acceleration off is exactly linear", accel_factor(50, 0, 0.0) == 1.0)
+check("a slow move is barely accelerated",
+      1.0 < accel_factor(2, 0, 1.0) < 1.3)
+check("a fast move is accelerated more than a slow one",
+      accel_factor(60, 0, 1.0) > accel_factor(5, 0, 1.0))
+check("acceleration is clamped so one report cannot explode",
+      accel_factor(5000, 0, 4.0) == P.ACCEL_MAX)
+check("acceleration is direction-independent (uses magnitude)",
+      abs(accel_factor(30, 40, 1.0) - accel_factor(0, 50, 1.0)) < 1e-9)
+
+# the sub-unit remainder must not throw away slow motion
+p6 = make_portal(clipboard_capable=False)
+p6._rem_x = p6._rem_y = 0.0
+kept = 0.0
+for _ in range(10):                    # ten 0.4-unit nudges = 4 units total
+    fx = 0.4 + p6._rem_x
+    dx = int(fx)
+    p6._rem_x = fx - dx
+    kept += dx
+check("sub-unit movement accumulates instead of truncating to nothing",
+      kept == 4.0)
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)
