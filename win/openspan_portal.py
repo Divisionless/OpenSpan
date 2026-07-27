@@ -634,9 +634,17 @@ class Portal:
         name = portal.get("target_name", self.active_target)
         print(f"[portal] >>> {name} mode ON via {portal['axis']}"
               f"={portal['line']}  (Esc x3 to bail)")
+        # Announce whatever is ALREADY physically held. _kbd_proc keeps
+        # self.mods current in every mode, but nothing told the device we just
+        # entered -- so "hold Ctrl, cross the edge, scroll" arrived as a BARE
+        # wheel. A device-to-device handoff already does this (_switch_target);
+        # entry from the PC did not. Devices with the clipboard capability were
+        # accidentally repaired ~0.35s later by the chord resync below, which
+        # is why this only ever showed up on a device without it.
+        self._emit_kbd()
         # UNIFIED CLIPBOARD, entry half: if the Windows clipboard changed
-        # since the last sync, hand it to the iPad now (fires the iPad's
-        # "Paste from PC" shortcut) -- so a plain Ctrl(=Cmd)+V on the iPad
+        # since the last sync, hand it to the device now (fires its
+        # "Paste from PC" shortcut) -- so a plain Ctrl(=Cmd)+V there
         # always pastes the newest copy from EITHER machine
         seq = _clip_seq()
         if self._clipboard_devices.get(self.active_target)                 and seq != self._last_sync_seq:
@@ -652,7 +660,13 @@ class Portal:
         self._press_side = None
         self._pressure = 0.0
         self.active = False
-        self.raw_keys.clear(); self.mods = 0; self.buttons = 0
+        # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
+        # mode by _kbd_proc. Zeroing it here corrupted it while the key was
+        # still DOWN -- the later key-UP then cleared an already-clear bit, so
+        # after one out-and-back across the edge the modifier was dead until
+        # you released and re-pressed it. The device is released explicitly by
+        # the ("k", 0, [], 0) below; the mirror must keep telling the truth.
+        self.raw_keys.clear(); self.buttons = 0
         # Release the iPad's held keys + mouse buttons, but do it THROUGH THE
         # QUEUE -- never call send() (blocking socket I/O) from here. leave()
         # runs inside the low-level mouse/keyboard hook procedure; if a
