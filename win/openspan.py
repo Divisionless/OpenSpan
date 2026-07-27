@@ -4807,8 +4807,20 @@ class App:
             up = status is not None
             busy = state["inflight"] or state["broadcasting"]
             radio = str(device.get("radio", "") or "")
+            # Is this device's assigned radio actually PRESENT? A dongle that
+            # vanished (unplugged, or claimed-but-not-attached by VirtualBox)
+            # left the row showing its last known "paired" forever, because
+            # every query errored with "controller not available" and the state
+            # simply never updated. A frozen yes is worse than an honest
+            # "cannot tell" -- it hides the real fault.
+            known = {str(r.get("address", "")).upper()
+                     for r in (getattr(self.bt_panel, "_radios", []) or [])}
+            radio_missing = bool(radio) and bool(known) and radio not in known
             # grey = not paired · amber = paired/idle · green = live
-            if live and portal_on:
+            if radio_missing:
+                colour, text = DANGER, "radio not present"
+                paired = False
+            elif live and portal_on:
                 colour, text = ACCENT, "connected"
             elif live:
                 colour, text = WARN, "portal off"
@@ -4826,17 +4838,18 @@ class App:
             buttons = row["buttons"]
             # NOT gated on `up`: pairing is what brings the lane into
             # existence, so requiring its daemon first is a deadlock.
+            usable = radio and not radio_missing
             buttons["pair"].state(
-                ["!disabled"] if (radio and self._vm_reachable and not busy
+                ["!disabled"] if (usable and self._vm_reachable and not busy
                                   and not live) else ["disabled"])
             buttons["connect"].state(
-                ["!disabled"] if (radio and up and not busy and paired
+                ["!disabled"] if (usable and up and not busy and paired
                                   and not live) else ["disabled"])
             # Disconnect doubles as CANCEL for an in-flight attempt
             buttons["disconnect"].state(
                 ["!disabled"] if (live or busy) else ["disabled"])
             buttons["unpair"].state(
-                ["!disabled"] if (radio and up and not busy and paired)
+                ["!disabled"] if (usable and up and not busy and paired)
                 else ["disabled"])
             self.canvas.set_target_state(device_id, live and portal_on, paired)
 
