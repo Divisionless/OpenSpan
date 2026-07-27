@@ -520,6 +520,9 @@ app._dev_status = {
     device["id"]: {"kbd_subscribed": False, "mouse_subscribed": False}
     for device in app.canvas.config["devices"]
 }
+# Pair is gated on the VM answering, NOT on that device's daemon already
+# listening -- pairing is what creates the lane, so requiring it deadlocked.
+app._vm_reachable = True
 app._apply_device_rows(False)
 drain()
 check("the device panel renders one identical row per configured device",

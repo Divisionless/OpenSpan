@@ -3227,6 +3227,7 @@ class App:
         self._dev_rows = {}
         self._dev_conn = {}
         self._dev_status = {}   # device id -> last daemon status dict
+        self._vm_reachable = False   # the VM answers ssh (readiness truth)
         root.after(50, self._drain_ui)
         self._theme()
 
@@ -4446,6 +4447,7 @@ class App:
                 if ssh_guest("echo ok", timeout=5, quiet=True).stdout.strip() \
                         == "ok":
                     reachable = True
+                    self._vm_reachable = True
                     break
                 threading.Event().wait(3)
             if not reachable:
@@ -4533,7 +4535,33 @@ class App:
                 "/etc/systemd/system/openspanble-mac.service.d/20-radio.conf; "
                 "systemctl daemon-reload; exit 0",
                 timeout=30, quiet=True)
-            # NOTE: the per-device lanes are configured by _pair_device_worker
+            # Bring up a lane for every device that already has a radio. This
+            # is what makes the app self-healing: a lane is just a drop-in plus
+            # an openspanble@<id> instance, so re-asserting it is idempotent
+            # (the script prints UNCHANGED when it is already right). Without
+            # this, retiring the legacy units left NOTHING listening and the
+            # app waited forever on a daemon that only Pair could create.
+            # Safe by construction: each device owns its own radio, so these
+            # can never claim each other's controller.
+            for device in self.canvas.devices():
+                radio = str(device.get("radio", "") or "")
+                if not device.get("enabled", True) or not radio:
+                    continue
+                name = f"OpenSpan {device.get('name', device['id'])}"[:24]
+                r = ssh_guest(
+                    "bash /opt/openspan/bt-preflight.sh; "
+                    f"bash /opt/openspan/set-hid-device.sh {device['id']} "
+                    f"{radio} {int(device.get('port', BASE_PORT))} "
+                    f"{shlex.quote(name)}",
+                    timeout=45, quiet=True)
+                if r.returncode == 0:
+                    _emit("event", f"{device.get('name', device['id'])} lane "
+                                   f"ready on its own radio ({radio}).")
+                else:
+                    detail = (r.stderr or r.stdout or "").strip()
+                    _emit("err", f"{device.get('name', device['id'])} lane "
+                                 f"could not be brought up: {detail[-160:]}")
+            # NOTE: beyond this, lanes are (re)configured by _pair_device_worker
             # via set-hid-device.sh, which owns the drop-in for each
             # openspanble@<id>. There is deliberately no boot-time re-apply of
             # a global iPad/Mac radio here: it wrote the LEGACY drop-ins with
@@ -4787,9 +4815,11 @@ class App:
                 text=(f"{radio}  :{device.get('port')}" if radio
                       else f":{device.get('port')}"))
             buttons = row["buttons"]
+            # NOT gated on `up`: pairing is what brings the lane into
+            # existence, so requiring its daemon first is a deadlock.
             buttons["pair"].state(
-                ["!disabled"] if (radio and up and not busy and not live)
-                else ["disabled"])
+                ["!disabled"] if (radio and self._vm_reachable and not busy
+                                  and not live) else ["disabled"])
             buttons["connect"].state(
                 ["!disabled"] if (radio and up and not busy and paired
                                   and not live) else ["disabled"])
@@ -5002,6 +5032,8 @@ class App:
         if self._closing:
             return  # shutting down: never respawn anything past _full_stop
         running = vm_running()
+        if not running:
+            self._vm_reachable = False
         st = daemon_status() if running else None
         # probe EVERY device's own daemon (worker thread; no Tk here)
         dev_status = self._poll_device_status() if running else {}
@@ -5091,7 +5123,10 @@ class App:
         # readiness banner (only reacts on a state change, so no console spam)
         if not running:
             r_state, r_txt, r_col = "stopped", "○  Stopped", MUTED
-        elif st is None:
+        elif not self._vm_reachable:
+            # Ready means the VM ANSWERS -- not that some device's HID daemon
+            # happens to be listening. A device with no lane yet (or no radio
+            # assigned) must never pin the whole app on "Booting..." forever.
             r_state, r_txt, r_col = "booting", "◐  Booting…  (~90s)", PORTAL
         else:
             r_state, r_txt, r_col = "ready", "●  READY — connect headphones", \
