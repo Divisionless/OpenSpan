@@ -137,8 +137,8 @@ p4.enter(p4.portals[0], 100)
 p4.active_display = "dev-1"
 p4.vx, p4.vy = 640.0, 480.0          # where the user left that device
 p4.leave()
-check("leaving remembers where that device's pointer was",
-      p4._last_pos.get("dev", (None, 0, 0))[1:] == (640.0, 480.0))
+check("leaving remembers where that device's pointer was (per display)",
+      p4._last_pos.get(("dev", "dev-1")) == (640.0, 480.0))
 p4.enter(p4.portals[0], 100)
 check("re-entering RESUMES that position instead of teleporting",
       (p4.vx, p4.vy) == (640.0, 480.0))

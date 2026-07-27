@@ -44,7 +44,7 @@ ENTER_MARGIN = 40          # perpendicular units "into" the device on entry
 # Layout units of sustained overshoot required before a crossing commits. The
 # cursor is clamped ON the edge while captured, so without this any jitter
 # transitions instantly and repeatedly.
-EXIT_PRESSURE = 45.0
+EXIT_PRESSURE = 45.0   # in TARGET POINTS -- converted per screen below
 # Seconds after a transition during which no further crossing may fire. Stops
 # ping-ponging between two surfaces at the shared edge.
 SWITCH_COOLDOWN = 0.30
@@ -250,6 +250,7 @@ class Portal:
     _last_transition = 0.0
     _press_side = None
     _pressure = 0.0
+    portals = []                # PC-facing entrances (set in __init__)
     _device_remap = {}          # device id -> remap dict, or None to inherit
     _device_scroll_invert = {}  # device id -> bool
     # Where each device's pointer was when we last left it. A relative HID link
@@ -515,6 +516,13 @@ class Portal:
         return self._clamp(
             layout_along, x, x + width), y + height - margin_y
 
+    def _portal_for(self, target, display):
+        """A PC-facing portal belonging to this surface, for exit fallback."""
+        for portal in self.portals:
+            if portal.get("target") == target                     and portal.get("target_display") == display:
+                return portal
+        return None
+
     def _matching_link(self, side, along):
         for link in self.links:
             source = link["source"]
@@ -580,7 +588,7 @@ class Portal:
         old_target = self.active_target
         old_display = self.active_display
         if target != old_target and old_target is not None:
-            self._last_pos[old_target] = (old_display, self.vx, self.vy)
+            self._last_pos[(old_target, old_display)] = (self.vx, self.vy)
         if target != old_target:
             # One Windows hook broker, independent target channels. Release the
             # old HID lane before changing sockets so no modifier can stick.
@@ -588,6 +596,12 @@ class Portal:
             self.q.put((old_target, "b", 0, 0, 0))
             self.active_target = target
         self.active_display = display
+        # The exit portal must follow the surface we are ACTUALLY on. self.cur
+        # was set once by enter() and never updated, so bailing out after a
+        # device-to-device handoff dropped the real cursor back through the
+        # portal we FIRST came in by -- on the wrong monitor.
+        self.cur = self._portal_for(target, display) or self.cur
+        self.entry_along = float(along)
         self.vx, self.vy = self._position_inside(
             destination, to_side, along)
         self._last_transition = time.monotonic()
@@ -655,7 +669,13 @@ class Portal:
                 self._press_side = side
                 self._pressure = 0.0
             self._pressure += _overshoot
-            if self._pressure < EXIT_PRESSURE:
+            # EXIT_PRESSURE is expressed in TARGET POINTS. The overshoot above
+            # is in desk units, and desk-units-per-point differs per screen
+            # (0.85 on the portrait Macs, 1.14 on the landscape one), so a raw
+            # comparison made the edge feel different on every display.
+            _pressure_desk = EXIT_PRESSURE * (
+                scale_y if side in ("top", "bottom") else scale_x)
+            if self._pressure < _pressure_desk:
                 break   # still leaning on the edge, not through it yet
             link = self._matching_link(side, along)
             if not link:
@@ -684,9 +704,12 @@ class Portal:
         self.perp = ENTER_MARGIN
         # RESUME this device's pointer where we left it. Only fall back to the
         # entry point the first time we ever enter it (nothing to resume).
-        saved = self._last_pos.get(self.active_target)
-        if saved and saved[0] == self.active_display:
-            self.vx, self.vy = saved[1], saved[2]
+        # Keyed by (device, DISPLAY): a device with several screens was only
+        # remembering one, so returning to it through a different screen fell
+        # back to asserting a position the target's cursor was never at.
+        saved = self._last_pos.get((self.active_target, self.active_display))
+        if saved:
+            self.vx, self.vy = saved
         else:
             self.vx, self.vy = self._entry_point(portal, along)
         user32.SetCursorPos(self.cx, self.cy)
@@ -743,7 +766,7 @@ class Portal:
         # remember where this device's pointer really is, so re-entering
         # resumes instead of teleporting the model somewhere it is not
         if target is not None:
-            self._last_pos[target] = (self.active_display, self.vx, self.vy)
+            self._last_pos[(target, self.active_display)] = (self.vx, self.vy)
         self.q.put((target, "k", 0, [], 0))
         self.q.put((target, "b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
