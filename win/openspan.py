@@ -1858,8 +1858,14 @@ class MultiArrangeCanvas(tk.Canvas):
                 "refresh_hz": spec["refresh_hz"],
                 "rotation": spec["rotation"],
             })
-            width = spec["physical_width"] * self.UNITS_PER_INCH
-            set_layout_width(display, width)
+            # The inches field is the DIAGONAL. Size is derived from it and
+            # the aspect the resolution/rotation imply, exactly as
+            # "Screen sizes..." does -- so the two can never disagree.
+            diagonal = float(spec["physical_width"])
+            display["diagonal_in"] = diagonal
+            display["w"], display["h"] = physical_size(
+                diagonal, display["res_w"], display["res_h"],
+                display.get("rotation", 0))
             if prior:
                 display["x"] = int(prior["x"])
                 display["y"] = int(prior["y"])
@@ -2004,11 +2010,14 @@ class MultiArrangeCanvas(tk.Canvas):
                 rotation = item.get("rotation", 0)
             hz = int(refresh) if float(refresh).is_integer() else refresh
             rotate_note = f" · {rotation}°" if rotation else ""
-            physical = width / self.UNITS_PER_INCH
+            # Show the DIAGONAL exactly as typed -- not a derived width. The
+            # number on the screen should be the number that was entered.
+            diagonal = item.get("diagonal_in")
+            size_note = f"\n{float(diagonal):g}\"" if diagonal else ""
             self.create_text(
                 (x0 + x1) / 2, (y0 + y1) / 2,
                 text=f"{name}\n{res_w}×{res_h} @ {hz} Hz{rotate_note}"
-                     f"\n≈ {physical:.1f}\" wide",
+                     f"{size_note}",
                 fill=text_color, justify="center",
                 font=("Segoe UI", 8, "bold"))
             if chosen:
@@ -2248,7 +2257,7 @@ class MacDisplayEditor:
             "refresh_hz": tk.StringVar(
                 value=str(display.get("refresh_hz", 60))),
             "physical_width": tk.StringVar(value=(
-                f"{float(display.get('w', 960)) / self.canvas.UNITS_PER_INCH:.1f}"
+                f"{float(display.get('diagonal_in') or 24):g}"
             )),
         }
         specs = [
