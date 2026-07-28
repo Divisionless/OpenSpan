@@ -12,6 +12,7 @@ chord resync, which is why the fault only showed on a device without it.
 
 Exit 0 = all pass.
 """
+import ctypes
 import os
 import sys
 import types
@@ -83,6 +84,10 @@ def make_portal(clipboard_capable):
     p._device_accel = {}
     p._device_sens = {}
     p._rem_x = p._rem_y = 0.0
+    p._hot_down = set()
+    p._device_verbatim = {"dev": False}
+    p._last_chord = 0.0
+    p._push_pending = False
     return p
 
 
@@ -384,6 +389,53 @@ check("VERBATIM sends Alt as Alt", kbd_out(True, _alt, []) ==
       (P.IPAD_MOD_BIT["alt"], []))
 check("and the Windows key still reaches a verbatim device as GUI",
       kbd_out(True, P.VK_MOD[0x5B], []) == (P.IPAD_MOD_BIT["cmd"], []))
+
+# --- a verbatim device owns the WHOLE keyboard ------------------------------
+# An app shortcut that eats a combo is the same broken promise as a remap that
+# rewrites one, and worse because it is invisible. Ctrl+Alt+V was taken by the
+# clipboard helper and never forwarded -- on a Mac mapping Ctrl->Command and
+# Alt->Control that is Command+Control+V, a real shortcut a real person presses.
+class _KB(ctypes.Structure):
+    _fields_ = [("vkCode", ctypes.c_ulong), ("scanCode", ctypes.c_ulong),
+                ("flags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+
+def press(portal, *vks):
+    """Drive the REAL hook procedure: modifiers down, key down, then release."""
+    for vk in vks:
+        kb = _KB(vk, 0, 0, 0, None)
+        portal._kbd_proc(0, WM_KEYDOWN, ctypes.addressof(kb))
+    for vk in reversed(vks):
+        kb = _KB(vk, 0, 0, 0, None)
+        portal._kbd_proc(0, WM_KEYUP, ctypes.addressof(kb))
+    return [e for e in drain(portal) if e[1] == "k"]
+
+
+VK_LCTRL, VK_LALT, VK_V = 0xA2, 0xA4, 0x56
+
+pv = make_portal(clipboard_capable=False)
+pv.active = True
+pv.active_target = "dev"
+pv._device_verbatim = {"dev": True}
+pv.mods = 0
+pv.raw_keys = {}
+reports = press(pv, VK_LCTRL, VK_LALT, VK_V)
+combos = [(r[2], list(r[3])) for r in reports]
+want = (P.IPAD_MOD_BIT["ctrl"] | P.IPAD_MOD_BIT["alt"], [P.VK_HID[VK_V]])
+check("Ctrl+Alt+V reaches a verbatim device instead of being eaten",
+      want in combos)
+
+pn = make_portal(clipboard_capable=False)
+pn.active = True
+pn.active_target = "dev"
+pn._device_verbatim = {"dev": False}
+pn.mods = 0
+pn.raw_keys = {}
+pn._chord_until = 0.0
+combos_n = [(r[2], list(r[3])) for r in press(pn, VK_LCTRL, VK_LALT, VK_V)]
+check("but a normal device still lets the clipboard hotkey take it",
+      want not in combos_n)
 
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

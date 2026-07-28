@@ -1720,6 +1720,27 @@ class Portal:
                     self._esc_hist.clear()
             ctrl = self.mods & 0x11
             alt = self.mods & 0x44
+            # A VERBATIM DEVICE OWNS THE WHOLE KEYBOARD. It is told to send
+            # exactly what is pressed, and an app shortcut that eats a combo is
+            # the same broken promise as a remap that rewrites one -- worse,
+            # because it is invisible. Ctrl+Alt+V was taken by the clipboard
+            # helper and never forwarded, which on a Mac that maps Ctrl->Command
+            # and Alt->Control is Command+Control+V, a real shortcut a real
+            # person presses. Only the panic bail above survives, because it
+            # must work when everything else is broken.
+            if self.active and self._device_verbatim.get(self.active_target):
+                if vk in VK_MOD:
+                    if down:
+                        self.mods |= VK_MOD[vk]
+                    elif up:
+                        self.mods &= ~VK_MOD[vk]
+                if vk in VK_HID and vk not in VK_MOD:
+                    if down:
+                        self.raw_keys[vk] = VK_HID[vk]
+                    elif up:
+                        self.raw_keys.pop(vk, None)
+                self._emit_kbd()
+                return 1
             if down and vk == 0x51 and ctrl and alt:      # Ctrl+Alt+Q
                 if self.active:                           # legacy bail, kept
                     self.leave()                          # as a backup
