@@ -17,6 +17,7 @@ silently changing the target's display mode.
 from __future__ import annotations
 
 import copy
+import json
 
 
 CONFIG_VERSION = 3
@@ -608,6 +609,47 @@ def exit_inset(monitor, axis):
             ARRIVE_MARGIN * float(monitor["w"]) / max(1.0, float(mw)))))
     return max(8, int(round(
         ARRIVE_MARGIN * float(monitor["h"]) / max(1.0, float(mh)))))
+
+
+def portal_signature(config):
+    """Everything the input portal actually reads, as a stable string.
+
+    The portal loads geometry and per-device input settings ONCE, at process
+    start, so the app must restart it whenever any of them change. The previous
+    detector compared only the computed portals and links -- which are blind to
+    a screen's RESOLUTION and ROTATION, the two numbers that set how far the
+    pointer travels per HID unit. Change a screen from 2560x1440 to 3840x2160,
+    or rotate it, and the adjacency graph comes out identical: no restart, and
+    the running portal goes on measuring the screen that used to be there. An
+    edge then fires part way across the new one.
+
+    So the signature is taken over the fields themselves, not over a projection
+    of them. Cosmetic edits (renames, refresh rate) are still free."""
+    monitors = [
+        [m.get("name"), m.get("x"), m.get("y"), m.get("w"), m.get("h"),
+         m.get("layout_x"), m.get("layout_y"), m.get("layout_w"),
+         m.get("layout_h"), bool(m.get("primary"))]
+        for m in config.get("monitors", [])
+    ]
+    devices = []
+    for device in config.get("devices", []):
+        if not device.get("enabled", True):
+            continue
+        devices.append([
+            device.get("id"), device.get("port"),
+            bool(device.get("clipboard")), bool(device.get("scroll_invert")),
+            device.get("pointer_gain"), device.get("pointer_accel"),
+            device.get("sensitivity"),
+            bool(device.get("compensate_target_accel")),
+            device.get("modifier_remap"),
+            [[d.get("id"), d.get("x"), d.get("y"), d.get("w"), d.get("h"),
+              d.get("res_w"), d.get("res_h"), d.get("rotation")]
+             for d in device.get("displays", [])],
+        ])
+    # The computed portals and links are DERIVED from exactly the rectangles
+    # above, so including them would add nothing but the display names they
+    # carry -- and a rename would then drop the portal's hooks mid-use.
+    return json.dumps([monitors, devices], sort_keys=True, default=str)
 
 
 def compute_portals(config):

@@ -369,4 +369,59 @@ check("a lane takes its id, radio, port and name from the caller",
       "DEVICE_ID CONTROLLER_MAC PORT NAME" in generic
       and "--remove" in generic)
 
+
+# --- the portal must be restarted whenever what it READS changes -----------
+# The portal loads geometry and per-device input settings once, at start. The
+# app decided whether to reload it by diffing the COMPUTED portals and links --
+# a projection blind to resolution and rotation, the two numbers that set how
+# far the pointer travels per HID unit. So changing a screen's resolution, or
+# rotating it, left the running portal measuring the screen that used to be
+# there: its edge fired part way across the new one.
+import copy  # noqa: E402
+from openspan_targets import portal_signature  # noqa: E402
+
+sig_cfg = {
+    "monitors": [{"name": r"\\.\DISPLAY1", "x": 0, "y": 0, "w": 1920,
+                  "h": 1080, "layout_x": 0, "layout_y": 0, "layout_w": 1920,
+                  "layout_h": 1080, "primary": True}],
+    "devices": [{
+        "id": "dev", "name": "Device", "port": 9955, "radio": "",
+        "enabled": True, "clipboard": False, "scroll_invert": False,
+        "pointer_gain": 1.0, "pointer_accel": 0.0, "sensitivity": 1.0,
+        "compensate_target_accel": False, "modifier_remap": None,
+        "displays": [{"id": "dev-1", "name": "Screen", "x": -2789, "y": 0,
+                      "w": 2789, "h": 1569, "res_w": 2560, "res_h": 1440,
+                      "rotation": 0, "refresh_hz": 60.0, "diagonal_in": 32.0}],
+    }],
+}
+sig_cfg = refresh_geometry(sig_cfg)
+sig_base = portal_signature(sig_cfg)
+
+
+def after(mutate):
+    copied = copy.deepcopy(sig_cfg)
+    mutate(copied)
+    return portal_signature(refresh_geometry(copied))
+
+
+check("changing a screen's RESOLUTION reloads the portal",
+      after(lambda c: c["devices"][0]["displays"][0].update(
+          res_w=3840, res_h=2160)) != sig_base)
+check("ROTATING a screen reloads the portal",
+      after(lambda c: c["devices"][0]["displays"][0].update(
+          rotation=90)) != sig_base)
+check("moving a screen on the desk reloads the portal",
+      after(lambda c: c["devices"][0]["displays"][0].update(y=40)) != sig_base)
+check("a per-device input setting reloads the portal",
+      after(lambda c: c["devices"][0].update(sensitivity=1.4)) != sig_base)
+check("...and so does target-acceleration compensation",
+      after(lambda c: c["devices"][0].update(
+          compensate_target_accel=True)) != sig_base)
+check("but a rename does NOT drop the portal's hooks",
+      after(lambda c: c["devices"][0]["displays"][0].update(
+          name="Centre")) == sig_base)
+check("and neither does a refresh-rate edit",
+      after(lambda c: c["devices"][0]["displays"][0].update(
+          refresh_hz=144.0)) == sig_base)
+
 print("RESULT: ALL PASS")

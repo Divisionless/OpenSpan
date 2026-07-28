@@ -28,7 +28,8 @@ from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
     BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
     compute_portals, device_by_id, physical_size,
-    normalize_config, oriented_resolution, refresh_geometry, remove_device,
+    normalize_config, oriented_resolution, portal_signature,
+    refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
 )
@@ -2164,17 +2165,16 @@ class MultiArrangeCanvas(tk.Canvas):
         self.save()
 
     def save(self):
-        before = json.dumps([self.config.get("portals"),
-                             self.config.get("links")], sort_keys=True)
+        before = portal_signature(self.config)
         self.config["portals"] = compute_portals(self.config)
         self.config["links"] = compute_adjacencies(self.config)
-        after = json.dumps([self.config["portals"], self.config["links"]],
-                           sort_keys=True)
         self._persist()
-        # on_change restarts the portal process to reload geometry -- only worth
-        # doing when the geometry the portal actually reads (portals/links) is
-        # different. Persisting cosmetic edits no longer drops its hooks.
-        if self.on_change and after != before:
+        # THE single restart trigger. on_change reloads the portal process, and
+        # it fires whenever anything the portal reads has changed -- geometry,
+        # resolution, rotation, or a per-device input setting. Comparing a
+        # projection of the config instead of the fields themselves is what let
+        # a rotation edit slip through while the portal kept the old numbers.
+        if self.on_change and portal_signature(self.config) != before:
             self.on_change(bool(self.config["portals"]))
 
     def _persist(self):
@@ -4353,8 +4353,9 @@ class App:
             self.status.set(
                 "⚠ No managed device touches a PC monitor — no portal")
         if self.portal_proc and self.portal_proc.poll() is None:
-            # The portal reads geometry once at process start. Apply a drag,
-            # resize, rotation, or resolution edit immediately.
+            # The portal reads geometry and input settings once at process
+            # start. Apply a drag, resize, rotation, resolution, sensitivity or
+            # acceleration edit immediately.
             _terminate_role_process(self.portal_proc)
             self.portal_proc = None
             self._start_portal_process()
@@ -5142,7 +5143,6 @@ class App:
             _emit("event", f"{label}: sensitivity "
                            f"{record['sensitivity']:.2f}, acceleration "
                            f"{record['pointer_accel']:.2f}, Alt={choice}.")
-            self._restart_portal_for_input()
 
         row = tk.Frame(win, bg=CARD)
         row.pack(anchor="e", padx=18, pady=(16, 16))
@@ -5212,15 +5212,6 @@ class App:
         else:
             return
         self.canvas.save()
-        self._restart_portal_for_input()
-
-    def _restart_portal_for_input(self):
-        """The portal reads input settings once at start, so reload it."""
-        if self.portal_proc and self.portal_proc.poll() is None:
-            _terminate_role_process(self.portal_proc)
-            self.portal_proc = None
-            self._start_portal_process()
-            self.log("event", "input settings reloaded.")
 
     def _assign_device_radio(self, device_id):
         """Give ONE device its own radio. The device record is the single
