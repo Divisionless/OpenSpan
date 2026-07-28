@@ -616,3 +616,71 @@ check("and so is a third clash, and a blank id",
       _after[2] == ["device-2-1", "device-2-2"])
 check("no id is left shared after the migration",
       len({i for row in _after for i in row}) == 6)
+
+
+# --- the portal must be reloaded whenever what it READS changes -------------
+# save() used to snapshot the signature at the top of itself and compare with
+# the bottom. But every caller mutates the config and THEN calls save(), so the
+# snapshot was already the after: adding a whole device compared equal to
+# itself. The portal kept routing for two devices while a third sat there
+# paired, healthy and unreachable. The comparison has to be against what the
+# portal was last TOLD.
+class _FakeCanvas:
+    save = openspan.MultiArrangeCanvas.save
+
+    def __init__(self, config):
+        self.config = config
+        self.reloads = 0
+        self._told_portal = openspan.portal_signature(config)
+        self.on_change = self._reload
+
+    def _reload(self, _ok):
+        self.reloads += 1
+
+    def _persist(self):
+        pass
+
+
+def _screen(ident, x, y):
+    return {"id": ident, "name": ident, "x": x, "y": y, "w": 1600, "h": 900,
+            "res_w": 1920, "res_h": 1080, "rotation": 0, "refresh_hz": 60.0,
+            "diagonal_in": 24.0}
+
+
+def _device(ident, x):
+    return {"id": ident, "name": ident, "port": 9955, "radio": "",
+            "enabled": True, "clipboard": False, "scroll_invert": False,
+            "pointer_gain": 1.0, "pointer_accel": 0.0, "sensitivity": 1.0,
+            "compensate_target_accel": False, "modifier_remap": None,
+            "displays": [_screen(f"{ident}-1", x, 0)]}
+
+
+_canvas = _FakeCanvas({
+    "monitors": [{"name": r"\.\DISPLAY1", "x": 0, "y": 0, "w": 1920,
+                  "h": 1080, "layout_x": 0, "layout_y": 0, "layout_w": 1600,
+                  "layout_h": 900, "primary": True}],
+    "devices": [_device("dev-a", -1600)],
+})
+_canvas.save()
+check("saving an unchanged config does not bounce the portal",
+      _canvas.reloads == 0)
+
+_canvas.config["devices"].append(_device("dev-b", -3200))
+_canvas.save()
+check("ADDING A DEVICE reloads the portal", _canvas.reloads == 1)
+
+_canvas.save()
+check("and saving again with nothing changed does not reload it again",
+      _canvas.reloads == 1)
+
+_canvas.config["devices"][0]["displays"][0]["res_w"] = 3840
+_canvas.save()
+check("changing a resolution reloads the portal", _canvas.reloads == 2)
+
+_canvas.config["devices"][0]["displays"][0]["x"] = -1700
+_canvas.save()
+check("moving a screen reloads the portal", _canvas.reloads == 3)
+
+_canvas.config["devices"][0]["displays"][0]["name"] = "Renamed"
+_canvas.save()
+check("but a rename still does not", _canvas.reloads == 3)

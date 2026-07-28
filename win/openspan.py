@@ -1744,6 +1744,10 @@ class MultiArrangeCanvas(tk.Canvas):
             pass
         self.config = normalize_config(raw, live)
         _migrate_radio_assignments(self.config)
+        # What the portal will read when it starts. save() compares against
+        # this, so the first cosmetic save of a session does not bounce a
+        # perfectly good portal.
+        self._told_portal = portal_signature(self.config)
         self.monitors = self.config["monitors"]
         self.targets = self.config["devices"]
         # No device is privileged. `ipad` here is simply "the first display of
@@ -2165,17 +2169,24 @@ class MultiArrangeCanvas(tk.Canvas):
         self.save()
 
     def save(self):
-        before = portal_signature(self.config)
         self.config["portals"] = compute_portals(self.config)
         self.config["links"] = compute_adjacencies(self.config)
         self._persist()
-        # THE single restart trigger. on_change reloads the portal process, and
-        # it fires whenever anything the portal reads has changed -- geometry,
-        # resolution, rotation, or a per-device input setting. Comparing a
-        # projection of the config instead of the fields themselves is what let
-        # a rotation edit slip through while the portal kept the old numbers.
-        if self.on_change and portal_signature(self.config) != before:
-            self.on_change(bool(self.config["portals"]))
+        # THE single restart trigger: reload the portal whenever anything it
+        # READS has changed -- a device, a screen, a resolution, a rotation, a
+        # position, an input setting.
+        #
+        # Compared against WHAT THE PORTAL WAS LAST TOLD, not against the
+        # config as it stood a moment ago. Every caller mutates the config and
+        # then calls save(), so a "before" snapshot taken here is already the
+        # after: adding a whole device compared equal to itself and the portal
+        # was never reloaded. It went on routing for two devices while a third
+        # sat there paired, healthy, and unreachable.
+        signature = portal_signature(self.config)
+        if signature != getattr(self, "_told_portal", None):
+            self._told_portal = signature
+            if self.on_change:
+                self.on_change(bool(self.config["portals"]))
 
     def _persist(self):
         try:
