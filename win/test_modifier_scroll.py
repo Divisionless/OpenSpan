@@ -327,5 +327,29 @@ plain = flush_moves(burst, False)
 check("an uncompensated lane still coalesces to one movement",
       len(plain) <= 3 and sum(m["dx"] for m in plain) == 320)
 
+# --- the keyboard is a WHOLE keyboard --------------------------------------
+# A key missing from VK_HID is silently swallowed: the hook consumes it, so
+# Windows never sees it either, and nothing is sent. The entire numpad, every
+# function key and the system keys were absent -- "numpad didn't work even
+# though it is on here" was exactly that.
+_expected = {
+    "letters": range(0x41, 0x5B), "digits": range(0x30, 0x3A),
+    "F1-F12": range(0x70, 0x7C), "numpad digits": range(0x60, 0x6A),
+    "numpad operators": [0x6A, 0x6B, 0x6D, 0x6E, 0x6F],
+    "arrows": [0x25, 0x26, 0x27, 0x28],
+    "navigation": [0x24, 0x23, 0x21, 0x22, 0x2D, 0x2E],
+    "editing": [0x0D, 0x1B, 0x08, 0x09, 0x20],
+    "locks and system": [0x14, 0x90, 0x91, 0x13, 0x2C, 0x5D],
+}
+for _group, _vks in _expected.items():
+    _missing = [hex(v) for v in _vks if v not in P.VK_HID]
+    check(f"every key in '{_group}' reaches the device", not _missing)
+
+# and no two Windows keys may collide on one HID usage
+_seen = {}
+_dupes = [(hex(v), hex(u)) for v, u in sorted(P.VK_HID.items())
+          if _seen.setdefault(u, v) != v]
+check("no two keys share a HID usage", not _dupes)
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

@@ -272,6 +272,29 @@ VK_HID.update({
     0x24: 0x4A, 0x23: 0x4D, 0x21: 0x4B, 0x22: 0x4E,
     0x2D: 0x49, 0x2E: 0x4C,
 })
+# The rest of an ordinary keyboard, which was simply absent. A key that is not
+# in this table is silently swallowed: the hook consumes it (so Windows never
+# sees it either) and nothing is sent. The whole numpad, every function key and
+# the system keys behaved as if they did not exist.
+for _i in range(12):                       # F1..F12
+    VK_HID[0x70 + _i] = 0x3A + _i
+for _i in range(12):                       # F13..F24
+    VK_HID[0x7C + _i] = 0x68 + _i
+for _i in range(1, 10):                    # numpad 1..9
+    VK_HID[0x60 + _i] = 0x59 + (_i - 1)
+VK_HID.update({
+    0x60: 0x62,      # numpad 0
+    0x6E: 0x63,      # numpad .
+    0x6F: 0x54,      # numpad /
+    0x6A: 0x55,      # numpad *
+    0x6D: 0x56,      # numpad -
+    0x6B: 0x57,      # numpad +
+    0x90: 0x53,      # Num Lock  (macOS reads this key as Clear)
+    0x2C: 0x46,      # Print Screen
+    0x91: 0x47,      # Scroll Lock
+    0x13: 0x48,      # Pause
+    0x5D: 0x65,      # Application / Menu
+})
 for i in range(12):
     VK_HID[0x70 + i] = 0x3A + i
 
