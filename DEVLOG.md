@@ -645,3 +645,48 @@ Two bugs the new `test_resync_shapes.py` caught, both of which would have shippe
 display arrangement — a re-sync lands where *that* OS clamps, and we record the
 desk coordinate we believe that is. And `_APPLE_CURVE` assumes the default
 macOS tracking-speed slider.
+
+## 2026-07-28 — Corners are places you use, and a re-sync puts the pointer back
+
+Doug: *"its really jumpy... This time it seemed like the ipad jumped to the far
+left screen from below but it was in the corner maybe. Honestly I think corner
+movement is problematic. Don't allow movement across corners at all -- either
+way sometimes i need to interact with corners."*
+
+**The far-left jump was mine.** Re-syncing on every exit left the pointer parked
+at the plan's landing corner — the top-left of Mac Display 1. Crossing back then
+began there and flew across two screens to the arrival point. Correct, and
+horrible to watch.
+
+`_resync` now takes a `restore` point: establish the corner as a fact, then walk
+the pointer back to where the user actually left it. The corner is measured and
+the walk back is a known distance, so the result is still a measurement — and
+the pointer is where they expect to find it, both when crossing back and when
+using the device directly. All of it still happens on the way *out*.
+
+**No crossing fires within `CORNER_ZONE` (one inch) of either end of any edge**,
+on either surface, in either direction — including the Windows side, where the
+corners are Start, Show Desktop, and every window's close box. Two reasons, and
+the second is the one that bit:
+
+- corners hold things people reach for, and a crossing there takes the pointer
+  away mid-reach;
+- a diagonal into a corner satisfies **two** edges at once, so which surface you
+  land on comes down to whichever overshoot happened to be larger on that
+  report. That is not a rule anyone can predict, which is exactly why it felt
+  arbitrary.
+
+Arrivals are clamped into the same band, so the way back is open the instant you
+land. Crossing at the very end of an overlap therefore lands a corner-zone
+inside the neighbour — the rule working, not drift.
+
+New invariant: **driving hard into a corner never crosses anywhere** — every
+corner of every screen, three approach distances, thirty reports of sustained
+pressure.
+
+**On the jumpiness.** The iPad's `pointer_accel` is 1.0, which reaches 3.4x
+effective gain on a fast flick — and iPadOS applies its own acceleration on top.
+A 120 px mouse move becomes 412 iPad px before iPadOS sees it, 38% of that
+screen in a single report. Lowering *sensitivity* would slow careful movement
+too; the acceleration is what jumps. `pointer_accel` 0 on the iPad is the
+targeted change.

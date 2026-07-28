@@ -338,6 +338,20 @@ for link in broker.links:
     if not display:
         continue
     lo, hi = link["span"]
+    # Sweep only where a crossing can actually fire AND land: corners are
+    # deliberately dead now, at both ends and on both surfaces, so that they
+    # can be USED. Crossing at the very end of an overlap therefore lands a
+    # corner-zone inside the neighbour, which is the rule working, not drift.
+    landing = broker._displays.get(
+        (destination.get("target"), destination.get("display")))
+    if not landing:
+        continue
+    safe_lo, safe_hi = broker._corner_safe_span(display, link["side"])
+    land_lo, land_hi = broker._corner_safe_span(landing, link["to_side"])
+    lo = max(lo, safe_lo, land_lo)
+    hi = min(hi, safe_hi, land_hi)
+    if hi <= lo:
+        continue
     for index in range(11):
         along = lo + (hi - lo) * index / 10.0
         broker.active = True
@@ -475,6 +489,48 @@ for target in sorted({device for device, _display in broker._displays}):
 
 check("a cold re-sync lands in the same place no matter where it started",
       not diverged, "; ".join(sorted(set(diverged))[:4]))
+
+
+# =========================================================================
+# P6. A CORNER IS A PLACE YOU CAN USE.
+#
+# Corners hold the things people reach for -- Start, Show Desktop, a close box,
+# a hot corner -- and a crossing that fires there takes the pointer away
+# mid-reach. A corner is also where a crossing is least trustworthy: a diagonal
+# satisfies TWO edges at once, so which surface you land on comes down to
+# whichever overshoot happened to be larger on that report. Both problems go
+# away by not crossing there at all.
+# =========================================================================
+escaped = []
+for (target, display_id), display in broker._displays.items():
+    x, y = float(display["x"]), float(display["y"])
+    w, h = float(display["w"]), float(display["h"])
+    for corner_x, push_x in ((x, -60), (x + w, 60)):
+        for corner_y, push_y in ((y, -60), (y + h, 60)):
+            for probe in (0.0, 8.0, 20.0):
+                broker.active = True
+                broker._last_seen = {}
+                broker.active_target, broker.active_display = target, display_id
+                broker.vx = corner_x - (push_x / abs(push_x)) * probe
+                broker.vy = corner_y - (push_y / abs(push_y)) * probe
+                for _ in range(30):
+                    if broker._route_motion(push_x, push_y):
+                        escaped.append(
+                            f"{target}/{display_id} corner "
+                            f"({corner_x:.0f},{corner_y:.0f}) escaped to the PC")
+                        break
+                    if (broker.active_target, broker.active_display) != (
+                            target, display_id):
+                        escaped.append(
+                            f"{target}/{display_id} corner "
+                            f"({corner_x:.0f},{corner_y:.0f}) escaped to "
+                            f"{broker.active_display}")
+                        break
+                while not broker.q.empty():
+                    broker.q.get_nowait()
+
+check("driving hard into a corner never crosses anywhere",
+      not escaped, "; ".join(sorted(set(escaped))[:4]))
 
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

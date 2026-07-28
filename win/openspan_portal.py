@@ -61,6 +61,14 @@ SEND_HZ = 120
 # ARRIVE_MARGIN (shared with openspan_targets, so both halves of every edge use
 # one number) is what keeps an arrival off the trigger it arrived through.
 # Geometry does that job now; no accumulator is required.
+# NO CROSSING FIRES WITHIN THIS OF EITHER END OF AN EDGE. Corners are places
+# people USE -- a Show Desktop button, a Start button, a hot corner, a close box
+# -- and an edge crossing that fires there takes the pointer away mid-reach. It
+# is also where crossings are least trustworthy: a diagonal into a corner
+# satisfies TWO edges at once, so which surface you land on comes down to which
+# overshoot happened to be larger that report. Both problems go away by simply
+# not crossing there, in either direction.
+CORNER_ZONE = 100.0        # desk units = one inch, at both ends of every edge
 MAX_WARP_REPORTS = 256     # a runaway backstop, not a design limit: a
                            # diagonal re-sync across a large arrangement
                            # legitimately needs ~100
@@ -595,8 +603,10 @@ class Portal:
         # legitimate fresh entry exactly on a corner -- the far right of the
         # DISPLAY4-top span lands on mac-2's right edge, which is itself a live
         # exit to DISPLAY1. An arrival must never touch another trigger.
-        lo_x, hi_x = x + margin_x, x + width - margin_x
-        lo_y, hi_y = y + margin_y, y + height - margin_y
+        lo_y, hi_y = self._corner_safe_span(display, "left")
+        lo_x, hi_x = self._corner_safe_span(display, "top")
+        lo_x, hi_x = max(lo_x, x + margin_x), min(hi_x, x + width - margin_x)
+        lo_y, hi_y = max(lo_y, y + margin_y), min(hi_y, y + height - margin_y)
         edge = portal.get("edge")
         if edge == "target-left":
             return x + margin_x, self._clamp(layout_along, lo_y, hi_y)
@@ -681,8 +691,12 @@ class Portal:
         width, height = float(display["w"]), float(display["h"])
         margin_x = min(float(ARRIVE_MARGIN), max(2.0, width * 0.1))
         margin_y = min(float(ARRIVE_MARGIN), max(2.0, height * 0.1))
-        lo_x, hi_x = x + margin_x, x + width - margin_x
-        lo_y, hi_y = y + margin_y, y + height - margin_y
+        # Arrive inside the band where a crossing can fire, so the way back
+        # is open the instant you land.
+        lo_y, hi_y = self._corner_safe_span(display, "left")
+        lo_x, hi_x = self._corner_safe_span(display, "top")
+        lo_x, hi_x = max(lo_x, x + margin_x), min(hi_x, x + width - margin_x)
+        lo_y, hi_y = max(lo_y, y + margin_y), min(hi_y, y + height - margin_y)
         if to_side == "left":
             return x + margin_x, self._clamp(along, lo_y, hi_y)
         if to_side == "right":
@@ -719,6 +733,18 @@ class Portal:
         is unanswerable from a log that never says WHICH screen."""
         display = self._displays.get((target, display_id))
         return (display or {}).get("name", display_id)
+
+    @staticmethod
+    def _corner_safe_span(display, side):
+        """The part of one edge where a crossing is allowed to fire."""
+        if side in ("left", "right"):
+            lo = float(display["y"])
+            hi = lo + float(display["h"])
+        else:
+            lo = float(display["x"])
+            hi = lo + float(display["w"])
+        zone = min(CORNER_ZONE, (hi - lo) * 0.25)
+        return lo + zone, hi - zone
 
     def _display_at(self, target, x, y):
         """Which of this device's screens contains a desk point."""
@@ -781,6 +807,20 @@ class Portal:
             py += (to_y - from_y) / steps * res_h / max(
                 1.0, gain * float(display["h"]))
         self._emit_move(target, px, py)
+
+    def _inside(self, target, display_id, x, y):
+        """A model position clamped into its own screen.
+
+        The last report before a crossing can carry the model past the edge it
+        left by; the device's own window server clamped ITS pointer at that
+        edge, so the edge is the truth."""
+        display = self._displays.get((target, display_id))
+        if not display:
+            return (float(x), float(y))
+        return (self._clamp(x, float(display["x"]),
+                            float(display["x"]) + float(display["w"])),
+                self._clamp(y, float(display["y"]),
+                            float(display["y"]) + float(display["h"])))
 
     def _union(self, target):
         """The bounding box of everything this device shows."""
@@ -961,7 +1001,7 @@ class Portal:
                       f"{' then '.join(sides)} -> "
                       f"({landing[0]:.0f},{landing[1]:.0f})")
 
-    def _resync(self, target):
+    def _resync(self, target, restore=None):
         """Find out where a device's pointer is, believing NOTHING.
 
         A relative HID link cannot ask. But the device's own window server
@@ -979,12 +1019,21 @@ class Portal:
         for side in sides:
             self._shove(target, side)
         x, y = landing
+        if restore is not None:
+            # Establishing the truth does not have to LEAVE the pointer in a
+            # corner. Walk it back to where the user actually left it: the
+            # corner is a fact and the walk back is a known distance, so the
+            # result is still a fact -- and it is where they expect to find it,
+            # both when they cross back and when they use the device directly.
+            self._warp(target, x, y, float(restore[0]), float(restore[1]))
+            x, y = float(restore[0]), float(restore[1])
         display = self._display_at(target, x, y)
         self._last_seen[target] = (
             display["id"] if display else self.active_display, x, y)
         print(f"[portal] resync {target}: shove {' then '.join(sides)}"
-              f" -> ({x:.0f},{y:.0f}) on "
-              f"{self._screen(target, self._last_seen[target][0])}")
+              + (f", back to ({x:.0f},{y:.0f})" if restore is not None
+                 else f" -> ({x:.0f},{y:.0f})")
+              + f" on {self._screen(target, self._last_seen[target][0])}")
         return (x, y)
 
     def _place(self, target, display, vx, vy):
@@ -1017,7 +1066,10 @@ class Portal:
         if old_target is not None and target != old_target:
             # Leaving this DEVICE, not just one of its screens: re-sync it on
             # the way out, exactly as when handing control back to the PC.
-            pinned = self._resync(old_target) is not None
+            pinned = self._resync(
+                old_target,
+                restore=self._inside(old_target, old_display,
+                                     self.vx, self.vy)) is not None
         if old_target is not None and not pinned:
             # Record UNCONDITIONALLY otherwise, including a same-device screen
             # handoff. Skipping those let a device's saved position go
@@ -1088,9 +1140,8 @@ class Portal:
         # here is one report of error on every future entry to this device.
         self.vx, self.vy = nx, ny
         crossings = []
-        # `along` is CLAMPED into the rectangle. Unclamped, a diagonal move into
-        # a corner offered each crossing an along value that lay outside the
-        # other edge's span, so both were rejected and the corner was a livelock.
+        # `along` is CLAMPED into the rectangle, so a diagonal is measured
+        # against a point that is actually on the edge.
         if nx < x:
             crossings.append((x - nx, "left", self._clamp(ny, y, bottom)))
         if nx > right:
@@ -1099,6 +1150,13 @@ class Portal:
             crossings.append((y - ny, "top", self._clamp(nx, x, right)))
         if ny > bottom:
             crossings.append((ny - bottom, "bottom", self._clamp(nx, x, right)))
+        # NOTHING CROSSES AT A CORNER. The pointer still goes there and still
+        # works there -- it simply stays on this surface, which is the whole
+        # point of being able to reach a corner at all.
+        crossings = [
+            row for row in crossings
+            if (lambda lo, hi: lo <= row[2] <= hi)(
+                *self._corner_safe_span(display, row[1]))]
         # No pressure accumulator and no cooldown. Both existed only because an
         # arrival used to land ON the trigger it arrived through; geometry does
         # that job now (ARRIVE_MARGIN, on both surfaces and both axes). Both
@@ -1178,7 +1236,10 @@ class Portal:
         # so the existing record is still as good as it was.
         pinned = False
         if resync and self.active_target is not None:
-            pinned = self._resync(self.active_target) is not None
+            pinned = self._resync(
+                self.active_target,
+                restore=self._inside(self.active_target, self.active_display,
+                                     self.vx, self.vy)) is not None
             if pinned:
                 record = self._last_seen[self.active_target]
                 self.active_display = record[0]
@@ -1239,16 +1300,29 @@ class Portal:
               + (f" -- resynced to ({self.vx:.0f},{self.vy:.0f})"
                  if pinned else ""))
 
+    def _corner_px(self, portal):
+        """CORNER_ZONE at this monitor's scale, in Windows pixels."""
+        monitor = self._monitors.get(portal.get("monitor"))
+        if not monitor:
+            return 0.0
+        axis = "y" if portal["axis"] == "x" else "x"
+        return exit_inset(monitor, axis) * (CORNER_ZONE / ARRIVE_MARGIN)
+
     def _hit_portal(self, x, y):
         for p in self.portals:
             if not self.target_ready.get(p.get("target"), False):
                 continue
+            # The Windows corners are Start, Show Desktop, and every window's
+            # close box. Crossing must not fire there either.
+            zone = self._corner_px(p)
+            lo, hi = p["span"]
+            lo, hi = lo + zone, hi - zone
+            if hi <= lo:
+                continue
             if p["axis"] == "x" and abs(x - p["line"]) <= 1:
-                lo, hi = p["span"]
                 if lo <= y < hi:
                     return p, y
             elif p["axis"] == "y" and abs(y - p["line"]) <= 1:
-                lo, hi = p["span"]
                 if lo <= x < hi:
                     return p, x
         return None, None
