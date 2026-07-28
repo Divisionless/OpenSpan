@@ -208,3 +208,5 @@ Keyboard` appears once bonded — a handy check.)
 ## License
 
 MIT. No warranty, no data collection, nothing phones home.
+
+**[POSITION_MODEL.md](POSITION_MODEL.md)** — the four laws behind moving one pointer across several machines over a link that can only move it *by* an amount, never *to* a place.
