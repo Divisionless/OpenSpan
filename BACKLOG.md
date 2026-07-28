@@ -54,3 +54,23 @@ somewhere sensible instead of somewhere arbitrary.
   and the motion carrying the model past it is already on the wire before
   routing sees it. On iPadOS that overshoot is a gesture. Needs `_route_motion`
   to report how much it consumed.
+
+## Profiles
+
+Named, switchable configurations.
+
+Doug's, one word, so the scope is his to set. The open question is where the line
+falls, because the config already mixes two kinds of thing:
+
+- **belongs in a profile** — the desk arrangement, which devices exist, their
+  displays and sizes, per-device input settings, the side-button rule
+- **belongs to the machine** — `vm_name`, daemon ports, radio assignments,
+  bonds. Those follow the hardware, not the situation.
+
+Switching must reload the portal, which `portal_signature` already handles for
+free: a profile switch is a config change like any other.
+
+Worth knowing before designing it: bonds live on the guest per radio, so two
+profiles that assign the same radio to different devices would fight over one
+lane. Either a profile owns its radio assignments (and switching re-provisions),
+or it does not touch them at all.
