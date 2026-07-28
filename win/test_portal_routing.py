@@ -105,6 +105,10 @@ broker._device_compensate = {}
 broker._device_gain = {}
 broker._device_accel = {}
 broker._device_sens = {}
+broker._motion = ()
+# These checks are about WHERE a crossing goes, not about whether it is allowed
+# to happen. The momentum gate has its own checks at the end of this file.
+broker._has_momentum = lambda: True
 
 left_pc = broker._route_motion(0, -80)
 check("crossing a shared top edge hands control directly to the device above",
@@ -169,5 +173,43 @@ check("and it lands far enough inside not to re-trigger the portal",
 # untouched, preserving where you were ALONG the edge.
 check("handing control back names the direction to pin",
       exits[0][1] == "right")
+
+
+# --- a boundary is crossed on purpose, never by drifting into it ------------
+# Reaching an edge slowly is what someone does when working ALONG that edge --
+# picking something at the side of a screen. Being thrown onto another machine
+# in the middle of that is wrong.
+del broker._has_momentum                      # use the real one again
+broker.leave = lambda exit_to=None, pin_side=None: exits.append((exit_to, pin_side))
+
+broker.active = True
+broker.active_target = "device-1"
+broker.active_display = "device-1-1"
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._note_motion(4)                        # a careful, delicate move
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("a GENTLE arrival at a device edge does not cross",
+      left_pc is False and not exits and broker.vx == -1920.0)
+
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._note_motion(600)                      # a deliberate push
+left_pc = broker._route_motion(80, 0)
+check("a DELIBERATE push at the same edge does cross",
+      left_pc is True and len(exits) == 1)
+
+# ...but a seam between two screens of the SAME device is never gated: the
+# target's own pointer crosses it freely, so refusing would put the model
+# somewhere the pointer is not.
+broker.active_target = "device-2"
+broker.active_display = "device-2-1"
+broker.vx, broker.vy = -3140.0, -900.0
+broker._motion = ()
+broker._note_motion(2)                        # barely moving
+broker._route_motion(-80, 0)
+check("a gentle move across a device's OWN seam still crosses",
+      broker.active_target == "device-2")
 
 print("RESULT: ALL PASS")

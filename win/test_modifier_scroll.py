@@ -206,5 +206,54 @@ for _ in range(10):                    # ten 0.4-unit nudges = 4 units total
 check("sub-unit movement accumulates instead of truncating to nothing",
       kept == 4.0)
 
+
+
+# --- every physical click must reach the device, whatever the timing --------
+# The button flag used to be a bare bool, and the button STATE was read again
+# at send time. A click whose press and release fell inside one 8 ms tick was
+# emitted once, carrying the post-release state -- the press never went out at
+# all. Counting reports cannot see that; counting EDGES can.
+def edges(sent):
+    """Rising edges of the left button in what actually reached the wire."""
+    count, held = 0, 0
+    for msg in sent:
+        state = msg.get("buttons", 0) & 1
+        if state and not held:
+            count += 1
+        held = state
+    return count
+
+
+def click_run(*groups):
+    """Drive button events through the real queue and the real batching.
+
+    Each group is one sender tick's worth of hook events: 1 = press, 0 = release.
+    """
+    p = make_portal(clipboard_capable=False)
+    p.active = True
+    p.active_target = "dev"
+    p.active_display = "dev-1"
+    p.buttons = 0
+    sent = []
+    p.send = lambda target, msg: sent.append(msg)
+    for group in groups:
+        for pressed in group:
+            p.buttons = (p.buttons | 1) if pressed else (p.buttons & ~1)
+            p.q.put(("dev", "b", p.buttons, 0, 0))
+        p._flush_queue()
+    return sent
+
+
+check("a click spread over two ticks is delivered",
+      edges(click_run([1], [0])) == 1)
+check("a click that begins and ends inside ONE tick is still delivered",
+      edges(click_run([1, 0])) == 1)
+check("two fast clicks in one tick are two presses, not one held button",
+      edges(click_run([1, 0, 1, 0])) == 2)
+check("a click straddling a tick boundary is one press, not two",
+      edges(click_run([1], [], [0])) == 1)
+check("and the button always ends released",
+      (click_run([1, 0])[-1]["buttons"] & 1) == 0)
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

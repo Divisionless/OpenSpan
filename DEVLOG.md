@@ -888,3 +888,55 @@ past an edge is a gesture. Leaving the iPad rightward pushes ~940 px beyond its
 edge. If Slide Over still appears, the fix is to clip what we TRANSMIT at the
 edge on the crossing report, which needs `_route_motion` to report how much it
 consumed.
+
+## 2026-07-28 — Momentum to cross; and a click that could vanish
+
+Doug: *"i don't EVER want a GENTLE mouse movement to cross a boundary. I float
+near the ipad boundary, it gets shoved to the right or left, i should initiate
+all shoves with appropriate momentum myself, if i am being gentle near an edge
+that is because i am trying to delicately select something along it."*
+
+A crossing now also requires the hand to be **moving** — ≥1200 raw mouse counts
+per second over the last 100 ms. Reaching an edge slowly just stops there.
+
+Refusing does not desync anything: at a device's OUTER edge the target's own
+window server clamps its pointer in the same place the model clamps. That is
+only true when LEAVING a device, so the gate applies there and never to a seam
+between two screens of the same device, where the target's pointer really does
+flow across — refusing there would put the model somewhere the pointer is not.
+Entering from the PC is gated too: sliding a window to the far edge of a monitor
+must not fling control onto another machine.
+
+### The doubling: it is structurally impossible in our stack
+
+A 25-agent investigation. The decisive argument is not statistical:
+
+> A HID keyboard report is **state, not an event**. macOS derives key presses by
+> DIFFING consecutive reports. Two identical reports diff to zero new edges — so
+> a duplicate introduced anywhere (TCP, D-Bus, GLib, BlueZ, the link layer, the
+> macOS HID stack) is a **no-op by construction**. The only way to produce two
+> Tabs is a genuine present → absent → present on the wire.
+
+Every emitter of a keyboard report was then enumerated. On the Mac lane the only
+drop-and-re-add path is the clipboard chord, and `clipboard` is `false` for the
+Mac. The BLE side was ruled out separately: one notify per command, no
+retransmit, no replay on re-subscribe. Thirteen theories were killed, including
+every one that would have doubled ALL input.
+
+Three real faults fell out of it anyway:
+
+1. **A click could vanish.** `batch["button"]` was a bare bool and the button
+   state was read again at SEND time, so a click whose press and release fell
+   inside one 8 ms tick was emitted once carrying the post-release state — the
+   press never went out. Transitions now carry their state at QUEUE time and
+   every one is sent. *A click that does not register is exactly what makes a
+   person click a second time.*
+2. **`Ctrl+Alt+V` was not gated on capture.** With nothing captured the queued
+   target is `None`, the sender falls back to the default port, and it typed the
+   Windows clipboard into whichever device owns it.
+3. **Nothing counted what reached a device.** "It doubled the Tab" and "the Tab
+   never arrived" look identical from the far end. Every keyboard report is now
+   logged with its modifiers and usages.
+
+New tests count rising EDGES rather than reports — the only way to see a click
+that was never sent.

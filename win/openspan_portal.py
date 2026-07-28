@@ -68,6 +68,25 @@ SEND_HZ = 120
 # satisfies TWO edges at once, so which surface you land on comes down to which
 # overshoot happened to be larger that report. Both problems go away by simply
 # not crossing there, in either direction.
+# A BOUNDARY IS CROSSED ON PURPOSE, NEVER BY DRIFTING INTO IT.
+#
+# Reaching an edge slowly is what someone does when they are working ALONG that
+# edge -- picking something at the side of a screen, dragging a scrollbar. Being
+# thrown onto another machine in the middle of that is wrong. So a crossing also
+# requires MOMENTUM: the hand has to be moving, at the moment it arrives, faster
+# than careful work ever is.
+#
+# Measured in raw mouse counts per second, because that is the hand's own
+# movement and it means the same thing on every surface regardless of that
+# screen's size or resolution.
+#
+# Refusing to cross does not desync anything: at a device's outer edge the
+# target's own window server clamps ITS pointer in the same place the model
+# clamps. That is only true when LEAVING a device, so the gate applies there and
+# never to a seam between two screens of the same device, where the target's
+# pointer really does flow across.
+CROSS_SPEED = 1200.0       # raw mouse counts per second
+CROSS_WINDOW = 0.10        # seconds of movement that count as momentum
 CORNER_ZONE = 50.0         # desk units (half an inch) at both ends of every
                            # edge. It has to be big enough to protect a corner
                            # control and no bigger: at one inch it took a THIRD
@@ -348,6 +367,8 @@ class Portal:
     _device_compensate = {}     # device id -> invert the target's own curve
     _rem_x = 0.0                # sub-unit remainders: slow motion must not be
     _rem_y = 0.0                # truncated away to nothing
+    _motion = ()                # recent (time, raw distance) for the momentum
+    _last_pt = None             # gate; _last_pt tracks the free Windows cursor
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -745,6 +766,19 @@ class Portal:
         is unanswerable from a log that never says WHICH screen."""
         display = self._displays.get((target, display_id))
         return (display or {}).get("name", display_id)
+
+    def _note_motion(self, distance):
+        """Remember how far the hand has moved lately."""
+        now = time.monotonic()
+        self._motion = tuple(
+            row for row in self._motion if now - row[0] <= CROSS_WINDOW
+        ) + ((now, float(distance)),)
+
+    def _has_momentum(self):
+        """Is the hand moving deliberately, or working carefully?"""
+        now = time.monotonic()
+        travelled = sum(d for t, d in self._motion if now - t <= CROSS_WINDOW)
+        return travelled / CROSS_WINDOW >= CROSS_SPEED
 
     @staticmethod
     def _corner_safe_span(display, side):
@@ -1264,7 +1298,17 @@ class Portal:
             band_lo, band_hi = self._live_band(link)
             if not band_lo <= along <= band_hi:
                 continue
+            # LEAVING THIS DEVICE takes momentum. Drifting gently into its outer
+            # edge just stops there, exactly as it would on the machine itself,
+            # so delicate work along an edge is never interrupted. A seam
+            # between two screens of the SAME device is not gated: the target's
+            # own pointer crosses it freely, and refusing would put the model
+            # somewhere the pointer is not.
             destination = link["destination"]
+            leaving = (destination.get("kind") == "local"
+                       or destination.get("target") != self.active_target)
+            if leaving and not self._has_momentum():
+                continue
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
                     destination, link["to_side"], along), pin_side=side)
@@ -1429,14 +1473,25 @@ class Portal:
             if not self.active:
                 if (wParam == WM_MOUSEMOVE and
                         not (ms.flags & LLMHF_INJECTED)):
+                    point = (ms.pt.x, ms.pt.y)
+                    if self._last_pt is not None:
+                        self._note_motion(math.hypot(
+                            point[0] - self._last_pt[0],
+                            point[1] - self._last_pt[1]))
+                    self._last_pt = point
                     p, along = self._hit_portal(ms.pt.x, ms.pt.y)
-                    if p:
+                    # Entering a device takes momentum too. Sliding a window to
+                    # the far edge of a monitor, or picking something at its
+                    # side, must not fling control onto another machine.
+                    if p and self._has_momentum():
                         self.enter(p, along)
                         return 1
             else:
                 if ms.flags & LLMHF_INJECTED:
                     return 1
                 if wParam == WM_MOUSEMOVE:
+                    self._note_motion(math.hypot(ms.pt.x - self.cx,
+                                                 ms.pt.y - self.cy))
                     # per-device sensitivity FIRST, so acceleration below and
                     # the virtual cursor both see the same corrected motion
                     _sens = MOUSE_SENS * self._device_sens.get(
@@ -1506,15 +1561,21 @@ class Portal:
                 elif wParam in (WM_LBUTTONDOWN, WM_LBUTTONUP):
                     self.buttons = (self.buttons | 1) if \
                         wParam == WM_LBUTTONDOWN else (self.buttons & ~1)
-                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
+                    self.q.put(
+                        (self.active_target, "b", self.buttons, 0, 0))
+                    return 1
                 elif wParam in (WM_RBUTTONDOWN, WM_RBUTTONUP):
                     self.buttons = (self.buttons | 2) if \
                         wParam == WM_RBUTTONDOWN else (self.buttons & ~2)
-                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
+                    self.q.put(
+                        (self.active_target, "b", self.buttons, 0, 0))
+                    return 1
                 elif wParam in (WM_MBUTTONDOWN, WM_MBUTTONUP):
                     self.buttons = (self.buttons | 4) if \
                         wParam == WM_MBUTTONDOWN else (self.buttons & ~4)
-                    self.q.put((self.active_target, "b", 0, 0, 0)); return 1
+                    self.q.put(
+                        (self.active_target, "b", self.buttons, 0, 0))
+                    return 1
                 elif wParam == WM_MOUSEWHEEL:
                     delta = ctypes.c_short(ms.mouseData >> 16).value // 120
                     if self._device_scroll_invert.get(
@@ -1584,7 +1645,11 @@ class Portal:
                           "the PC")
                     self._send_chord(FKA_PUSH)
                 return 1
-            if down and vk == 0x56 and ctrl and alt:      # Ctrl+Alt+V
+            if down and vk == 0x56 and ctrl and alt and self.active:
+                # Ctrl+Alt+V. Only while a device is captured: with none, the
+                # queued target is None, the sender falls back to the default
+                # port, and this typed the Windows clipboard into whichever
+                # device happens to own it.
                 text = get_clipboard_text()
                 if text:
                     print(f"[portal] pasting {len(text)} chars to iPad")
@@ -1745,8 +1810,8 @@ class Portal:
                     break
                 target = target or self.active_target
                 batch = batches.setdefault(target, {
-                    "wheel": 0, "moves": [],
-                    "button": False, "keys": [], "texts": [],
+                    "wheel": 0, "moves": [], "clicks": [],
+                    "keys": [], "texts": [],
                 })
                 if kind == "m":
                     # EXACT movements must never be merged with anything.
@@ -1776,7 +1841,14 @@ class Portal:
                 elif kind == "w":
                     batch["wheel"] += c
                 elif kind == "b":
-                    batch["button"] = True
+                    # The button STATE as it was when the event happened.
+                    # It used to be a bare flag, and the state was read again at
+                    # send time -- so a click whose press and release fell in
+                    # one 8 ms tick was emitted once, with the post-release
+                    # state, and the press never reached the device at all. A
+                    # click that does not register is exactly what makes a
+                    # person click a second time.
+                    batch["clicks"].append(a)
                 elif kind == "k":
                     batch["keys"].append((a, b))
                 elif kind == "t":
@@ -1787,11 +1859,24 @@ class Portal:
                 for text in batch["texts"]:
                     self.send(target, {"cmd": "text", "text": text})
                 for mods, keys in batch["keys"]:
+                    # Nothing anywhere counted what actually reached a device.
+                    # "It doubled the Tab" and "the Tab never arrived" look
+                    # identical from the far end, and neither could be settled.
+                    print(f"[portal] key {target} mods={mods:#04x} "
+                          f"keys={[hex(k) for k in keys]}")
                     self.send(
                         target, {"cmd": "kbd", "mods": mods, "keys": keys})
-                # In order. A HID delta is one signed byte, so anything
-                # larger is split -- splitting preserves the movement exactly,
-                # it is only MERGING that destroys it.
+                # EVERY button transition is sent, in order, each with the
+                # state it actually had. Movement rides on the latest one.
+                held = batch["clicks"][-1] if batch["clicks"] else self.buttons
+                for state in batch["clicks"]:
+                    self.send(
+                        target,
+                        {"cmd": "mouse", "dx": 0, "dy": 0,
+                         "buttons": state, "wheel": 0})
+                # In order. A HID delta is one signed byte, so anything larger
+                # is split -- splitting preserves the movement exactly, it is
+                # only MERGING that destroys it.
                 awheel = batch["wheel"]
                 for mdx, mdy, _exact in batch["moves"]:
                     while mdx or mdy or awheel:
@@ -1801,19 +1886,13 @@ class Portal:
                         self.send(
                             target,
                             {"cmd": "mouse", "dx": sx, "dy": sy,
-                             "buttons": self.buttons, "wheel": sw})
+                             "buttons": held, "wheel": sw})
                 while awheel:                      # wheel with no movement
                     sw = max(-127, min(127, awheel)); awheel -= sw
                     self.send(
                         target,
                         {"cmd": "mouse", "dx": 0, "dy": 0,
-                         "buttons": self.buttons, "wheel": sw})
-                if not batch["moves"] and not batch["wheel"] \
-                        and batch["button"]:
-                    self.send(
-                        target,
-                        {"cmd": "mouse", "dx": 0, "dy": 0,
-                         "buttons": self.buttons, "wheel": 0})
+                         "buttons": held, "wheel": sw})
 
     def run(self):
         if not self.portals:

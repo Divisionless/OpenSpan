@@ -99,6 +99,12 @@ def build():
     broker.perp = 0
     broker._rem_x = broker._rem_y = 0.0
     broker._emit_kbd = lambda: None
+    broker._motion = ()
+    # Every property here is about GEOMETRY -- where a crossing goes, what it
+    # lands on, whether it is reversible. Whether the hand was moving fast
+    # enough to be allowed to cross is a separate rule with its own checks in
+    # test_portal_routing.py.
+    broker._has_momentum = lambda: True
     return broker
 
 
