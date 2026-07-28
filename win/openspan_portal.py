@@ -381,6 +381,8 @@ class Portal:
     _gentle_logged = 0.0        # rate-limit for the "too gentle" note
     _last_allclear = 0.0        # 1 Hz "nothing is held" re-assertion
     _kbd_dirty = False          # something non-empty has been sent since
+    _key_down_at = 0.0          # to measure how long a key is actually held
+    _chord_target = None        # a chord gates ONLY the device it runs on
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -474,6 +476,7 @@ class Portal:
             target: False for target in self._target_ports
         }
         self.remap, self.overrides = self._load_keymap()
+        self._chord_target = None  # which device a chord is running on
         self._chord_until = 0.0   # passthrough reports are dropped until
         #                           then, so they can't clobber an FKA chord
         self._hot_down = set()    # clipboard-hotkey VKs currently held
@@ -1753,6 +1756,7 @@ class Portal:
             return
         mods, usage = chord
         self._last_chord = now
+        self._chord_target = self.active_target
         self._chord_until = now + FKA_HOLD + 0.05
         target = self.active_target
         self.q.put((target, "k", mods, [usage], 0))
@@ -1788,8 +1792,17 @@ class Portal:
         return self.remap if own is None else own
 
     def _emit_kbd(self):
-        if time.time() < self._chord_until:
-            return  # an FKA chord is in flight; don't clobber it
+        # THE KEYBOARD IS DUMB ON PURPOSE. It never drops a report, never
+        # defers one, and never decides that something else matters more than
+        # what the user just physically did.
+        #
+        # There used to be a gate here: a clipboard chord held the keyboard for
+        # a moment so a physical key transition could not clobber it. It DROPPED
+        # the report rather than deferring it, and it was process-wide -- so a
+        # chord fired for one device silently swallowed another device's
+        # keystrokes, and if the swallowed one was a RELEASE, that key stayed
+        # held on the target for good. A shortcut helper is never worth
+        # discarding a keystroke the user actually made.
         mod_names = self._phys_mod_names()
         key_usages = list(self.raw_keys.values())
         # 1) exact override match (single-key combos)
@@ -1930,8 +1943,15 @@ class Portal:
                     # Nothing anywhere counted what actually reached a device.
                     # "It doubled the Tab" and "the Tab never arrived" look
                     # identical from the far end, and neither could be settled.
-                    print(f"[portal] key {target} mods={mods:#04x} "
-                          f"keys={[hex(k) for k in keys]}")
+                    stamp = time.monotonic()
+                    held = ""
+                    if keys:
+                        self._key_down_at = stamp
+                    elif self._key_down_at:
+                        held = f"  held {(stamp - self._key_down_at)*1000:.0f}ms"
+                        self._key_down_at = 0.0
+                    print(f"[portal] {stamp*1000:11.1f} key {target} "
+                          f"mods={mods:#04x} keys={[hex(k) for k in keys]}{held}")
                     if mods or keys:
                         self._kbd_dirty = True
                     self.send(
