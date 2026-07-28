@@ -794,6 +794,63 @@ class Portal:
             opposite, along, from_side=side)
         return False
 
+    def _jump_now(self):
+        """Press the button, go. No edge to reach, no direction to give.
+
+        The press IS the instruction. So find the edge of the surface the
+        pointer is on that it happens to be nearest, and cross through it to
+        whatever lies that way -- and if nothing lies that way, take the next
+        nearest edge, and the next. Pressing again hops again.
+
+        From the PC there is no "current surface" in the model, so the nearest
+        ENTRANCE is used instead: the portal whose trigger line the cursor is
+        closest to, entered at the point along it closest to where the cursor
+        already is."""
+        if not self.active:
+            return self._enter_nearest()
+        display = self._displays.get(
+            (self.active_target, self.active_display))
+        if not display:
+            return False
+        x, y = float(display["x"]), float(display["y"])
+        width, height = float(display["w"]), float(display["h"])
+        edges = sorted((
+            (self.vx - x, "left"), (x + width - self.vx, "right"),
+            (self.vy - y, "top"), (y + height - self.vy, "bottom"),
+        ))
+        for _distance, side in edges:
+            if self._jump_nearest(side, (self.vx, self.vy)) is not None:
+                return True
+        print("[portal] jump: nothing to jump to from here")
+        return False
+
+    def _enter_nearest(self):
+        """From the PC: enter through whichever entrance the cursor is nearest."""
+        point = wt.POINT()
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            return False
+        best = None
+        for portal in self.portals:
+            if not self.target_ready.get(portal.get("target"), False):
+                continue
+            lo, hi = portal["span"]
+            if portal["axis"] == "x":
+                along = self._clamp(point.y, lo, hi)
+                distance = math.hypot(point.x - portal["line"], point.y - along)
+            else:
+                along = self._clamp(point.x, lo, hi)
+                distance = math.hypot(point.x - along, point.y - portal["line"])
+            if best is None or distance < best[0]:
+                best = (distance, portal, along)
+        if not best:
+            print("[portal] jump: no entrance is ready")
+            return False
+        _distance, portal, along = best
+        print(f"[portal] jump: nearest entrance is "
+              f"{portal.get('target_name', portal.get('target'))}")
+        self.enter(portal, along)
+        return True
+
     def _matching_link(self, side, along):
         for link in self.links:
             source = link["source"]
@@ -938,7 +995,12 @@ class Portal:
             self._side_held &= ~bit
         if down and not self._side_seen:
             self._side_seen = True
-            print("[portal] mouse side button detected -- hold it to cross")
+            print("[portal] mouse side button detected")
+        # THE PRESS IS THE INSTRUCTION. Waiting for the pointer to then travel
+        # to an edge makes the button a permission slip; this makes it a verb.
+        if down and self._button_jumps and was != self._side_held \
+                and not self.buttons:
+            self._jump_now()
         return was != self._side_held
 
     def _may_cross(self):
