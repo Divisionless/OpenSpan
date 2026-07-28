@@ -1113,14 +1113,9 @@ class Portal:
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
+        # Leaving a device records where its pointer is; it does not go
+        # hunting for a corner to prove it. See leave().
         pinned = False
-        if old_target is not None and target != old_target:
-            # Leaving this DEVICE, not just one of its screens: re-sync it on
-            # the way out, exactly as when handing control back to the PC.
-            pinned = self._resync(
-                old_target,
-                restore=self._inside(old_target, old_display,
-                                     self.vx, self.vy)) is not None
         if old_target is not None and not pinned:
             # Record UNCONDITIONALLY otherwise, including a same-device screen
             # handoff. Skipping those let a device's saved position go
@@ -1276,26 +1271,26 @@ class Portal:
             threading.Timer(
                 0.3, lambda: self._send_chord(FKA_FETCH)).start()
 
-    def leave(self, exit_to=None, resync=False):
+    def leave(self, exit_to=None, resync=False):   # resync kept for callers
         if not self.active:
             return
-        # THE LAST ACT of handing control back: re-sync this device, so that
-        # where its pointer is stops being a belief and becomes a measurement.
-        # Done here rather than on the way IN because by now you are looking at
-        # the screen you moved to, so the travel is never watched.
+        # NO RE-SYNC ON THE WAY OUT.
         #
-        # A bail (Esc x3, a dropped lane) skips it: nothing moved the pointer,
-        # so the existing record is still as good as it was.
+        # A re-sync drives the pointer into an edge and parks it at a corner --
+        # that is how it establishes truth, and it is unavoidable when the
+        # position is genuinely unknown. But doing it on EVERY exit meant every
+        # crossing dragged the pointer along edges, and on iPadOS an edge IS a
+        # gesture: the top edge pulls Notification Centre, the bottom the Dock
+        # and app switcher, the side Slide Over. Going in and out repeatedly
+        # opened them constantly.
+        #
+        # It is also unnecessary. Between re-syncs the model cannot drift: no
+        # motion is discarded, and every jump is paid for on the wire. The
+        # position is established once, when the lane comes up, and re-
+        # established whenever it becomes unknowable -- a dropped lane. In
+        # between, transitions travel between interior points, through the
+        # middle rather than around the outside.
         pinned = False
-        if resync and self.active_target is not None:
-            pinned = self._resync(
-                self.active_target,
-                restore=self._inside(self.active_target, self.active_display,
-                                     self.vx, self.vy)) is not None
-            if pinned:
-                record = self._last_seen[self.active_target]
-                self.active_display = record[0]
-                self.vx, self.vy = record[1], record[2]
         self._rem_x = self._rem_y = 0.0
         self.active = False
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every

@@ -817,3 +817,39 @@ screen already had. Ids are now derived from the device being edited, the
 fallback in `validate_mac_displays` takes the device too, `dedupe_display_ids()`
 heals a config that already carries a clash, and the dialog's title and heading
 name the actual device instead of saying "Managed Mac" at everyone.
+
+## 2026-07-28 — Transitions go through the middle: no re-sync on the way out
+
+Doug: *"all transitions seem to go through corners, let's try to go through
+middles, not corners. Another thing is i can see that the ipad frequently brings
+down the notifications or the select open app menu, something about the frenetic
+nature of the mouse going in and out of it."*
+
+Both are the same cause. A re-sync drives the pointer into an edge and parks it
+at a corner — that is how it establishes truth, and it is unavoidable when the
+position is genuinely unknown. But it was running on **every exit**, so every
+crossing dragged the pointer along edges. On iPadOS an edge **is** a gesture:
+the top pulls Notification Centre, the bottom the Dock and app switcher, the
+side Slide Over. Going in and out repeatedly opened them constantly.
+
+It was also unnecessary. Between re-syncs the model cannot drift — no motion is
+discarded and every jump is paid for on the wire. So the position is established
+**once**, when the lane comes up, and re-established only when it becomes
+genuinely unknowable: a dropped lane. In between, a transition travels between
+two interior points.
+
+Measured on the live layout:
+
+| | once per session | every crossing after |
+|---|---|---|
+| iPad | 3 reports | **1** |
+| Managed Mac (via DISPLAY4) | 110 reports | **8** |
+| Managed Mac (via DISPLAY1) | 110 reports | **12** |
+
+Was 106–110 reports on **every** crossing.
+
+**Known remaining tension**, not yet acted on: a crossing has to *reach* an edge,
+and the motion that carries the model past it is already on the wire before
+routing sees it. On an iPad that overshoot is exactly the gesture. Clipping the
+transmitted motion at the edge would fix it, and needs `_route_motion` to report
+how much it consumed before the crossing so `_mouse_proc` sends only that.
