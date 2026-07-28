@@ -682,7 +682,9 @@ def portal_signature(config):
     # The computed portals and links are DERIVED from exactly the rectangles
     # above, so including them would add nothing but the display names they
     # carry -- and a rename would then drop the portal's hooks mid-use.
-    return json.dumps([monitors, devices], sort_keys=True, default=str)
+    return json.dumps(
+        [monitors, devices, bool(config.get("cross_requires_side_button"))],
+        sort_keys=True, default=str)
 
 
 def compute_portals(config):

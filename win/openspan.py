@@ -3451,6 +3451,14 @@ class App:
                         variable=self.invert_scroll,
                         command=self._on_invert_scroll).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
+        self.cross_button = tk.BooleanVar(
+            value=bool(self.canvas.config.get(
+                "cross_requires_side_button", False)))
+        ttk.Checkbutton(
+            ctl, text="🖱  Hold a mouse side button to move between machines",
+            variable=self.cross_button,
+            command=self._on_cross_button).grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 3))
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -3969,6 +3977,17 @@ class App:
                 pass
         except Exception:  # noqa: BLE001
             pass
+
+    def _on_cross_button(self):
+        """Require an explicit hold before control leaves this machine."""
+        on = bool(self.cross_button.get())
+        self.canvas.config["cross_requires_side_button"] = on
+        self.canvas.save()          # reloads the portal; see save()
+        _emit("event",
+              "crossing now needs a mouse side button held down."
+              if on else
+              "crossing no longer needs a side button — a deliberate push is "
+              "enough.")
 
     def _on_invert_scroll(self):
         on = bool(self.invert_scroll.get())

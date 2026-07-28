@@ -254,6 +254,7 @@ WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
 WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 WM_MBUTTONDOWN, WM_MBUTTONUP = 0x0207, 0x0208
+WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
 WM_MOUSEWHEEL = 0x020A
 LLMHF_INJECTED = 0x01
 
@@ -406,6 +407,8 @@ class Portal:
     _kbd_dirty = False          # something non-empty has been sent since
     _key_down_at = 0.0          # to measure how long a key is actually held
     _chord_target = None        # a chord gates ONLY the device it runs on
+    _side_held = 0              # which mouse side buttons are down (bitmask)
+    _cross_button = False       # hold a side button to cross a device edge
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -480,6 +483,13 @@ class Portal:
             device["id"]: bool(device.get("compensate_target_accel", False))
             for device in self.cfg.get("devices", [])
         }
+        # HOLD A SIDE BUTTON TO CROSS. When on, the side button IS the intent,
+        # so it replaces the momentum gate rather than adding to it -- requiring
+        # a deliberate shove ON TOP of an explicit "yes" would just be in the
+        # way. Crossing between two screens of the SAME device is never gated;
+        # that is not moving between machines.
+        self._cross_button = bool(
+            self.cfg.get("cross_requires_side_button", False))
         self._device_remap = {
             device["id"]: (dict(device["modifier_remap"])
                            if isinstance(device.get("modifier_remap"), dict)
@@ -819,6 +829,23 @@ class Portal:
         """Did the hand push deliberately, recently enough to mean it?"""
         return time.monotonic() < self._armed_until
 
+    def _may_cross(self):
+        """Is leaving this machine something the user actually asked for?
+
+        A held mouse side button is an explicit yes and it ALWAYS suffices --
+        those buttons are not used for anything else, so holding one can only
+        mean a jump. It needs no second opinion, so it lifts the pressure
+        requirement entirely rather than adding to it: demanding a deliberate
+        shove on top of an explicit yes would just be in the way.
+
+        Without it, crossing needs momentum -- unless the option says the button
+        is the only way through, in which case nothing else will do."""
+        if self._side_held:
+            return True
+        if self._cross_button:
+            return False
+        return self._has_momentum()
+
     @staticmethod
     def _corner_safe_span(display, side):
         """The part of one edge where a crossing is allowed to fire."""
@@ -831,8 +858,7 @@ class Portal:
         zone = min(CORNER_ZONE, (hi - lo) * 0.15)
         return lo + zone, hi - zone
 
-    @staticmethod
-    def _live_band(link):
+    def _live_band(self, link):
         """Where this crossing may fire: the SHARED OVERLAP, corners removed.
 
         Taken from the link's span rather than from either screen's own edge,
@@ -840,8 +866,17 @@ class Portal:
         screen's edge instead gave the two sides different answers wherever a
         screen was taller than its neighbour: you could leave through a strip
         that the other side would not let you back in by, so a crossing that
-        worked one way was a dead wall the other."""
+        worked one way was a dead wall the other.
+
+        HOLDING A SIDE BUTTON OPENS THE WHOLE EDGE. The corner is dead by
+        default because a corner is somewhere people reach for things and a
+        diagonal into one is ambiguous. Neither objection survives an explicit
+        request: if the button is down, the intent is not in doubt, so the
+        restriction that exists to protect against accidents gets out of the
+        way."""
         lo, hi = float(link["span"][0]), float(link["span"][1])
+        if self._side_held:
+            return lo, hi
         zone = min(CORNER_ZONE, (hi - lo) * 0.15)
         return lo + zone, hi - zone
 
@@ -1346,11 +1381,13 @@ class Portal:
             destination = link["destination"]
             leaving = (destination.get("kind") == "local"
                        or destination.get("target") != self.active_target)
-            if leaving and not self._has_momentum():
+            if leaving and not self._may_cross():
                 if time.monotonic() - self._gentle_logged > 2.0:
                     self._gentle_logged = time.monotonic()
-                    print(f"[portal] stayed put at the {side} edge -- too "
-                          f"gentle to cross (push to leave)")
+                    print(f"[portal] stayed put at the {side} edge -- "
+                          + ("hold a mouse side button to cross"
+                             if self._cross_button else
+                             "too gentle to cross (push to leave)"))
                 continue
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
@@ -1495,7 +1532,8 @@ class Portal:
                 continue
             # The Windows corners are Start, Show Desktop, and every window's
             # close box. Crossing must not fire there either.
-            zone = self._corner_px(p)
+            # An explicit hold opens the whole entrance, corners included.
+            zone = 0.0 if self._side_held else self._corner_px(p)
             lo, hi = p["span"]
             lo, hi = lo + zone, hi - zone
             if hi <= lo:
@@ -1514,6 +1552,14 @@ class Portal:
             ms = ctypes.cast(lParam,
                              ctypes.POINTER(MSLLHOOKSTRUCT)).contents
             if not self.active:
+                if wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+                    which = (ms.mouseData >> 16) & 0xFFFF
+                    if wParam == WM_XBUTTONDOWN:
+                        self._side_held |= which
+                    else:
+                        self._side_held &= ~which
+                    if self._cross_button:
+                        return 1
                 if (wParam == WM_MOUSEMOVE and
                         not (ms.flags & LLMHF_INJECTED)):
                     point = (ms.pt.x, ms.pt.y)
@@ -1526,7 +1572,7 @@ class Portal:
                     # Entering a device takes momentum too. Sliding a window to
                     # the far edge of a monitor, or picking something at its
                     # side, must not fling control onto another machine.
-                    if p and self._has_momentum():
+                    if p and self._may_cross():
                         self.enter(p, along)
                         return 1
             else:
@@ -1613,6 +1659,18 @@ class Portal:
                     self.q.put(
                         (self.active_target, "b", self.buttons, 0, 0))
                     return 1
+                elif wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+                    which = (ms.mouseData >> 16) & 0xFFFF
+                    if wParam == WM_XBUTTONDOWN:
+                        self._side_held |= which
+                    else:
+                        self._side_held &= ~which
+                    # The HID mouse report carries three buttons, so these were
+                    # never forwarded anyway. While they are the crossing key,
+                    # swallow them so a press cannot also fire Back in whatever
+                    # happens to be focused.
+                    return 1 if self._cross_button else user32.CallNextHookEx(
+                        None, nCode, wParam, lParam)
                 elif wParam in (WM_MBUTTONDOWN, WM_MBUTTONUP):
                     self.buttons = (self.buttons | 4) if \
                         wParam == WM_MBUTTONDOWN else (self.buttons & ~4)

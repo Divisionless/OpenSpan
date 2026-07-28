@@ -212,4 +212,57 @@ broker._route_motion(-80, 0)
 check("a gentle move across a device's OWN seam still crosses",
       broker.active_target == "device-2")
 
+# --- holding a mouse side button as the explicit "yes" ---------------------
+# When this is on, the side button IS the intent, so it REPLACES the momentum
+# gate rather than adding to it -- demanding a deliberate shove on top of an
+# explicit yes would just be in the way.
+broker._cross_button = True
+broker._side_held = 0
+broker.active = True
+broker.active_target = "device-1"
+broker.active_display = "device-1-1"
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._note_motion(600)                 # plenty of momentum...
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("with the option on, momentum alone no longer crosses",
+      left_pc is False and not exits and broker.vx == -1920.0)
+
+broker.vx, broker.vy = -1925.0, 200.0
+broker._side_held = 0x0001               # side button down
+broker._motion = ()                      # and barely moving
+broker._note_motion(2)
+left_pc = broker._route_motion(80, 0)
+check("holding the side button crosses, even gently",
+      left_pc is True and len(exits) == 1)
+
+# a seam between two screens of the SAME device is never gated -- that is not
+# moving between machines
+broker._side_held = 0
+broker.active_target = "device-2"
+broker.active_display = "device-2-1"
+broker.vx, broker.vy = -3140.0, -900.0
+broker._motion = ()
+broker._route_motion(-80, 0)
+check("a device's own seam still needs no button",
+      broker.active_target == "device-2")
+broker._cross_button = False
+
+# ...and even with the OPTION OFF, holding a side button lifts the pressure
+# requirement. Those buttons are not used for anything else, so holding one can
+# only mean a jump.
+broker.active = True
+broker.active_target = "device-1"
+broker.active_display = "device-1-1"
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._note_motion(2)                   # nowhere near enough on its own
+broker._side_held = 0x0002
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("a held side button crosses even when the option is off",
+      left_pc is True and len(exits) == 1)
+broker._side_held = 0
+
 print("RESULT: ALL PASS")
