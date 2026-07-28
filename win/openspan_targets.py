@@ -34,6 +34,12 @@ MIN_LAYOUT_SIZE = 120
 # having to inflate rectangles to fight a monitor whose size was pinned to its
 # pixel count.
 DESK_UNITS_PER_INCH = 100.0
+# How far INSIDE a surface a crossing lands, in desk units. One constant governs
+# both halves of every edge: the target side (openspan_portal._entry_point /
+# _position_inside) and the Windows side (the exit_to points below). Landing
+# 3px from a trigger with a +-1px tolerance is a 2px re-entry -- the arrival
+# margin, not an accumulator, is what stops a crossing from bouncing back.
+ARRIVE_MARGIN = 40.0
 
 
 def physical_size(diagonal_in, res_w, res_h, rotation=0):
@@ -589,6 +595,21 @@ def snap_rect_to_neighbors(rect, neighbors, threshold=None):
     return x, y
 
 
+def exit_inset(monitor, axis):
+    """ARRIVE_MARGIN, expressed in this monitor's own Windows pixels.
+
+    The desk layout and the Windows desktop are different unit systems, and the
+    ratio differs per monitor, so a hardcoded pixel inset lands at a different
+    real distance on every screen -- on a dense one it landed inside the +-1px
+    trigger tolerance, which is the Windows half of the ping-pong."""
+    mx, my, mw, mh = _monitor_layout(monitor)
+    if axis == "x":
+        return max(8, int(round(
+            ARRIVE_MARGIN * float(monitor["w"]) / max(1.0, float(mw)))))
+    return max(8, int(round(
+        ARRIVE_MARGIN * float(monitor["h"]) / max(1.0, float(mh)))))
+
+
 def compute_portals(config):
     """Compute real Windows edge triggers from the independent desk layout."""
     out = []
@@ -609,7 +630,8 @@ def compute_portals(config):
                         out.append(_portal(
                             target, display, monitor, "target-left", "x",
                             monitor["x"] + monitor["w"] - 1, span, +1,
-                            (monitor["x"] + monitor["w"] - 3, None)))
+                            (monitor["x"] + monitor["w"]
+                             - exit_inset(monitor, "x"), None)))
                 # target right touches Windows monitor left
                 if abs((tx + tw) - mx) <= 2:
                     lo, hi = max(ty, my), min(ty + th, my + mh)
@@ -619,7 +641,7 @@ def compute_portals(config):
                         out.append(_portal(
                             target, display, monitor, "target-right", "x",
                             monitor["x"], span, -1,
-                            (monitor["x"] + 3, None)))
+                            (monitor["x"] + exit_inset(monitor, "x"), None)))
                 # target top touches Windows monitor bottom
                 if abs(ty - (my + mh)) <= 2:
                     lo, hi = max(tx, mx), min(tx + tw, mx + mw)
@@ -629,7 +651,8 @@ def compute_portals(config):
                         out.append(_portal(
                             target, display, monitor, "target-top", "y",
                             monitor["y"] + monitor["h"] - 1, span, +1,
-                            (None, monitor["y"] + monitor["h"] - 3)))
+                            (None, monitor["y"] + monitor["h"]
+                             - exit_inset(monitor, "y"))))
                 # target bottom touches Windows monitor top
                 if abs((ty + th) - my) <= 2:
                     lo, hi = max(tx, mx), min(tx + tw, mx + mw)
@@ -639,7 +662,7 @@ def compute_portals(config):
                         out.append(_portal(
                             target, display, monitor, "target-bottom", "y",
                             monitor["y"], span, -1,
-                            (None, monitor["y"] + 3)))
+                            (None, monitor["y"] + exit_inset(monitor, "y"))))
     return out
 
 

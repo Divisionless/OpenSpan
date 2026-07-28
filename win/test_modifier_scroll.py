@@ -48,7 +48,13 @@ def make_portal(clipboard_capable):
         "monitor": "M",
     }]
     p.links = []
-    p._displays = {}
+    # One 1000x800 screen at 1 desk unit per pixel, so a warp's arithmetic is
+    # readable by eye. _place() needs the geometry: without it there is no way
+    # to convert a desk jump into HID reports, and it correctly declines.
+    p._displays = {("dev", "dev-1"): {
+        "id": "dev-1", "name": "Dev", "x": 0, "y": 0, "w": 1000, "h": 800,
+        "res_w": 1000, "res_h": 800, "rotation": 0, "refresh_hz": 60,
+    }}
     p._monitors = {}
     p._target_ports = {"dev": 9955}
     p._clipboard_devices = {"dev": clipboard_capable}
@@ -71,9 +77,12 @@ def make_portal(clipboard_capable):
     p.entry_along = 0
     p.perp = 0
     p.cx, p.cy = 500, 500
-    p._last_transition = 0.0
-    p._press_side = None
-    p._pressure = 0.0
+    p._last_seen = {}
+    p._device_compensate = {"dev": False}
+    p._device_gain = {}
+    p._device_accel = {}
+    p._device_sens = {}
+    p._rem_x = p._rem_y = 0.0
     return p
 
 
@@ -126,28 +135,37 @@ kbd3 = [e for e in drain(p3) if e[1] == "k"]
 check("re-entering still announces the modifier (out-and-back survives)",
       bool(kbd3) and kbd3[-1][2] == P.IPAD_MOD_BIT["ctrl"])
 
-# --- pointer position must RESUME, not teleport ----------------------------
-# A relative HID link cannot move a target's cursor "to" a position. Asserting
-# an entry point on every crossing was the single largest source of drift: the
-# target's pointer stays where you left it while the model jumps to the edge
-# you just crossed -- worst case, a whole screen out.
+# --- entry lands AT THE EDGE CROSSED, and the wire is told ------------------
+# A relative HID link cannot move a target's cursor "to" a position -- so an
+# earlier build stopped asserting one and restored the last saved position
+# instead. That was worse: the saved point is the edge you LEFT by, which is a
+# live exit trigger, and it is not the edge you just crossed. The fix is not to
+# stop asserting, it is to MAKE THE ASSERTION TRUE: send the difference.
 p4 = make_portal(clipboard_capable=False)
-p4._last_pos = {}
 p4.enter(p4.portals[0], 100)
 p4.active_display = "dev-1"
 p4.vx, p4.vy = 640.0, 480.0          # where the user left that device
 p4.leave()
-check("leaving remembers where that device's pointer was (per display)",
-      p4._last_pos.get(("dev", "dev-1")) == (640.0, 480.0))
+check("leaving records the position ONCE PER DEVICE, not per display",
+      p4._last_seen.get("dev") == ("dev-1", 640.0, 480.0))
+
+entry_x, entry_y = p4._entry_point(p4.portals[0], 100)
+drain(p4)
 p4.enter(p4.portals[0], 100)
-check("re-entering RESUMES that position instead of teleporting",
-      (p4.vx, p4.vy) == (640.0, 480.0))
+check("re-entering asserts the edge that was actually crossed",
+      (p4.vx, p4.vy) == (entry_x, entry_y))
+moves = [e for e in drain(p4) if e[1] == "m"]
+check("and the jump is PAID FOR on the wire, not merely asserted",
+      bool(moves))
+check("the record follows the model, so the next warp starts from truth",
+      p4._last_seen.get("dev") == ("dev-1", entry_x, entry_y))
 
 p5 = make_portal(clipboard_capable=False)
-p5._last_pos = {}
 p5.enter(p5.portals[0], 100)
 check("a first-ever entry still falls back to the entry point",
       isinstance(p5.vx, float) and isinstance(p5.vy, float))
+check("and queues no warp, because nothing is known to correct",
+      not [e for e in drain(p5) if e[1] == "m"])
 
 # --- our acceleration must be identical on the wire and in the model -------
 # This is the whole reason acceleration belongs on THIS side: when the target

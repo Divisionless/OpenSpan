@@ -11,11 +11,10 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-# NOTE: crossings now require sustained overshoot past an
-# edge (EXIT_PRESSURE) plus a post-transition cooldown --
-# edge resistance. Pushes below are sized to commit.
 import openspan_portal  # noqa: E402
-from openspan_targets import BASE_PORT, compute_adjacencies  # noqa: E402
+from openspan_targets import (  # noqa: E402
+    BASE_PORT, compute_adjacencies, exit_inset,
+)
 
 
 def check(name, condition):
@@ -99,8 +98,13 @@ broker.overrides = []
 broker._chord_until = 0.0
 broker.q = queue.Queue()
 broker._emit_kbd = lambda: None
-
-broker._last_transition = 0.0
+# One position per DEVICE. _place() consults this on every handoff and pays for
+# any jump in HID reports, so the instance needs its own dict.
+broker._last_seen = {}
+broker._device_compensate = {}
+broker._device_gain = {}
+broker._device_accel = {}
+broker._device_sens = {}
 
 left_pc = broker._route_motion(0, -80)
 check("crossing a shared top edge hands control directly to the device above",
@@ -114,7 +118,6 @@ broker.active_target = "device-1"
 broker.active_display = "device-1-1"
 broker.vx = -2995.0
 broker.vy = 400.0
-broker._last_transition = 0.0
 left_pc = broker._route_motion(-80, 0)
 check("crossing the other shared edge lands on the third device",
       left_pc is False
@@ -128,7 +131,6 @@ broker.active_display = "device-1-1"
 broker.vx = -2995.0
 broker.vy = 400.0
 broker.target_ready["device-3"] = False
-broker._last_transition = 0.0
 left_pc = broker._route_motion(-80, 0)
 check("a crossing into a device whose daemon is not ready is refused",
       left_pc is False
@@ -140,7 +142,6 @@ broker.target_ready["device-3"] = True
 broker.vx = -2500.0
 broker.vy = 8.0
 broker.buttons = 1
-broker._last_transition = 0.0
 left_pc = broker._route_motion(0, -80)
 check("a held mouse button never tears a drag across devices",
       left_pc is False and broker.active_target == "device-1")
@@ -152,10 +153,15 @@ broker.vx = -1925.0
 broker.vy = 200.0
 exits = []
 broker.leave = lambda exit_to=None: exits.append(exit_to)
-broker._last_transition = 0.0
 left_pc = broker._route_motion(80, 0)
+# The Windows cursor must land a REAL distance inside the monitor, not 3 px
+# from a trigger with a +-1 px tolerance -- that was the Windows half of the
+# ping-pong. The inset comes from the same ARRIVE_MARGIN the target side uses.
+inset = exit_inset(config["monitors"][0], "x")
 check("crossing the edge shared with the PC still returns to the PC",
       left_pc is True and len(exits) == 1
-      and exits[0][0] == -1917)
+      and exits[0][0] == -1920 + inset)
+check("and it lands far enough inside not to re-trigger the portal",
+      inset >= 8 and exits[0][0] > -1920 + 3)
 
 print("RESULT: ALL PASS")

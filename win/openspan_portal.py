@@ -26,7 +26,8 @@ import time
 import queue
 
 from openspan_targets import (
-    compute_adjacencies, compute_portals, oriented_resolution,
+    ARRIVE_MARGIN, compute_adjacencies, compute_portals, exit_inset,
+    oriented_resolution,
 )
 
 user32 = ctypes.windll.user32
@@ -40,14 +41,27 @@ else:
 CONFIG_PATH = os.path.join(_ROOT, "openspan_config.json")
 
 SEND_HZ = 120
-ENTER_MARGIN = 40          # perpendicular units "into" the device on entry
-# Layout units of sustained overshoot required before a crossing commits. The
-# cursor is clamped ON the edge while captured, so without this any jitter
-# transitions instantly and repeatedly.
-EXIT_PRESSURE = 45.0   # in TARGET POINTS -- converted per screen below
-# Seconds after a transition during which no further crossing may fire. Stops
-# ping-ponging between two surfaces at the shared edge.
-SWITCH_COOLDOWN = 0.30
+# THE RULE THIS FILE OBEYS:
+#
+#   The model may only change position by an amount the wire also moved.
+#   When the model must be somewhere the wire has not taken it, SEND THE
+#   DIFFERENCE.
+#
+# A relative HID link cannot move a target's cursor "to" a place, and every
+# previous attempt to work around that fact -- remembering a position instead of
+# asserting one, requiring sustained pressure before a crossing commits, a
+# cooldown after each transition, stretching a crossing proportionally onto the
+# destination's whole edge -- traded a small honest error for a large hidden
+# one. Each of them discarded motion the wire had already delivered, so the
+# model and the target's real pointer drifted apart with no way back.
+#
+# There is no workaround needed. The target's pointer CAN be moved to a known
+# place: by sending exactly the delta the model just jumped (_place/_warp).
+#
+# ARRIVE_MARGIN (shared with openspan_targets, so both halves of every edge use
+# one number) is what keeps an arrival off the trigger it arrived through.
+# Geometry does that job now; no accumulator is required.
+MAX_WARP_REPORTS = 64      # a full-union warp on any real device is < 40
 # Pointer acceleration applied HERE, on Windows, rather than by the target OS.
 # That is the whole point: because we compute it, the SAME accelerated delta
 # feeds both the wire and the virtual cursor, so the model cannot drift from
@@ -287,19 +301,18 @@ def load_portals():
 
 
 class Portal:
-    # Class-level defaults so edge resistance is well-defined even for a
-    # partially constructed Portal (the routing tests build one directly).
-    _last_transition = 0.0
-    _press_side = None
-    _pressure = 0.0
+    # Class-level defaults so a partially constructed Portal is well-defined
+    # (the routing tests build one directly).
     portals = []                # PC-facing entrances (set in __init__)
     _device_remap = {}          # device id -> remap dict, or None to inherit
     _device_scroll_invert = {}  # device id -> bool
-    # Where each device's pointer was when we last left it. A relative HID link
-    # cannot move the target's cursor "to" a position, so ASSERTING one on entry
-    # is the single largest source of drift: the target's pointer is still where
-    # you left it while the model jumps to the edge you just crossed.
-    _last_pos = {}              # device id -> (display_id, vx, vy)
+    # Where each device's pointer actually is. ONE entry per device, because a
+    # device has ONE pointer -- keying this by (device, display) was duplicated
+    # state for a single physical thing, and it is why returning to a device
+    # through one screen could restore a position saved on another.
+    # This is only trustworthy because nothing else in this file moves the model
+    # without moving the wire by the same amount; see THE RULE above.
+    _last_seen = {}             # device id -> (display_id, vx, vy)
     _device_gain = {}           # device id -> points per HID unit
     _device_accel = {}          # device id -> acceleration strength (0 = off)
     _device_sens = {}           # device id -> feel multiplier
@@ -326,9 +339,7 @@ class Portal:
         self.cx = prim["x"] + prim["w"] // 2
         self.cy = prim["y"] + prim["h"] // 2
         self.active = False
-        self._last_transition = 0.0   # edge-resistance cooldown clock
-        self._press_side = None       # which edge the cursor is leaning on
-        self._pressure = 0.0          # accumulated overshoot on that edge
+        self._last_seen = {}   # device id -> (display_id, vx, vy)
         self.cur = None        # active portal
         self.entry_along = 0   # position along the edge at entry
         self.perp = 0          # perpendicular displacement into iPad
@@ -550,18 +561,22 @@ class Portal:
                 layout_along = mx + (
                     (float(along) - monitor["x"])
                     / max(1.0, float(monitor["w"]))) * mw
-        margin_x = min(float(ENTER_MARGIN), max(2.0, width * 0.1))
-        margin_y = min(float(ENTER_MARGIN), max(2.0, height * 0.1))
+        margin_x = min(float(ARRIVE_MARGIN), max(2.0, width * 0.1))
+        margin_y = min(float(ARRIVE_MARGIN), max(2.0, height * 0.1))
+        # Inset BOTH axes. Clamping the along axis to the bare rectangle put a
+        # legitimate fresh entry exactly on a corner -- the far right of the
+        # DISPLAY4-top span lands on mac-2's right edge, which is itself a live
+        # exit to DISPLAY1. An arrival must never touch another trigger.
+        lo_x, hi_x = x + margin_x, x + width - margin_x
+        lo_y, hi_y = y + margin_y, y + height - margin_y
         edge = portal.get("edge")
         if edge == "target-left":
-            return x + margin_x, self._clamp(layout_along, y, y + height)
+            return x + margin_x, self._clamp(layout_along, lo_y, hi_y)
         if edge == "target-right":
-            return x + width - margin_x, self._clamp(
-                layout_along, y, y + height)
+            return x + width - margin_x, self._clamp(layout_along, lo_y, hi_y)
         if edge == "target-top":
-            return self._clamp(layout_along, x, x + width), y + margin_y
-        return self._clamp(
-            layout_along, x, x + width), y + height - margin_y
+            return self._clamp(layout_along, lo_x, hi_x), y + margin_y
+        return self._clamp(layout_along, lo_x, hi_x), y + height - margin_y
 
     def _portal_for(self, target, display):
         """A PC-facing portal belonging to this surface, for exit fallback."""
@@ -587,38 +602,66 @@ class Portal:
                         destination.get("target"), False):
                 continue
             return link
-        return None
+        # NEAREST-LINK FALLBACK. An edge range with no link was a silent,
+        # unbounded wall: mac-2's right edge is 47% dead, because the PC monitor
+        # beside it is shorter than the 32" panel, so leaning right anywhere in
+        # the top half of that edge did nothing whatsoever. Fall back to the
+        # closest link on the SAME side -- a shorter neighbour then receives the
+        # whole edge instead of only the slice that literally overlaps it.
+        candidates = []
+        for link in self.links:
+            source = link["source"]
+            if source.get("kind") != "target" \
+                    or source.get("target") != self.active_target \
+                    or source.get("display") != self.active_display \
+                    or link.get("side") != side:
+                continue
+            destination = link["destination"]
+            if destination.get("kind") == "target" \
+                    and not self.target_ready.get(
+                        destination.get("target"), False):
+                continue
+            lo, hi = link["span"]
+            candidates.append(
+                (min(abs(float(along) - lo), abs(float(along) - hi)), link))
+        if not candidates:
+            return None
+        return min(candidates, key=lambda row: row[0])[1]
 
-    def _position_inside(self, destination, to_side, along, span=None):
+    def _position_inside(self, destination, to_side, along):
+        """Where a crossing LANDS: the crossing coordinate itself, in desk units.
+
+        This used to stretch the overlap span across the destination's whole
+        edge, so 30% down the edge you left became 30% down the edge you arrived
+        on. That was a 3.4x magnification on the iPad -> Mac seam, it was not
+        reversible (a round trip did not return you where you started), and it
+        deposited a large share of Mac-to-Mac crossings into a band of the next
+        screen from which no link led back -- the direct reason a whole screen
+        could not be reached.
+
+        The desk IS the shared physical space; that is its entire purpose. An
+        identity arrival is reversible by construction, it matches what the user
+        actually sees in front of him, and it always lands inside the return
+        link's span because that span is the geometric overlap. Reaching the
+        part of a taller neighbour that overhangs is done by MOVING once you are
+        there -- not by distorting where you arrive."""
         display = self._displays.get((
             destination.get("target"), destination.get("display")))
         if not display:
             return self.vx, self.vy
-        if span:
-            # Map the exit point PROPORTIONALLY onto the destination edge:
-            # 30% down the edge you left is 30% down the edge you arrive on.
-            # Without this, a physically shorter screen only receives the
-            # slice that literally overlaps and the rest of the edge is dead.
-            lo, hi = float(span[0]), float(span[1])
-            frac = 0.5 if hi <= lo else (
-                min(1.0, max(0.0, (float(along) - lo) / (hi - lo))))
-            if to_side in ("left", "right"):
-                along = float(display["y"]) + frac * float(display["h"])
-            else:
-                along = float(display["x"]) + frac * float(display["w"])
         x, y = float(display["x"]), float(display["y"])
         width, height = float(display["w"]), float(display["h"])
-        margin_x = min(float(ENTER_MARGIN), max(2.0, width * 0.1))
-        margin_y = min(float(ENTER_MARGIN), max(2.0, height * 0.1))
+        margin_x = min(float(ARRIVE_MARGIN), max(2.0, width * 0.1))
+        margin_y = min(float(ARRIVE_MARGIN), max(2.0, height * 0.1))
+        lo_x, hi_x = x + margin_x, x + width - margin_x
+        lo_y, hi_y = y + margin_y, y + height - margin_y
         if to_side == "left":
-            return x + margin_x, self._clamp(along, y, y + height)
+            return x + margin_x, self._clamp(along, lo_y, hi_y)
         if to_side == "right":
-            return x + width - margin_x, self._clamp(
-                along, y, y + height)
+            return x + width - margin_x, self._clamp(along, lo_y, hi_y)
         if to_side == "top":
-            return self._clamp(along, x, x + width), y + margin_y
-        return self._clamp(
-            along, x, x + width), y + height - margin_y
+            return self._clamp(along, lo_x, hi_x), y + margin_y
+        return self._clamp(along, lo_x, hi_x), y + height - margin_y
 
     def _local_exit_point(self, destination, to_side, along):
         monitor = self._monitors.get(destination.get("monitor"))
@@ -628,8 +671,9 @@ class Portal:
         if to_side in ("left", "right"):
             actual_along = monitor["y"] + (
                 (float(along) - my) / max(1.0, float(mh))) * monitor["h"]
-            x = (monitor["x"] + 3 if to_side == "left"
-                 else monitor["x"] + monitor["w"] - 3)
+            inset = exit_inset(monitor, "x")
+            x = (monitor["x"] + inset if to_side == "left"
+                 else monitor["x"] + monitor["w"] - inset)
             y = self._clamp(
                 actual_along, monitor["y"], monitor["y"] + monitor["h"] - 1)
         else:
@@ -637,35 +681,111 @@ class Portal:
                 (float(along) - mx) / max(1.0, float(mw))) * monitor["w"]
             x = self._clamp(
                 actual_along, monitor["x"], monitor["x"] + monitor["w"] - 1)
-            y = (monitor["y"] + 3 if to_side == "top"
-                 else monitor["y"] + monitor["h"] - 3)
+            inset = exit_inset(monitor, "y")
+            y = (monitor["y"] + inset if to_side == "top"
+                 else monitor["y"] + monitor["h"] - inset)
         return int(round(x)), int(round(y))
 
-    def _switch_target(self, destination, to_side, along, span=None):
+    def _display_at(self, target, x, y):
+        """Which of this device's screens contains a desk point."""
+        for (device, _display_id), display in self._displays.items():
+            if device != target:
+                continue
+            dx, dy = float(display["x"]), float(display["y"])
+            if dx <= x <= dx + float(display["w"]) \
+                    and dy <= y <= dy + float(display["h"]):
+                return display
+        return None
+
+    def _emit_move(self, target, px, py):
+        """Queue a TARGET-PIXEL displacement as legal HID reports."""
+        if not self._device_compensate.get(target):
+            dx, dy = int(round(px)), int(round(py))
+            if dx or dy:
+                self.q.put((target, "m", dx, dy, 0))
+            return
+        # The Apple inverse is defined PER REPORT, so a warp to a compensated
+        # device has to be pre-split into single legal reports here rather than
+        # handed to the sender as one sum it would re-split arbitrarily.
+        remaining = math.hypot(px, py)
+        if remaining <= 0.0:
+            return
+        ux, uy = px / remaining, py / remaining
+        for _ in range(MAX_WARP_REPORTS):
+            if remaining < 0.5:
+                break
+            counts = apple_counts(min(remaining, apple_pixels(127)))
+            dx = max(-127, min(127, int(round(ux * counts))))
+            dy = max(-127, min(127, int(round(uy * counts))))
+            if not (dx or dy):
+                break
+            self.q.put((target, "m", dx, dy, 0))
+            remaining -= apple_pixels(math.hypot(dx, dy))
+
+    def _warp(self, target, from_x, from_y, to_x, to_y):
+        """Move a target's REAL pointer by a desk-space displacement.
+
+        This is what makes asserting a position legitimate. Desk units convert
+        to target pixels at a rate that differs per DISPLAY -- a 32" 4K portrait
+        panel and a 32" 1440p landscape one are nothing like the same pixels per
+        inch -- so the straight path is walked in small steps and each step is
+        converted by the screen it actually passes through. Deterministic from
+        the geometry alone; nothing about any particular desk is assumed."""
+        steps = 64
+        px = py = 0.0
+        for index in range(steps):
+            frac = (index + 0.5) / steps
+            display = self._display_at(
+                target, from_x + (to_x - from_x) * frac,
+                from_y + (to_y - from_y) * frac)
+            if not display:
+                continue
+            res_w, res_h = oriented_resolution(display)
+            gain = float(self._device_gain.get(target, 1.0)) or 1.0
+            px += (to_x - from_x) / steps * res_w / max(
+                1.0, gain * float(display["w"]))
+            py += (to_y - from_y) / steps * res_h / max(
+                1.0, gain * float(display["h"]))
+        self._emit_move(target, px, py)
+
+    def _place(self, target, display, vx, vy):
+        """The ONLY discontinuous assignment of the model position.
+
+        If we already know where this device's pointer is, the jump is PAID FOR
+        on the wire before it is recorded. If we do not -- the first entry of
+        the session -- the model asserts and accepts one unverified placement,
+        which then self-corrects the moment the pointer meets any real edge."""
+        previous = self._last_seen.get(target)
+        if previous and self._displays.get((target, previous[0])):
+            self._warp(target, previous[1], previous[2], float(vx), float(vy))
+        self.active_target = target
+        self.active_display = display
+        self.vx, self.vy = float(vx), float(vy)
+        self._last_seen[target] = (display, self.vx, self.vy)
+
+    def _switch_target(self, destination, to_side, along):
         target = destination.get("target")
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
-        if target != old_target and old_target is not None:
-            self._last_pos[(old_target, old_display)] = (self.vx, self.vy)
+        if old_target is not None:
+            # Record UNCONDITIONALLY, including a same-device screen handoff.
+            # Skipping those let a device's saved position go arbitrarily stale
+            # while the user wandered across its other screens.
+            self._last_seen[old_target] = (old_display, self.vx, self.vy)
         if target != old_target:
             # One Windows hook broker, independent target channels. Release the
             # old HID lane before changing sockets so no modifier can stick.
             self.q.put((old_target, "k", 0, [], 0))
             self.q.put((old_target, "b", 0, 0, 0))
-            self.active_target = target
-        self.active_display = display
+        self._place(target, display,
+                    *self._position_inside(destination, to_side, along))
         # The exit portal must follow the surface we are ACTUALLY on. self.cur
         # was set once by enter() and never updated, so bailing out after a
         # device-to-device handoff dropped the real cursor back through the
         # portal we FIRST came in by -- on the wrong monitor.
         self.cur = self._portal_for(target, display) or self.cur
         self.entry_along = float(along)
-        self.vx, self.vy = self._position_inside(
-            destination, to_side, along, span)
-        self._last_transition = time.monotonic()
-        self._press_side = None
-        self._pressure = 0.0
         if target != old_target:
             self._emit_kbd()
             print(f"[portal] >>> direct handoff {old_target}/{old_display} "
@@ -703,39 +823,30 @@ class Portal:
         x, y = float(display["x"]), float(display["y"])
         right = x + float(display["w"])
         bottom = y + float(display["h"])
+        # The model takes the motion the wire ALREADY carried, before any
+        # crossing is considered. leave() and _switch_target() record this
+        # position, and it is the ORIGIN of the next warp -- one report stale
+        # here is one report of error on every future entry to this device.
+        self.vx, self.vy = nx, ny
         crossings = []
+        # `along` is CLAMPED into the rectangle. Unclamped, a diagonal move into
+        # a corner offered each crossing an along value that lay outside the
+        # other edge's span, so both were rejected and the corner was a livelock.
         if nx < x:
-            crossings.append((x - nx, "left", ny))
+            crossings.append((x - nx, "left", self._clamp(ny, y, bottom)))
         if nx > right:
-            crossings.append((nx - right, "right", ny))
+            crossings.append((nx - right, "right", self._clamp(ny, y, bottom)))
         if ny < y:
-            crossings.append((y - ny, "top", nx))
+            crossings.append((y - ny, "top", self._clamp(nx, x, right)))
         if ny > bottom:
-            crossings.append((ny - bottom, "bottom", nx))
-        # EDGE RESISTANCE. Without this a crossing fired on the FIRST unit past
-        # an edge -- and because the cursor is then clamped exactly ON that
-        # edge, it sits on the trigger, so the tiniest jitter throws you back
-        # out ("it returns too early"). Require sustained pressure past the
-        # edge, and refuse to transition again for a moment after one lands.
-        now = time.monotonic()
-        if now - self._last_transition < SWITCH_COOLDOWN:
-            crossings = []
-        if not crossings:
-            self._press_side = None
-            self._pressure = 0.0
+            crossings.append((ny - bottom, "bottom", self._clamp(nx, x, right)))
+        # No pressure accumulator and no cooldown. Both existed only because an
+        # arrival used to land ON the trigger it arrived through; geometry does
+        # that job now (ARRIVE_MARGIN, on both surfaces and both axes). Both
+        # also DISCARDED motion the wire had already delivered -- 45 target
+        # points per lean plus up to 300 ms of travel, gone from the model and
+        # never recovered -- which is exactly the drift they were meant to stop.
         for _overshoot, side, along in sorted(crossings, reverse=True):
-            if side != self._press_side:
-                self._press_side = side
-                self._pressure = 0.0
-            self._pressure += _overshoot
-            # EXIT_PRESSURE is expressed in TARGET POINTS. The overshoot above
-            # is in desk units, and desk-units-per-point differs per screen
-            # (0.85 on the portrait Macs, 1.14 on the landscape one), so a raw
-            # comparison made the edge feel different on every display.
-            _pressure_desk = EXIT_PRESSURE * (
-                scale_y if side in ("top", "bottom") else scale_x)
-            if self._pressure < _pressure_desk:
-                break   # still leaning on the edge, not through it yet
             link = self._matching_link(side, along)
             if not link:
                 continue
@@ -748,9 +859,10 @@ class Portal:
             # the physical button is released.
             if self.buttons:
                 break
-            self._switch_target(destination, link["to_side"], along,
-                                span=link.get("span"))
+            self._switch_target(destination, link["to_side"], along)
             return False
+        # Nothing consumed the overshoot, so the target's own cursor is pinned
+        # against a real screen edge -- and so is the model.
         self.vx = self._clamp(nx, x, right)
         self.vy = self._clamp(ny, y, bottom)
         return False
@@ -758,24 +870,19 @@ class Portal:
     def enter(self, portal, along):
         self.active = True
         self.cur = portal
-        self.active_target = portal.get("target")
-        self.active_display = portal.get("target_display")
         self.entry_along = along
-        self.perp = ENTER_MARGIN
-        # RESUME this device's pointer where we left it. Only fall back to the
-        # entry point the first time we ever enter it (nothing to resume).
-        # Keyed by (device, DISPLAY): a device with several screens was only
-        # remembering one, so returning to it through a different screen fell
-        # back to asserting a position the target's cursor was never at.
-        saved = self._last_pos.get((self.active_target, self.active_display))
-        if saved:
-            self.vx, self.vy = saved
-        else:
-            self.vx, self.vy = self._entry_point(portal, along)
+        self.perp = ARRIVE_MARGIN
+        # ENTER AT THE EDGE YOU CROSSED -- always, on every entry, through
+        # whichever portal you actually used. The previous build restored the
+        # position saved on the last exit instead, which meant crossing in from
+        # the right could land you on the edge you had left by from the BOTTOM,
+        # and that saved point sat exactly on a live exit trigger, so a small
+        # push in the same direction threw you straight back to the PC.
+        # Asserting is legitimate now because _place pays for the jump in HID
+        # reports: the target's pointer really does arrive where the model says.
+        self._place(portal.get("target"), portal.get("target_display"),
+                    *self._entry_point(portal, along))
         user32.SetCursorPos(self.cx, self.cy)
-        self._last_transition = time.monotonic()
-        self._press_side = None
-        self._pressure = 0.0
         name = portal.get("target_name", self.active_target)
         print(f"[portal] >>> {name} mode ON via {portal['axis']}"
               f"={portal['line']}  (Esc x3 to bail)")
@@ -801,9 +908,6 @@ class Portal:
     def leave(self, exit_to=None):
         if not self.active:
             return
-        self._last_transition = time.monotonic()
-        self._press_side = None
-        self._pressure = 0.0
         self._rem_x = self._rem_y = 0.0
         self.active = False
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
@@ -823,10 +927,22 @@ class Portal:
         # until a restart reinstalls the hook. The sender thread owns the
         # socket and is the only place allowed to block on it.
         target = self.active_target
-        # remember where this device's pointer really is, so re-entering
-        # resumes instead of teleporting the model somewhere it is not
+        # Where this device's pointer really is. Every bail path lands here --
+        # a routed exit, Esc x3, Ctrl+Alt+Q/I, a lane dropping -- and none of
+        # them moves the target's cursor, so the record is true in all of them.
         if target is not None:
-            self._last_pos[(target, self.active_display)] = (self.vx, self.vy)
+            vx, vy = self.vx, self.vy
+            display = self._displays.get((target, self.active_display))
+            if display:
+                # The last report can carry the model past the edge it left by.
+                # The target's own window server clamped ITS cursor at that
+                # edge, so the edge is the truth -- recording the overshoot
+                # would make the next entry's warp overshoot by the same amount.
+                vx = self._clamp(vx, float(display["x"]),
+                                 float(display["x"]) + float(display["w"]))
+                vy = self._clamp(vy, float(display["y"]),
+                                 float(display["y"]) + float(display["h"]))
+            self._last_seen[target] = (self.active_display, vx, vy)
         self.q.put((target, "k", 0, [], 0))
         self.q.put((target, "b", 0, 0, 0))
         # drop the real cursor back just inside the monitor at the
@@ -852,11 +968,11 @@ class Portal:
                 continue
             if p["axis"] == "x" and abs(x - p["line"]) <= 1:
                 lo, hi = p["span"]
-                if lo <= y <= hi:
+                if lo <= y < hi:
                     return p, y
             elif p["axis"] == "y" and abs(y - p["line"]) <= 1:
                 lo, hi = p["span"]
-                if lo <= x <= hi:
+                if lo <= x < hi:
                     return p, x
         return None, None
 
@@ -903,19 +1019,31 @@ class Portal:
                         # that -- so the model advances by PIXELS while the
                         # wire carries COUNTS, and the two still agree.
                         want = math.hypot(fx, fy)
+                        dx = dy = 0
+                        mx = my = 0.0
                         if want > 0.0:
                             counts = apple_counts(want)
                             scale = counts / want
-                            dx, dy = int(round(fx * scale)), int(round(fy * scale))
-                            dx = max(-127, min(127, dx))
-                            dy = max(-127, min(127, dy))
-                            got = apple_pixels(math.hypot(dx, dy))
-                            unit = 0.0 if want <= 0 else got / want
-                            mx, my = fx * unit, fy * unit
+                            dx = max(-127, min(127, int(round(fx * scale))))
+                            dy = max(-127, min(127, int(round(fy * scale))))
+                            # Credit the model along the direction the WIRE
+                            # actually carries. Rounding each axis separately
+                            # changes the vector's direction, and crediting the
+                            # pre-rounding direction handed the model motion no
+                            # report contained: a long shallow drag put zero
+                            # vertical counts on the wire while the model
+                            # climbed steadily off course.
+                            length = math.hypot(dx, dy)
+                            if length > 0.0:
+                                got = apple_pixels(length)
+                                mx, my = dx / length * got, dy / length * got
+                        if abs(dx) >= 127 or abs(dy) >= 127:
+                            # One hook event this large is a flick. Banking its
+                            # unsent excess re-fires it as a phantom lurch the
+                            # next time the mouse is touched; drop it instead.
+                            self._rem_x = self._rem_y = 0.0
                         else:
-                            dx = dy = 0
-                            mx = my = 0.0
-                        self._rem_x, self._rem_y = fx - mx, fy - my
+                            self._rem_x, self._rem_y = fx - mx, fy - my
                         if dx or dy:
                             self.q.put((self.active_target, "m", dx, dy, 0))
                             if self._route_motion(mx, my):
@@ -1164,12 +1292,21 @@ class Portal:
                     break
                 target = target or self.active_target
                 batch = batches.setdefault(target, {
-                    "dx": 0, "dy": 0, "wheel": 0,
+                    "dx": 0, "dy": 0, "wheel": 0, "moves": [],
                     "button": False, "keys": [], "texts": [],
                 })
                 if kind == "m":
-                    batch["dx"] += a
-                    batch["dy"] += b
+                    if self._device_compensate.get(target):
+                        # Each report for a compensated device was solved
+                        # individually against the target's own acceleration
+                        # curve. Summing them inside this tick and re-splitting
+                        # the total destroys that: the curve is steeper for a
+                        # big report, so the merged pair travels much further
+                        # than the two it replaced. Keep them intact.
+                        batch["moves"].append((a, b))
+                    else:
+                        batch["dx"] += a
+                        batch["dy"] += b
                 elif kind == "w":
                     batch["wheel"] += c
                 elif kind == "b":
@@ -1186,6 +1323,11 @@ class Portal:
                 for mods, keys in batch["keys"]:
                     self.send(
                         target, {"cmd": "kbd", "mods": mods, "keys": keys})
+                for mdx, mdy in batch["moves"]:
+                    self.send(
+                        target,
+                        {"cmd": "mouse", "dx": mdx, "dy": mdy,
+                         "buttons": self.buttons, "wheel": 0})
                 adx, ady, awheel = (
                     batch["dx"], batch["dy"], batch["wheel"])
                 if adx or ady or awheel:
@@ -1197,7 +1339,7 @@ class Portal:
                             target,
                             {"cmd": "mouse", "dx": sx, "dy": sy,
                              "buttons": self.buttons, "wheel": sw})
-                elif batch["button"]:
+                elif batch["button"] and not batch["moves"]:
                     self.send(
                         target,
                         {"cmd": "mouse", "dx": 0, "dy": 0,
