@@ -591,3 +591,57 @@ screen, with the device's own clamping modelled. On this desk it converges to
 (−5986, −2179), the top-left of Mac Display 1, from all sixteen starting points.
 
 Cost: iPad 2 reports (~30 ms); Mac 69 reports (~1.0 s), once per session.
+
+## 2026-07-27 — Entirely position-agnostic: nothing is believed across a boundary
+
+Doug: *"make it entirely agnostic - users must be able to arbitrarily
+rearrange."*
+
+The previous build still trusted a belief in three places, and said so when
+asked. All three are gone.
+
+1. **The exit pin shoved *from* where it thought it was**, then overshot by
+   400 px or 25% of the screen. It only reached the clamp if the belief was
+   close enough.
+2. **It chose *which* boundary to record using the believed other axis** — and
+   on any non-rectangular arrangement that boundary is not unique.
+3. **A re-sync ran once per device per session.** A dropped lane now clears the
+   record, so the next entry re-establishes it.
+
+`_pin` is deleted. **Every** exit — to the PC or to another device — runs the
+full re-sync. Nothing is carried across a boundary as a belief.
+
+**Making it work for any arrangement.** A shove maps every position the pointer
+could be in onto one boundary; do it enough times and the set collapses to a
+single point. How many times, and in which directions, depends entirely on the
+shape:
+
+| arrangement | plan |
+|---|---|
+| one screen, a row, an L, a T, a Z, a staircase | one diagonal, or two straight |
+| a plus | needs a diagonal — axis-aligned shoves map its symmetry onto itself forever |
+| two islands that never touch | **impossible**, and it says so rather than guessing |
+
+So the sequence is **searched** from the rectangles, never assumed. Diagonals
+are included because each axis clamps independently, so a diagonal slides along
+a boundary instead of stopping on it — that is what breaks a symmetry. The
+search takes the **cheapest** plan, not the shortest: one diagonal across this
+desk costs 94 reports where two straight shoves cost 69, because a diagonal must
+be long enough to travel *around* things. Planning runs at portal startup, never
+in the mouse hook (Windows unhooks a hook that overruns, without a word).
+
+Two bugs the new `test_resync_shapes.py` caught, both of which would have shipped:
+
+- The planner walked a 45° diagonal while `_shove` sized each axis to its own
+  extent — a shallower line that clamps somewhere else entirely.
+- A diagonal shove sized to the straight-line extent falls short: while one axis
+  is clamped, the motion commanded on it is **discarded**, so crossing a wide
+  screen sideways burns the vertical budget without moving vertically. Width
+  plus height bounds it.
+
+**Cost on this desk:** iPad 2 reports (~30 ms), Mac 69 (~1.0 s), on every exit.
+
+**Remaining honest limits:** the desk arrangement must match the target's own
+display arrangement — a re-sync lands where *that* OS clamps, and we record the
+desk coordinate we believe that is. And `_APPLE_CURVE` assumes the default
+macOS tracking-speed slider.

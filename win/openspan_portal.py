@@ -61,9 +61,24 @@ SEND_HZ = 120
 # ARRIVE_MARGIN (shared with openspan_targets, so both halves of every edge use
 # one number) is what keeps an arrival off the trigger it arrived through.
 # Geometry does that job now; no accumulator is required.
-MAX_WARP_REPORTS = 64      # a full-union warp on any real device is < 40
-PIN_OVERSHOOT = 400.0      # target pixels driven PAST an edge, to force the
-                           # clamp that makes the pinned position a fact
+MAX_WARP_REPORTS = 256     # a runaway backstop, not a design limit: a
+                           # diagonal re-sync across a large arrangement
+                           # legitimately needs ~100
+SHOVE_OVERSHOOT = 400.0    # target pixels driven PAST an edge, to force the
+                           # clamp that makes a shoved position a fact
+RESYNC_MAX_STEPS = 3       # shoves a re-sync plan may use. A rectangle needs
+                           # two; the awkward shapes tried need three.
+# Directions a blind shove may take. The diagonals matter: a shape with a
+# symmetry -- a plus, a T -- can map two positions onto each other forever under
+# axis-aligned shoves alone, and never collapse. A diagonal clamps each axis
+# INDEPENDENTLY, so it slides along a boundary instead of stopping on it, and
+# that is what breaks the symmetry.
+SHOVE_DIRECTIONS = {
+    "left": (-1.0, 0.0), "right": (1.0, 0.0),
+    "up": (0.0, -1.0), "down": (0.0, 1.0),
+    "up-left": (-1.0, -1.0), "up-right": (1.0, -1.0),
+    "down-left": (-1.0, 1.0), "down-right": (1.0, 1.0),
+}
 # Pointer acceleration applied HERE, on Windows, rather than by the target OS.
 # That is the whole point: because we compute it, the SAME accelerated delta
 # feeds both the wire and the virtual cursor, so the model cannot drift from
@@ -315,6 +330,7 @@ class Portal:
     # This is only trustworthy because nothing else in this file moves the model
     # without moving the wire by the same amount; see THE RULE above.
     _last_seen = {}             # device id -> (display_id, vx, vy)
+    _resync_plans = {}          # device id -> (sides, landing point) | None
     _device_gain = {}           # device id -> points per HID unit
     _device_accel = {}          # device id -> acceleration strength (0 = off)
     _device_sens = {}           # device id -> feel multiplier
@@ -342,6 +358,7 @@ class Portal:
         self.cy = prim["y"] + prim["h"] // 2
         self.active = False
         self._last_seen = {}   # device id -> (display_id, vx, vy)
+        self._resync_plans = {}  # geometry is fixed for this process's life
         self.cur = None        # active portal
         self.entry_along = 0   # position along the edge at entry
         self.perp = 0          # perpendicular displacement into iPad
@@ -400,6 +417,9 @@ class Portal:
                            else None)
             for device in self.cfg.get("devices", [])
         }
+        # Solve every device's re-sync here, at startup -- never in the mouse
+        # hook, which Windows unhooks without a word if it overruns.
+        self._plan_all()
         if not self._target_ports:
             self._target_ports = {
                 portal.get("target"): int(
@@ -523,6 +543,12 @@ class Portal:
                           f"{'READY' if ready else 'not ready'} "
                           f"(kbd_subscribed={ready})", flush=True)
                 self.target_ready[target] = ready
+                if not ready:
+                    # The lane went away. Anything could have moved that
+                    # device's pointer while we could not see it -- its own
+                    # trackpad, a sleep, an app repositioning the cursor -- so
+                    # stop claiming to know. The next entry re-syncs.
+                    self._last_seen.pop(target, None)
                 if not ready and self.active \
                         and self.active_target == target:
                     print(f"[portal] {target} disconnected while captured — "
@@ -756,27 +782,6 @@ class Portal:
                 1.0, gain * float(display["h"]))
         self._emit_move(target, px, py)
 
-    def _outer_bound(self, target, side, along):
-        """This device's outermost desk coordinate in one direction.
-
-        Taken over the screens that actually span `along`, so an L-shaped
-        arrangement gives the boundary the pointer will really meet rather than
-        the bounding box of everything."""
-        bounds = []
-        for (device, _display_id), display in self._displays.items():
-            if device != target:
-                continue
-            x, y = float(display["x"]), float(display["y"])
-            width, height = float(display["w"]), float(display["h"])
-            if side in ("left", "right"):
-                if y <= along <= y + height:
-                    bounds.append(x if side == "left" else x + width)
-            elif x <= along <= x + width:
-                bounds.append(y if side == "top" else y + height)
-        if not bounds:
-            return None
-        return min(bounds) if side in ("left", "top") else max(bounds)
-
     def _union(self, target):
         """The bounding box of everything this device shows."""
         rects = [display for (device, _d), display in self._displays.items()
@@ -788,138 +793,199 @@ class Portal:
                 max(float(r["x"]) + float(r["w"]) for r in rects),
                 max(float(r["y"]) + float(r["h"]) for r in rects))
 
-    def _axis_bounds(self, target, side):
-        """Every DISTINCT outer boundary this device presents on one side.
-
-        More than one means the boundary in that direction depends on the OTHER
-        axis -- the device's screens do not form a rectangle. Shoving that way
-        without already knowing the other axis lands in one of several places,
-        and we cannot tell which."""
-        values = set()
+    def _shove_distance(self, target, side):
+        """The pixel displacement a blind shove in this direction must carry."""
+        union = self._union(target)
+        if not union:
+            return (0.0, 0.0)
+        min_x, min_y, max_x, max_y = union
+        step_x, step_y = SHOVE_DIRECTIONS[side]
+        wide = tall = 1.0
         for (device, _display_id), display in self._displays.items():
             if device != target:
                 continue
-            if side in ("left", "right"):
-                lo = float(display["y"])
-                hi = lo + float(display["h"])
-            else:
-                lo = float(display["x"])
-                hi = lo + float(display["w"])
-            for sample in (lo + 1.0, (lo + hi) / 2.0, hi - 1.0):
-                bound = self._outer_bound(target, side, sample)
-                if bound is not None:
-                    values.add(round(bound, 3))
-        return values
+            res_w, res_h = oriented_resolution(display)
+            wide = max(wide, res_w / max(1.0, float(display["w"])))
+            tall = max(tall, res_h / max(1.0, float(display["h"])))
+        need_x = (max_x - min_x) * wide + SHOVE_OVERSHOOT
+        need_y = (max_y - min_y) * tall + SHOVE_OVERSHOOT
+        if step_x and step_y:
+            # A DIAGONAL shove must travel at 45 degrees, because that is the
+            # path _resync_plan walked when it decided where this shove ends.
+            #
+            # And it must be long enough to go AROUND things. While one axis is
+            # clamped against an edge, the motion commanded on it is thrown away
+            # by the device -- so crossing a wide screen sideways burns the
+            # vertical budget without moving vertically at all. The pointer then
+            # stops part-way down the next screen, which is not where the plan
+            # says it is. Width plus height bounds that: whatever one axis loses
+            # while blocked, the other axis was travelling, and neither can
+            # travel further than the arrangement is big.
+            need_x = need_y = ((max_x - min_x) * wide
+                               + (max_y - min_y) * tall + SHOVE_OVERSHOOT)
+        return (step_x * need_x, step_y * need_y)
+
+    def _shove_cost(self, target, side):
+        """What that shove costs, in pixels of pointer travel to sit through."""
+        px, py = self._shove_distance(target, side)
+        return math.hypot(px, py)
 
     def _shove(self, target, side):
         """Drive the pointer far enough that the device MUST clamp it.
 
-        Distance is the device's whole extent on that axis, converted at its
-        DENSEST screen so the shove cannot fall short on any of them, plus the
-        overshoot. Used when we do not know where the pointer is, so there is
-        nothing to warp from -- only a direction."""
+        Used when we do not know where the pointer is: there is nothing to warp
+        from, only a direction."""
+        px, py = self._shove_distance(target, side)
+        if px or py:
+            self._emit_move(target, px, py)
+
+    def _slide(self, target, x, y, side):
+        """Where a blind shove ENDS, walked the way the device will move it.
+
+        Each axis clamps INDEPENDENTLY -- that is simply what a pointer does at
+        a screen edge -- so a diagonal slides along a boundary rather than
+        stopping on it. The walk is coarse first and then refined, so it follows
+        the actual rectangles (including a gap between two screens) instead of
+        assuming a row is continuous. Nothing here knows what an arrangement is
+        supposed to look like."""
+        step_x, step_y = SHOVE_DIRECTIONS[side]
+        cx, cy = float(x), float(y)
+        sizes = [min(float(d["w"]), float(d["h"]))
+                 for (device, _i), d in self._displays.items()
+                 if device == target]
+        if not sizes:
+            return cx, cy
+        coarse = max(1.0, min(sizes) / 4.0)
         union = self._union(target)
-        if not union:
-            return
-        min_x, min_y, max_x, max_y = union
-        horizontal = side in ("left", "right")
-        span = (max_x - min_x) if horizontal else (max_y - min_y)
-        rates = []
+        reach = (union[2] - union[0]) + (union[3] - union[1]) + 4.0
+        for grain in (coarse, coarse / 8.0, 1.0, 0.125):
+            for _ in range(int(reach / grain) + 4):
+                nx, ny = cx + step_x * grain, cy + step_y * grain
+                if self._display_at(target, nx, ny):
+                    cx, cy = nx, ny
+                elif step_x and self._display_at(target, nx, cy):
+                    cx = nx
+                elif step_y and self._display_at(target, cx, ny):
+                    cy = ny
+                else:
+                    break
+        return cx, cy
+
+    def _resync_plan(self, target):
+        """A sequence of blind shoves that ends in ONE place, from anywhere.
+
+        This is the whole trick, and it is general. Shoving in a direction maps
+        every position the pointer could be in onto that boundary; do it enough
+        times and the set of possible positions collapses to a single point.
+
+        How many times, and in which directions, depends entirely on the shape
+        the user's screens happen to make. A rectangle collapses in two. An L
+        collapses in two, but only starting the right way. A plus or a T has a
+        symmetry that axis-aligned shoves map onto itself forever, and needs a
+        diagonal to break it. So the sequence is SEARCHED, not assumed: try
+        sequences in increasing length and take the first that collapses a dense
+        grid of candidate positions to a single point.
+
+        Screens can therefore be rearranged into any shape at all, and the
+        answer is re-derived from the rectangles rather than from anyone's idea
+        of how monitors are usually placed."""
+        if target in self._resync_plans:
+            return self._resync_plans[target]
+        candidates = []
         for (device, _display_id), display in self._displays.items():
             if device != target:
                 continue
-            res_w, res_h = oriented_resolution(display)
-            rates.append((res_w / max(1.0, float(display["w"]))) if horizontal
-                         else (res_h / max(1.0, float(display["h"]))))
-        pixels = span * max(rates or [1.0]) + PIN_OVERSHOOT
-        if side == "left":
-            self._emit_move(target, -pixels, 0.0)
-        elif side == "right":
-            self._emit_move(target, pixels, 0.0)
-        elif side == "top":
-            self._emit_move(target, 0.0, -pixels)
-        else:
-            self._emit_move(target, 0.0, pixels)
+            x, y = float(display["x"]), float(display["y"])
+            width, height = float(display["w"]), float(display["h"])
+            for fx in (0.02, 0.5, 0.98):
+                for fy in (0.02, 0.5, 0.98):
+                    candidates.append((x + width * fx, y + height * fy))
+        if not candidates:
+            self._resync_plans[target] = None
+            return None
+        # Search for the CHEAPEST plan, not the shortest. Every shove is HID
+        # reports the user sits through, and they differ a lot: on this desk one
+        # diagonal costs half again what two straight shoves do, because a
+        # diagonal has to be long enough to travel around things. A shorter plan
+        # is not automatically a faster one.
+        #
+        # Cost only ever grows along a sequence, so anything already dearer than
+        # the best plan found so far can be abandoned unexplored -- which is
+        # what keeps this affordable at three shoves and eight directions.
+        best = None
+        frontier = [((), 0.0, candidates)]
+        for _depth in range(RESYNC_MAX_STEPS):
+            following = []
+            for sequence, spent, points in frontier:
+                for side in SHOVE_DIRECTIONS:
+                    cost = spent + self._shove_cost(target, side)
+                    if best is not None and cost >= best[0]:
+                        continue
+                    moved = [self._slide(target, px, py, side)
+                             for px, py in points]
+                    first = moved[0]
+                    if all(abs(px - first[0]) < 1.0 and abs(py - first[1]) < 1.0
+                           for px, py in moved):
+                        best = (cost, sequence + (side,), first)
+                    else:
+                        following.append((sequence + (side,), cost, moved))
+            frontier = following
+            if not frontier:
+                break
+        if best is not None:
+            plan = (best[1], best[2])
+            self._resync_plans[target] = plan
+            return plan
+        # No sequence collapses this shape. Say so rather than pretend: the
+        # position stays unclaimed, nothing downstream trusts it, and the log
+        # names the device so the arrangement can be looked at.
+        print(f"[portal] WARNING {target}: no sequence of shoves pins this "
+              f"arrangement down -- its pointer position can be tracked but "
+              f"never established. Crossings onto it may start off by a screen.")
+        self._resync_plans[target] = None
+        return None
+
+    def _plan_all(self):
+        """Work out every device's re-sync plan NOW, at startup.
+
+        The search walks a grid of candidate positions through hundreds of shove
+        sequences. That is microseconds-to-milliseconds of arithmetic, but it
+        must never happen inside the low-level mouse hook: Windows silently
+        unhooks a hook procedure that overruns its timeout, and the portal would
+        go deaf. Geometry is fixed for this process's life, so once is enough."""
+        for target in sorted({device for device, _display in self._displays}):
+            plan = self._resync_plan(target)
+            if plan:
+                sides, landing = plan
+                print(f"[portal] {target}: re-sync = shove "
+                      f"{' then '.join(sides)} -> "
+                      f"({landing[0]:.0f},{landing[1]:.0f})")
 
     def _resync(self, target):
         """Find out where a device's pointer is, believing NOTHING.
 
-        A device's screens rarely form a rectangle -- a shorter panel beside two
-        taller ones makes the union an L -- and on an L the boundary you reach
-        by shoving one way DEPENDS on the other axis. So a single shove does not
-        establish a position: it establishes one of several, and we cannot tell
-        which. That is how the pointer ended up two screens away from the model.
+        A relative HID link cannot ask. But the device's own window server
+        CLAMPS its pointer at the edge of its screens, so shoving hard enough in
+        a direction makes that coordinate a fact -- and a searched sequence of
+        such shoves (_resync_plan) ends in one place no matter where it began.
 
-        So: shove first along whatever axis has ONE boundary everywhere, which
-        is a fact no matter what we believed. That axis is now known, which
-        makes the perpendicular boundary determinate, so shove that way too.
-        Both directions are derived from the actual geometry -- no arrangement
-        is assumed, and a device whose screens DO form a rectangle simply finds
-        the first axis immediately."""
-        blind = next((side for side in ("left", "right", "top", "bottom")
-                      if len(self._axis_bounds(target, side)) == 1), None)
-        if blind is None:
-            return None      # no safe direction: leave the position unclaimed
-        self._shove(target, blind)
-        anchor = next(iter(self._axis_bounds(target, blind)))
-        second = "top" if blind in ("left", "right") else "left"
-        bound = self._outer_bound(target, second, anchor)
-        if bound is None:
+        This is the only thing in the file that establishes a position, and it
+        assumes nothing: not the arrangement, not the previous position, not
+        which screen the pointer was on."""
+        plan = self._resync_plan(target)
+        if plan is None:
             return None
-        self._shove(target, second)
-        x, y = ((anchor, bound) if blind in ("left", "right")
-                else (bound, anchor))
+        sides, landing = plan
+        for side in sides:
+            self._shove(target, side)
+        x, y = landing
         display = self._display_at(target, x, y)
         self._last_seen[target] = (
             display["id"] if display else self.active_display, x, y)
-        print(f"[portal] resync {target}: shove {blind} then {second} -> "
-              f"({x:.0f},{y:.0f}) on "
+        print(f"[portal] resync {target}: shove {' then '.join(sides)}"
+              f" -> ({x:.0f},{y:.0f}) on "
               f"{self._screen(target, self._last_seen[target][0])}")
         return (x, y)
-
-    def _pin(self, target, side, along):
-        """Shove this device's pointer hard against its own outer boundary.
-
-        A relative HID link cannot ask a device where its pointer is -- but the
-        device's own window server CLAMPS that pointer at the edge of its
-        display union. So driving it hard in one direction turns its position on
-        that axis from an accumulated belief into a measured fact, using nothing
-        but the target's own clamp.
-
-        Done as the LAST act of leaving a device, in the direction you left by.
-        By then your attention is on the screen you moved TO, so the travel is
-        never watched -- and the next time you cross back, the model does not
-        have to remember anything. It knows.
-
-        Doug's idea, 2026-07-27: "whatever screen it was on, can you, as the
-        last action, shove the mouse as far as it goes in that same direction.
-        This will always reset the relative position per window boundary."
-        """
-        edge = self._outer_bound(target, side, along)
-        if edge is None:
-            return False
-        if side in ("left", "right"):
-            to_x, to_y = edge, float(along)
-        else:
-            to_x, to_y = float(along), edge
-        # exact travel to the boundary...
-        self._warp(target, self.vx, self.vy, to_x, to_y)
-        # ...then well past it, so rounding cannot leave the pointer a pixel
-        # short of the clamp that makes this whole thing true.
-        display = self._display_at(target, to_x, to_y) or self._displays.get(
-            (target, self.active_display))
-        if display:
-            res_w, res_h = oriented_resolution(display)
-            if side in ("left", "right"):
-                push = max(PIN_OVERSHOOT, float(res_w) * 0.25)
-                self._emit_move(target, -push if side == "left" else push, 0.0)
-            else:
-                push = max(PIN_OVERSHOOT, float(res_h) * 0.25)
-                self._emit_move(target, 0.0, -push if side == "top" else push)
-        pinned = self._display_at(target, to_x, to_y)
-        self._last_seen[target] = (
-            pinned["id"] if pinned else self.active_display, to_x, to_y)
-        return True
 
     def _place(self, target, display, vx, vy):
         """The ONLY discontinuous assignment of the model position.
@@ -948,11 +1014,10 @@ class Portal:
         old_target = self.active_target
         old_display = self.active_display
         pinned = False
-        if old_target is not None and target != old_target \
-                and from_side is not None:
-            # Leaving this DEVICE, not just one of its screens: pin its pointer
-            # on the way out, exactly as when handing control back to the PC.
-            pinned = self._pin(old_target, from_side, along)
+        if old_target is not None and target != old_target:
+            # Leaving this DEVICE, not just one of its screens: re-sync it on
+            # the way out, exactly as when handing control back to the PC.
+            pinned = self._resync(old_target) is not None
         if old_target is not None and not pinned:
             # Record UNCONDITIONALLY otherwise, including a same-device screen
             # handoff. Skipping those let a device's saved position go
@@ -1047,8 +1112,7 @@ class Portal:
             destination = link["destination"]
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
-                    destination, link["to_side"], along),
-                    pin_side=side, pin_along=along)
+                    destination, link["to_side"], along), resync=True)
                 return True
             # Never tear a drag across devices. The handoff re-arms as soon as
             # the physical button is released.
@@ -1102,16 +1166,19 @@ class Portal:
             threading.Timer(
                 0.3, lambda: self._send_chord(FKA_FETCH)).start()
 
-    def leave(self, exit_to=None, pin_side=None, pin_along=None):
+    def leave(self, exit_to=None, resync=False):
         if not self.active:
             return
-        # THE LAST ACT: shove this device's pointer as far as it goes the way
-        # you were going. Its own window server clamps it there, so where it is
-        # stops being a belief. A bail (Esc x3, a dropped lane) has no direction
-        # and skips this -- nothing moved the pointer, so the record still holds.
+        # THE LAST ACT of handing control back: re-sync this device, so that
+        # where its pointer is stops being a belief and becomes a measurement.
+        # Done here rather than on the way IN because by now you are looking at
+        # the screen you moved to, so the travel is never watched.
+        #
+        # A bail (Esc x3, a dropped lane) skips it: nothing moved the pointer,
+        # so the existing record is still as good as it was.
         pinned = False
-        if pin_side is not None and self.active_target is not None:
-            pinned = self._pin(self.active_target, pin_side, pin_along)
+        if resync and self.active_target is not None:
+            pinned = self._resync(self.active_target) is not None
             if pinned:
                 record = self._last_seen[self.active_target]
                 self.active_display = record[0]
@@ -1169,7 +1236,7 @@ class Portal:
         self.active_target = None
         self.active_display = None
         print(f"[portal] <<< {name} mode OFF (control back on PC)"
-              + (f" -- pinned {pin_side} at ({self.vx:.0f},{self.vy:.0f})"
+              + (f" -- resynced to ({self.vx:.0f},{self.vy:.0f})"
                  if pinned else ""))
 
     def _hit_portal(self, x, y):

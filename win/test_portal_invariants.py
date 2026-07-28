@@ -405,56 +405,7 @@ check("every configured screen is reachable from a PC entrance",
       not missing, "unreachable: " + ", ".join(f"{a}/{b}" for a, b in missing))
 
 # =========================================================================
-# P5. LEAVING PINS THE POINTER, SO THE NEXT ENTRY NEED NOT REMEMBER.
-#
-# A relative link cannot ask a device where its pointer is -- but the device's
-# own window server clamps it at the edge of its display union. Driving hard
-# in the direction you left by therefore turns that coordinate from a belief
-# into a measured fact, and it costs nothing visible: you are already looking
-# at the screen you moved to.
-# =========================================================================
-short, mislabelled = [], []
-for (target, display_id), display in broker._displays.items():
-    for side in ("left", "right", "top", "bottom"):
-        bound = broker._outer_bound(target, side, 0)
-        broker.active = True
-        broker.active_target, broker.active_display = target, display_id
-        broker.vx = float(display["x"]) + float(display["w"]) / 2
-        broker.vy = float(display["y"]) + float(display["h"]) / 2
-        along = broker.vy if side in ("left", "right") else broker.vx
-        bound = broker._outer_bound(target, side, along)
-        if bound is None:
-            continue
-        start = (broker.vx, broker.vy)
-        while not broker.q.empty():
-            broker.q.get_nowait()
-        if not broker._pin(target, side, along):
-            continue
-        landed = simulate(broker, target, start[0], start[1],
-                          drain_reports(broker, target))
-        reached = landed[0] if side in ("left", "right") else landed[1]
-        # the device clamps, so the shove must reach the boundary or overrun it
-        if side in ("left", "top"):
-            enough = reached <= bound + 1.0
-        else:
-            enough = reached >= bound - 1.0
-        if not enough:
-            short.append(f"{target}/{display_id} {side}: stopped at "
-                         f"{reached:.0f}, boundary {bound:.0f}")
-        record = broker._last_seen.get(target)
-        recorded = record[1] if side in ("left", "right") else record[2]
-        if abs(recorded - bound) > 1.0:
-            mislabelled.append(
-                f"{target}/{display_id} {side}: recorded {recorded:.0f}, "
-                f"boundary {bound:.0f}")
-
-check("the shove always reaches the device's own clamp",
-      not short, "; ".join(short[:4]))
-check("and the record is the boundary itself -- measured, not remembered",
-      not mislabelled, "; ".join(mislabelled[:4]))
-
-# =========================================================================
-# P6. A COLD RE-SYNC CONVERGES FROM ANYWHERE.
+# P5. A RE-SYNC CONVERGES FROM ANYWHERE, WHATEVER THE SHAPE.
 #
 # A device's screens rarely form a rectangle: a shorter panel beside two taller
 # ones makes the union an L. On an L, the boundary you reach by shoving one way

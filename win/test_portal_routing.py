@@ -152,8 +152,8 @@ broker.active_display = "device-1-1"
 broker.vx = -1925.0
 broker.vy = 200.0
 exits = []
-broker.leave = lambda exit_to=None, pin_side=None, pin_along=None: (
-    exits.append((exit_to, pin_side)))
+broker.leave = lambda exit_to=None, resync=False: (
+    exits.append((exit_to, resync)))
 left_pc = broker._route_motion(80, 0)
 # The Windows cursor must land a REAL distance inside the monitor, not 3 px
 # from a trigger with a +-1 px tolerance -- that was the Windows half of the
@@ -164,9 +164,9 @@ check("crossing the edge shared with the PC still returns to the PC",
       and exits[0][0][0] == -1920 + inset)
 check("and it lands far enough inside not to re-trigger the portal",
       inset >= 8 and exits[0][0][0] > -1920 + 3)
-# Leaving tells leave() WHICH WAY you went, so it can shove the device's
-# pointer that way and let the device's own clamp make its position a fact.
-check("leaving names the direction, so the pointer can be pinned on the way out",
-      exits[0][1] == "right")
+# Handing control back re-syncs the device on the way out, so where its
+# pointer is stops being a belief and becomes a measurement.
+check("handing control back to the PC asks for a re-sync on the way out",
+      exits[0][1] is True)
 
 print("RESULT: ALL PASS")
