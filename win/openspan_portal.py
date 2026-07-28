@@ -1853,7 +1853,7 @@ class Portal:
                     break
                 target = target or self.active_target
                 batch = batches.setdefault(target, {
-                    "wheel": 0, "moves": [], "clicks": [],
+                    "wheel": 0, "moves": [], "clicks": [], "px": [0.0, 0.0],
                     "keys": [], "texts": [],
                 })
                 if kind == "m":
@@ -1874,13 +1874,38 @@ class Portal:
                     # is free. So coalesce only those, only with each other, and
                     # never across an exact report -- order is preserved either
                     # way, which matters because a warp follows a shove.
-                    exact = bool(c) or self._device_compensate.get(target)
-                    if (not exact and batch["moves"]
-                            and not batch["moves"][-1][2]):
+                    if c:
+                        # A warp or a shove: solved on its own, never merged.
+                        batch["moves"].append((a, b, True))
+                    elif self._device_compensate.get(target):
+                        # Live motion on a COMPENSATED lane, accumulated in
+                        # PIXELS rather than counts.
+                        #
+                        # Every sample used to go out as its own report, because
+                        # the target's acceleration curve is solved per report
+                        # and merging two COUNTS would change what the curve
+                        # does with them. True -- and it meant this lane emitted
+                        # one HID notification per mouse sample, up to a
+                        # thousand a second, into a Bluetooth link that carries
+                        # a hundred. Everything queued behind it arrived late,
+                        # including key releases, and a key whose release is late
+                        # is a key the target believes is HELD.
+                        #
+                        # Merging is safe in PIXEL space: convert each sample to
+                        # the distance it would actually travel, add those up,
+                        # and solve the curve once for the total. The pointer
+                        # goes exactly as far either way, in one report instead
+                        # of thirty.
+                        length = math.hypot(a, b)
+                        travel = apple_pixels(length)
+                        if length > 0.0:
+                            batch["px"][0] += a / length * travel
+                            batch["px"][1] += b / length * travel
+                    elif batch["moves"] and not batch["moves"][-1][2]:
                         prev_x, prev_y, _flag = batch["moves"][-1]
                         batch["moves"][-1] = (prev_x + a, prev_y + b, False)
                     else:
-                        batch["moves"].append((a, b, exact))
+                        batch["moves"].append((a, b, False))
                 elif kind == "w":
                     batch["wheel"] += c
                 elif kind == "b":
@@ -1923,6 +1948,22 @@ class Portal:
                 # is split -- splitting preserves the movement exactly, it is
                 # only MERGING that destroys it.
                 awheel = batch["wheel"]
+                if batch["px"][0] or batch["px"][1]:
+                    # one tick of live motion, solved once against the curve
+                    remaining = math.hypot(*batch["px"])
+                    ux = batch["px"][0] / remaining
+                    uy = batch["px"][1] / remaining
+                    for _ in range(MAX_WARP_REPORTS):
+                        if remaining < 0.5:
+                            break
+                        counts = apple_counts(min(remaining,
+                                                  apple_pixels(127)))
+                        cdx = max(-127, min(127, int(round(ux * counts))))
+                        cdy = max(-127, min(127, int(round(uy * counts))))
+                        if not (cdx or cdy):
+                            break
+                        batch["moves"].append((cdx, cdy, True))
+                        remaining -= apple_pixels(math.hypot(cdx, cdy))
                 for mdx, mdy, _exact in batch["moves"]:
                     while mdx or mdy or awheel:
                         sx = max(-127, min(127, mdx)); mdx -= sx

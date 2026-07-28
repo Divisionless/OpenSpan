@@ -296,5 +296,36 @@ p9.send = lambda target, msg: down.append(msg)
 p9._assert_nothing_held()
 check("nor while a key is genuinely down", down == [])
 
+# --- a compensated lane must not flood the link ----------------------------
+# The target's acceleration curve is solved per report, so merging two COUNTS
+# would change what the curve does with them. True -- and it used to mean one
+# HID notification per mouse sample, up to a thousand a second into a Bluetooth
+# link that carries a hundred. Everything queued behind it arrived late,
+# including key releases, and a key whose release is late is a key the target
+# believes is HELD. Merging is safe in PIXEL space.
+def flush_moves(samples, compensating):
+    q = make_portal(clipboard_capable=False)
+    q._device_compensate = {"dev": compensating}
+    q.buttons = 0
+    out = []
+    q.send = lambda target, msg: out.append(msg)
+    for a, b in samples:
+        q.q.put(("dev", "m", a, b, 0))
+    q._flush_queue()
+    return out
+
+
+burst = [(40, 0)] * 8
+wanted = sum(P.apple_pixels(40.0) for _ in burst)
+comp = flush_moves(burst, True)
+got = sum(P.apple_pixels(abs(m["dx"])) for m in comp)
+check("one tick of fast motion is a few reports, not one per sample",
+      len(comp) <= 4)
+check("and the pointer still travels exactly as far", abs(got - wanted) < 2.0)
+
+plain = flush_moves(burst, False)
+check("an uncompensated lane still coalesces to one movement",
+      len(plain) <= 3 and sum(m["dx"] for m in plain) == 320)
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)
