@@ -497,3 +497,51 @@ layout. Each fails on the previous build.
 - `_APPLE_CURVE` is Apple's table at the **default** tracking-speed slider.
 - `_last_seen` is true unless the Mac's own trackpad moves the pointer while we
   are away; it re-converges at any edge.
+
+## 2026-07-27 — Pin on exit: stop remembering the pointer, start knowing it
+
+Doug: *"when you move the mouse over to another screen, whatever screen it was
+on, can you, as the last action, shove the mouse as far as it goes in that same
+direction. This will always reset the relative position per window boundary."*
+
+His idea, and it is the right primitive. A relative HID link cannot ask a device
+where its pointer is — but the device's own window server **clamps** that
+pointer at the edge of its display union. Driving it hard in one direction
+therefore turns that coordinate from an accumulated belief into a measured fact,
+using nothing but the target's own clamp. Done as the last act of leaving, in
+the direction you left by, it is never watched: your attention is already on the
+screen you moved to.
+
+**What it replaced.** The previous build asserted the crossed edge and paid for
+the jump with a warp computed from `_last_seen` — correct, but only once
+`_last_seen` held something. It starts empty at every portal launch, so the
+FIRST crossing to a device had nothing to correct from: the model asserted the
+edge while the device's pointer stayed where it was. Since the portal now
+restarts on every layout edit, almost every crossing during a layout session was
+a first crossing. That is what Doug saw as "it is assuming the original mouse
+position."
+
+`_pin(target, side, along)` warps exactly to the outer boundary — computed over
+the screens that actually span `along`, so an L-shaped arrangement gives the
+boundary the pointer will really meet rather than a bounding box — then drives
+`PIN_OVERSHOOT` past it so rounding cannot leave it a pixel short of the clamp.
+It records the boundary itself, and reports whether it fired so the ordinary
+record cannot overwrite a measured value with a believed one.
+
+Bails (Esc ×3, Ctrl+Alt+Q/I, a dropped lane) have no direction and skip the pin
+— nothing moved the pointer, so the previous record still holds.
+
+**Cost on this desk**, in HID reports at a 15 ms connection interval:
+
+| exit | reports | time |
+|---|---|---|
+| iPad, any side | 2 | ~30 ms |
+| mac-3 → PC (bottom) | 9 | ~135 ms |
+| mac-3 → PC (right) | 17 | ~255 ms |
+| worst case (mac-1 right, full width) | 40 | ~600 ms |
+
+**New invariants:** the shove always reaches the device's own clamp, and the
+record is the boundary itself — measured, not remembered.
+
+**Still true only if** the desk arrangement matches the target's own display
+arrangement: the pin lands where that OS clamps, not where we think it should.

@@ -62,6 +62,8 @@ SEND_HZ = 120
 # one number) is what keeps an arrival off the trigger it arrived through.
 # Geometry does that job now; no accumulator is required.
 MAX_WARP_REPORTS = 64      # a full-union warp on any real device is < 40
+PIN_OVERSHOOT = 400.0      # target pixels driven PAST an edge, to force the
+                           # clamp that makes the pinned position a fact
 # Pointer acceleration applied HERE, on Windows, rather than by the target OS.
 # That is the whole point: because we compute it, the SAME accelerated delta
 # feeds both the wire and the virtual cursor, so the model cannot drift from
@@ -748,6 +750,71 @@ class Portal:
                 1.0, gain * float(display["h"]))
         self._emit_move(target, px, py)
 
+    def _outer_bound(self, target, side, along):
+        """This device's outermost desk coordinate in one direction.
+
+        Taken over the screens that actually span `along`, so an L-shaped
+        arrangement gives the boundary the pointer will really meet rather than
+        the bounding box of everything."""
+        bounds = []
+        for (device, _display_id), display in self._displays.items():
+            if device != target:
+                continue
+            x, y = float(display["x"]), float(display["y"])
+            width, height = float(display["w"]), float(display["h"])
+            if side in ("left", "right"):
+                if y <= along <= y + height:
+                    bounds.append(x if side == "left" else x + width)
+            elif x <= along <= x + width:
+                bounds.append(y if side == "top" else y + height)
+        if not bounds:
+            return None
+        return min(bounds) if side in ("left", "top") else max(bounds)
+
+    def _pin(self, target, side, along):
+        """Shove this device's pointer hard against its own outer boundary.
+
+        A relative HID link cannot ask a device where its pointer is -- but the
+        device's own window server CLAMPS that pointer at the edge of its
+        display union. So driving it hard in one direction turns its position on
+        that axis from an accumulated belief into a measured fact, using nothing
+        but the target's own clamp.
+
+        Done as the LAST act of leaving a device, in the direction you left by.
+        By then your attention is on the screen you moved TO, so the travel is
+        never watched -- and the next time you cross back, the model does not
+        have to remember anything. It knows.
+
+        Doug's idea, 2026-07-27: "whatever screen it was on, can you, as the
+        last action, shove the mouse as far as it goes in that same direction.
+        This will always reset the relative position per window boundary."
+        """
+        edge = self._outer_bound(target, side, along)
+        if edge is None:
+            return False
+        if side in ("left", "right"):
+            to_x, to_y = edge, float(along)
+        else:
+            to_x, to_y = float(along), edge
+        # exact travel to the boundary...
+        self._warp(target, self.vx, self.vy, to_x, to_y)
+        # ...then well past it, so rounding cannot leave the pointer a pixel
+        # short of the clamp that makes this whole thing true.
+        display = self._display_at(target, to_x, to_y) or self._displays.get(
+            (target, self.active_display))
+        if display:
+            res_w, res_h = oriented_resolution(display)
+            if side in ("left", "right"):
+                push = max(PIN_OVERSHOOT, float(res_w) * 0.25)
+                self._emit_move(target, -push if side == "left" else push, 0.0)
+            else:
+                push = max(PIN_OVERSHOOT, float(res_h) * 0.25)
+                self._emit_move(target, 0.0, -push if side == "top" else push)
+        pinned = self._display_at(target, to_x, to_y)
+        self._last_seen[target] = (
+            pinned["id"] if pinned else self.active_display, to_x, to_y)
+        return True
+
     def _place(self, target, display, vx, vy):
         """The ONLY discontinuous assignment of the model position.
 
@@ -763,15 +830,22 @@ class Portal:
         self.vx, self.vy = float(vx), float(vy)
         self._last_seen[target] = (display, self.vx, self.vy)
 
-    def _switch_target(self, destination, to_side, along):
+    def _switch_target(self, destination, to_side, along, from_side=None):
         target = destination.get("target")
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
-        if old_target is not None:
-            # Record UNCONDITIONALLY, including a same-device screen handoff.
-            # Skipping those let a device's saved position go arbitrarily stale
-            # while the user wandered across its other screens.
+        pinned = False
+        if old_target is not None and target != old_target \
+                and from_side is not None:
+            # Leaving this DEVICE, not just one of its screens: pin its pointer
+            # on the way out, exactly as when handing control back to the PC.
+            pinned = self._pin(old_target, from_side, along)
+        if old_target is not None and not pinned:
+            # Record UNCONDITIONALLY otherwise, including a same-device screen
+            # handoff. Skipping those let a device's saved position go
+            # arbitrarily stale while the user wandered across its other
+            # screens. A pin already recorded a BETTER value -- a measured one.
             self._last_seen[old_target] = (old_display, self.vx, self.vy)
         if target != old_target:
             # One Windows hook broker, independent target channels. Release the
@@ -853,13 +927,15 @@ class Portal:
             destination = link["destination"]
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
-                    destination, link["to_side"], along))
+                    destination, link["to_side"], along),
+                    pin_side=side, pin_along=along)
                 return True
             # Never tear a drag across devices. The handoff re-arms as soon as
             # the physical button is released.
             if self.buttons:
                 break
-            self._switch_target(destination, link["to_side"], along)
+            self._switch_target(destination, link["to_side"], along,
+                                from_side=side)
             return False
         # Nothing consumed the overshoot, so the target's own cursor is pinned
         # against a real screen edge -- and so is the model.
@@ -905,9 +981,20 @@ class Portal:
             threading.Timer(
                 0.3, lambda: self._send_chord(FKA_FETCH)).start()
 
-    def leave(self, exit_to=None):
+    def leave(self, exit_to=None, pin_side=None, pin_along=None):
         if not self.active:
             return
+        # THE LAST ACT: shove this device's pointer as far as it goes the way
+        # you were going. Its own window server clamps it there, so where it is
+        # stops being a belief. A bail (Esc x3, a dropped lane) has no direction
+        # and skips this -- nothing moved the pointer, so the record still holds.
+        pinned = False
+        if pin_side is not None and self.active_target is not None:
+            pinned = self._pin(self.active_target, pin_side, pin_along)
+            if pinned:
+                record = self._last_seen[self.active_target]
+                self.active_display = record[0]
+                self.vx, self.vy = record[1], record[2]
         self._rem_x = self._rem_y = 0.0
         self.active = False
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
@@ -930,7 +1017,7 @@ class Portal:
         # Where this device's pointer really is. Every bail path lands here --
         # a routed exit, Esc x3, Ctrl+Alt+Q/I, a lane dropping -- and none of
         # them moves the target's cursor, so the record is true in all of them.
-        if target is not None:
+        if target is not None and not pinned:
             vx, vy = self.vx, self.vy
             display = self._displays.get((target, self.active_display))
             if display:
