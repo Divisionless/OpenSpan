@@ -454,3 +454,46 @@ into the working bridge — validated on a fresh clone (software) and confirmed
 end-to-end on the radio + iPad. Tagged v1.0; v1.0.1 fixes the volume-slider curve.
 
 Built by Douglas Perianu Knoll, with Claude.
+
+## 2026-07-27 — Crossing onto a device lands where you crossed
+
+**Reported:** "when i move over to the mac, it doesn't start at the edge, and
+then it returns from that same false point to the PC, so i can't mouse over the
+right section at all unless i drag the mouse all the way left and flick it."
+
+**Cause.** Four mechanisms added over the previous two sessions, all of which
+worked around the fact that a relative HID link cannot move a cursor *to* a
+position — and all of which paid for it by discarding motion the wire had
+already delivered:
+
+| Mechanism | What it actually did |
+|---|---|
+| position resume | `enter()` restored the position saved on the last **exit**, not the edge just crossed. That point is a live exit trigger, so entry landed on a bounce. Entering mac-2 from the right restored a point saved on its bottom edge — the "false point". |
+| `EXIT_PRESSURE` | 45 target points of lean per crossing, sent to the device, thrown away by the model. |
+| `SWITCH_COOLDOWN` | up to 300 ms of motion, likewise sent and thrown away. |
+| proportional arrival | stretched the overlap across the destination's whole edge — 3.4× on the iPad→Mac seam, not reversible, and it dropped 43% of Mac-to-Mac crossings into a band of the next screen with no link back. |
+
+**The rule that replaces all four.** *The model may only change position by an
+amount the wire also moved. When the model must be somewhere the wire has not
+taken it, send the difference.* `_place()` asserts the crossed edge; `_warp()`
+queues the HID reports that make the assertion true, converting desk units per
+**display** by walking the path through the screens it actually crosses.
+
+Also fixed: `_matching_link` had no fallback, so an edge range with no link was
+a silent unbounded wall — mac-2's right edge, the boundary with the PC, was 47%
+dead because the monitor beside it is shorter than the 32" panel. `_last_seen`
+is per **device** now (a device has one pointer). `ARRIVE_MARGIN` is one
+constant governing both halves of every edge. The compensated path credited the
+model along the pre-rounding direction, and the sender re-summed per-report
+deltas — both break the per-report premise the Apple inverse rests on.
+
+**New:** `win/test_portal_invariants.py` — eight properties driven by the live
+layout. Each fails on the previous build.
+
+**Known limits, hardware only:**
+- The warp assumes the desk arrangement matches macOS's own Displays
+  arrangement. If they differ, cross-screen entries are wrong by that
+  difference.
+- `_APPLE_CURVE` is Apple's table at the **default** tracking-speed slider.
+- `_last_seen` is true unless the Mac's own trackpad moves the pointer while we
+  are away; it re-converges at any edge.
