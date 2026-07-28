@@ -397,6 +397,7 @@ class Portal:
     _device_accel = {}          # device id -> acceleration strength (0 = off)
     _device_sens = {}           # device id -> feel multiplier
     _device_compensate = {}     # device id -> invert the target's own curve
+    _device_verbatim = {}       # device id -> send keys exactly as pressed
     _rem_x = 0.0                # sub-unit remainders: slow motion must not be
     _rem_y = 0.0                # truncated away to nothing
     _motion = ()                # recent (time, raw distance) for the momentum
@@ -481,6 +482,13 @@ class Portal:
         }
         self._device_compensate = {
             device["id"]: bool(device.get("compensate_target_accel", False))
+            for device in self.cfg.get("devices", [])
+        }
+        # SEND KEYS EXACTLY AS PRESSED. For a device that already does its own
+        # modifier mapping, ours is not help -- it is a second translation
+        # applied in series, and the two cancel or compound unpredictably.
+        self._device_verbatim = {
+            device["id"]: bool(device.get("keyboard_verbatim", False))
             for device in self.cfg.get("devices", [])
         }
         # HOLD A SIDE BUTTON TO CROSS. When on, the side button IS the intent,
@@ -1886,6 +1894,20 @@ class Portal:
         # discarding a keystroke the user actually made.
         mod_names = self._phys_mod_names()
         key_usages = list(self.raw_keys.values())
+        # VERBATIM: this device maps its own modifiers, so send what was
+        # pressed and nothing else. Remapping on top of a device that already
+        # remaps is two translations in series -- Ctrl+V became Cmd+V here, the
+        # Mac's own Command/Control swap turned that back into Ctrl+V, and
+        # Ctrl+V in Cocoa is the emacs binding for page-down. It moved the
+        # cursor instead of pasting, and no amount of configuring either end
+        # alone could fix it.
+        if self._device_verbatim.get(self.active_target):
+            out_mods = 0
+            for name in mod_names:
+                out_mods |= IPAD_MOD_BIT.get(name, 0)
+            self.q.put(
+                (self.active_target, "k", out_mods, key_usages[:6], 0))
+            return
         # 1) exact override match (single-key combos)
         if len(key_usages) <= 1:
             key_names = frozenset(USAGE_TO_NAME.get(u) for u in key_usages)

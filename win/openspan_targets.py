@@ -154,6 +154,7 @@ def new_device(config, name=None, live_monitors=None, displays=None):
         "pointer_accel": 0.0,   # our own acceleration; 0.0 = linear
         "sensitivity": 1.0,     # per-device feel multiplier
         "compensate_target_accel": False,
+        "keyboard_verbatim": False,   # send keys exactly as pressed
         "modifier_remap": None,  # None = inherit the global keymap
 
         "displays": displays,
@@ -372,6 +373,9 @@ def normalize_config(raw, live_monitors):
             # user to switch it off. Only meaningful where that curve is known.
             "compensate_target_accel": bool(
                 target.get("compensate_target_accel", False)),
+            # For a device that already remaps its own modifiers, ours is a
+            # second translation in series and the two fight.
+            "keyboard_verbatim": bool(target.get("keyboard_verbatim", False)),
             # None = inherit the global keymap (today's behaviour); a dict --
             # even an empty one -- is an explicit per-device override, which is
             # how a Mac gets physical Alt delivered as Option instead of Cmd.
@@ -674,6 +678,7 @@ def portal_signature(config):
             device.get("pointer_gain"), device.get("pointer_accel"),
             device.get("sensitivity"),
             bool(device.get("compensate_target_accel")),
+            bool(device.get("keyboard_verbatim")),
             device.get("modifier_remap"),
             [[d.get("id"), d.get("x"), d.get("y"), d.get("w"), d.get("h"),
               d.get("res_w"), d.get("res_h"), d.get("rotation")]

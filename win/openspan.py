@@ -5243,6 +5243,20 @@ class App:
                  bg=CARD, fg=MUTED, font=("Segoe UI", 8), wraplength=430,
                  justify="left").pack(anchor="w", padx=38)
 
+        verbatim = tk.BooleanVar(
+            value=bool(record.get("keyboard_verbatim", False)))
+        ttk.Checkbutton(
+            win, text="Send keys exactly as pressed (this device remaps its own)",
+            variable=verbatim).pack(anchor="w", padx=18, pady=(14, 0))
+        tk.Label(win,
+                 text="Turn this on when the DEVICE already swaps its own "
+                      "modifiers — a Mac with Command and Control exchanged, "
+                      "for example. OpenSpan then sends exactly what you press "
+                      "and lets the device do the mapping, instead of "
+                      "translating twice and fighting itself.",
+                 bg=CARD, fg=MUTED, font=("Segoe UI", 8), wraplength=430,
+                 justify="left").pack(anchor="w", padx=38)
+
         inv = tk.BooleanVar(value=bool(record.get("scroll_invert", False)))
         ttk.Checkbutton(win, text="Invert scroll wheel on this device",
                         variable=inv).pack(anchor="w", padx=18, pady=(12, 0))
@@ -5268,6 +5282,7 @@ class App:
                 float(state["pointer_accel"].get()), 3)
             record["scroll_invert"] = bool(inv.get())
             record["compensate_target_accel"] = bool(comp.get())
+            record["keyboard_verbatim"] = bool(verbatim.get())
             choice = alt_var.get()
             record["modifier_remap"] = (
                 {} if choice == "option"

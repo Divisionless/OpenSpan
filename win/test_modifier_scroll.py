@@ -351,5 +351,39 @@ _dupes = [(hex(v), hex(u)) for v, u in sorted(P.VK_HID.items())
           if _seen.setdefault(u, v) != v]
 check("no two keys share a HID usage", not _dupes)
 
+# --- a device that remaps its own modifiers must be sent the RAW keys -------
+# Remapping on top of a device that already remaps is two translations in
+# series. Ctrl+V became Cmd+V here; the Mac's own Command/Control swap turned
+# that back into Ctrl+V; and Ctrl+V in Cocoa is the emacs binding for page-down.
+# It moved the cursor instead of pasting, and neither end alone could fix it.
+def kbd_out(verbatim, mods, usages):
+    q = make_portal(clipboard_capable=False)
+    q.active = True
+    q.active_target = "dev"
+    q._device_verbatim = {"dev": verbatim}
+    q.remap = {"alt": "cmd"}
+    q.overrides = [(frozenset({"ctrl"}), frozenset({"v"}),
+                    P.IPAD_MOD_BIT["cmd"], [P.NAME_TO_USAGE["v"]])]
+    q.mods = mods
+    q.raw_keys = dict(enumerate(usages))
+    q._emit_kbd()
+    sent = [e for e in drain(q) if e[1] == "k"]
+    return (sent[-1][2], list(sent[-1][3])) if sent else (None, None)
+
+
+_ctrl, _v = P.VK_MOD[0xA2], P.NAME_TO_USAGE["v"]
+check("normally Ctrl+V is rewritten to Cmd+V for the device",
+      kbd_out(False, _ctrl, [_v]) == (P.IPAD_MOD_BIT["cmd"], [_v]))
+check("VERBATIM sends the Ctrl that was actually pressed",
+      kbd_out(True, _ctrl, [_v]) == (P.IPAD_MOD_BIT["ctrl"], [_v]))
+
+_alt = P.VK_MOD[0xA4]
+check("normally Alt is remapped to Command",
+      kbd_out(False, _alt, []) == (P.IPAD_MOD_BIT["cmd"], []))
+check("VERBATIM sends Alt as Alt", kbd_out(True, _alt, []) ==
+      (P.IPAD_MOD_BIT["alt"], []))
+check("and the Windows key still reaches a verbatim device as GUI",
+      kbd_out(True, P.VK_MOD[0x5B], []) == (P.IPAD_MOD_BIT["cmd"], []))
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)
