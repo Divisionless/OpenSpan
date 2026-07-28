@@ -255,5 +255,46 @@ check("a click straddling a tick boundary is one press, not two",
 check("and the button always ends released",
       (click_run([1, 0])[-1]["buttons"] & 1) == 0)
 
+# --- a lost RELEASE must not stick forever ---------------------------------
+# A keyboard report is STATE. A report that vanishes in transit is silent, and
+# if the missing one is a release the target holds that modifier forever --
+# every letter afterwards comes out accented, and no other keyboard can clear
+# it, because no other keyboard owns this device's state.
+p7 = make_portal(clipboard_capable=False)
+p7.socks = {"dev": object()}
+p7.mods = 0
+p7.raw_keys = {}
+p7._last_allclear = 0.0
+p7._kbd_dirty = True
+allclear = []
+p7.send = lambda target, msg: allclear.append((target, msg))
+p7._assert_nothing_held()
+check("with nothing held, the portal says so on its own",
+      allclear == [("dev", {"cmd": "kbd", "mods": 0, "keys": []})])
+
+allclear.clear()
+p7._assert_nothing_held()
+check("and not more than once a second", allclear == [])
+
+p8 = make_portal(clipboard_capable=False)
+p8.socks = {"dev": object()}
+p8.mods = P.VK_MOD[VK_CTRL]        # Ctrl really IS held
+p8.raw_keys = {}
+p8._last_allclear = 0.0
+held = []
+p8.send = lambda target, msg: held.append(msg)
+p8._assert_nothing_held()
+check("but it never claims nothing is held while something is", held == [])
+
+p9 = make_portal(clipboard_capable=False)
+p9.socks = {"dev": object()}
+p9.mods = 0
+p9.raw_keys = {0x41: 0x04}         # a letter is genuinely down
+p9._last_allclear = 0.0
+down = []
+p9.send = lambda target, msg: down.append(msg)
+p9._assert_nothing_held()
+check("nor while a key is genuinely down", down == [])
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

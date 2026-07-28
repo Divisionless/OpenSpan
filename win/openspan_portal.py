@@ -379,6 +379,8 @@ class Portal:
     _last_pt = None             # gate; _last_pt tracks the free Windows cursor
     _armed_until = 0.0          # a deliberate push holds the boundary open
     _gentle_logged = 0.0        # rate-limit for the "too gentle" note
+    _last_allclear = 0.0        # 1 Hz "nothing is held" re-assertion
+    _kbd_dirty = False          # something non-empty has been sent since
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -1810,6 +1812,32 @@ class Portal:
         while True:
             time.sleep(period)
             self._flush_queue()
+            self._assert_nothing_held()
+
+    def _assert_nothing_held(self):
+        """Once a second, when nothing is held, say so.
+
+        A keyboard report is STATE, not an event -- which is what makes a
+        duplicate harmless and this rescue possible. A report that goes missing
+        in transit is silent, and if the missing one is a RELEASE the target
+        holds that modifier FOREVER: every letter typed afterwards comes out
+        accented and no amount of pressing keys on any other keyboard clears it,
+        because no other keyboard owns this device's state.
+
+        So whenever nothing is actually held, re-assert exactly that. It cannot
+        interrupt a real keypress -- it only fires when there is no keypress --
+        and it costs one small report per second per connected lane."""
+        now = time.monotonic()
+        if now - self._last_allclear < 1.0:
+            return
+        if self.mods or self.raw_keys:
+            return              # something IS held; saying otherwise would lie
+        self._last_allclear = now
+        for target in list(self.socks):
+            self.send(target, {"cmd": "kbd", "mods": 0, "keys": []})
+        if self._kbd_dirty:
+            self._kbd_dirty = False
+            print("[portal] all keys released (nothing is held)")
 
     def _flush_queue(self):
         """Drain the queue and put it on the wire. Separated from the loop so a
@@ -1879,6 +1907,8 @@ class Portal:
                     # identical from the far end, and neither could be settled.
                     print(f"[portal] key {target} mods={mods:#04x} "
                           f"keys={[hex(k) for k in keys]}")
+                    if mods or keys:
+                        self._kbd_dirty = True
                     self.send(
                         target, {"cmd": "kbd", "mods": mods, "keys": keys})
                 # EVERY button transition is sent, in order, each with the
