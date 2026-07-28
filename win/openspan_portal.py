@@ -255,6 +255,8 @@ WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
 WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 WM_MBUTTONDOWN, WM_MBUTTONUP = 0x0207, 0x0208
 WM_XBUTTONDOWN, WM_XBUTTONUP = 0x020B, 0x020C
+# The same two physical buttons, as a keyboard reports them.
+SIDE_BUTTON_VK = {0xA6: 0x0001, 0xA7: 0x0002}   # BROWSER_BACK / BROWSER_FORWARD
 WM_MOUSEWHEEL = 0x020A
 LLMHF_INJECTED = 0x01
 
@@ -409,6 +411,7 @@ class Portal:
     _key_down_at = 0.0          # to measure how long a key is actually held
     _chord_target = None        # a chord gates ONLY the device it runs on
     _side_held = 0              # which mouse side buttons are down (bitmask)
+    _side_seen = False          # has a side button EVER arrived? (lockout guard)
     _cross_button = False       # hold a side button to cross a device edge
     _button_jumps = False       # ...and while held, go to the NEAREST surface
 
@@ -919,6 +922,25 @@ class Portal:
         """Did the hand push deliberately, recently enough to mean it?"""
         return time.monotonic() < self._armed_until
 
+    def _set_side(self, bit, down):
+        """A mouse side button changed. Both hooks route here.
+
+        Side buttons do not all arrive the same way. Some mice report them as
+        WM_XBUTTON on the mouse hook; plenty report them as VK_BROWSER_BACK and
+        VK_BROWSER_FORWARD, which arrive on the KEYBOARD hook and are invisible
+        to a mouse hook entirely. Taking only one of those meant the button
+        silently did nothing -- and with "hold to cross" on, that is not a
+        missing feature, it is a locked door."""
+        was = self._side_held
+        if down:
+            self._side_held |= bit
+        else:
+            self._side_held &= ~bit
+        if down and not self._side_seen:
+            self._side_seen = True
+            print("[portal] mouse side button detected -- hold it to cross")
+        return was != self._side_held
+
     def _may_cross(self):
         """Is leaving this machine something the user actually asked for?
 
@@ -932,8 +954,17 @@ class Portal:
         is the only way through, in which case nothing else will do."""
         if self._side_held:
             return True
-        if self._cross_button:
+        if self._cross_button and self._side_seen:
             return False
+        if self._cross_button:
+            # The option is on but this mouse has never sent a side button.
+            # Refusing every crossing would trap the pointer with no way to
+            # reach the checkbox that turns the option off.
+            if time.monotonic() - self._gentle_logged > 5.0:
+                self._gentle_logged = time.monotonic()
+                print("[portal] no side button has ever arrived from this "
+                      "mouse -- falling back to a deliberate push so nothing "
+                      "gets stuck")
         return self._has_momentum()
 
     @staticmethod
@@ -1114,6 +1145,16 @@ class Portal:
         supposed to look like."""
         step_x, step_y = SHOVE_DIRECTIONS[side]
         cx, cy = float(x), float(y)
+        if not self._display_at(target, cx, cy):
+            # The last report can carry the model just past the edge it left
+            # by. Starting a walk from out there ends it immediately, and the
+            # position recorded is the overshoot rather than the edge.
+            display = self._displays.get((target, self.active_display))
+            if display:
+                cx = self._clamp(cx, float(display["x"]),
+                                 float(display["x"]) + float(display["w"]))
+                cy = self._clamp(cy, float(display["y"]),
+                                 float(display["y"]) + float(display["h"]))
         sizes = [min(float(d["w"]), float(d["h"]))
                  for (device, _i), d in self._displays.items()
                  if device == target]
@@ -1648,11 +1689,8 @@ class Portal:
                              ctypes.POINTER(MSLLHOOKSTRUCT)).contents
             if not self.active:
                 if wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
-                    which = (ms.mouseData >> 16) & 0xFFFF
-                    if wParam == WM_XBUTTONDOWN:
-                        self._side_held |= which
-                    else:
-                        self._side_held &= ~which
+                    self._set_side((ms.mouseData >> 16) & 0xFFFF,
+                                   wParam == WM_XBUTTONDOWN)
                     if self._cross_button:
                         return 1
                 if (wParam == WM_MOUSEMOVE and
@@ -1755,11 +1793,8 @@ class Portal:
                         (self.active_target, "b", self.buttons, 0, 0))
                     return 1
                 elif wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
-                    which = (ms.mouseData >> 16) & 0xFFFF
-                    if wParam == WM_XBUTTONDOWN:
-                        self._side_held |= which
-                    else:
-                        self._side_held &= ~which
+                    self._set_side((ms.mouseData >> 16) & 0xFFFF,
+                                   wParam == WM_XBUTTONDOWN)
                     # The HID mouse report carries three buttons, so these were
                     # never forwarded anyway. While they are the crossing key,
                     # swallow them so a press cannot also fire Back in whatever
@@ -1805,6 +1840,13 @@ class Portal:
                         return 1
                 else:
                     self._esc_hist.clear()
+            # Mouse side buttons very often arrive HERE, as browser
+            # back/forward, rather than on the mouse hook. Same buttons, same
+            # meaning; take them either way.
+            if vk in SIDE_BUTTON_VK and (down or up):
+                self._set_side(SIDE_BUTTON_VK[vk], down)
+                if self._cross_button:
+                    return 1        # it is the crossing key, not navigation
             ctrl = self.mods & 0x11
             alt = self.mods & 0x44
             # A VERBATIM DEVICE OWNS THE WHOLE KEYBOARD. It is told to send

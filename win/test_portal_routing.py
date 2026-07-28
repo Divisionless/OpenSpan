@@ -187,6 +187,7 @@ broker.active_target = "device-1"
 broker.active_display = "device-1-1"
 broker.vx, broker.vy = -1925.0, 200.0
 broker._motion = ()
+broker._armed_until = 0.0                     # nothing armed going in
 broker._note_motion(4)                        # a careful, delicate move
 exits.clear()
 left_pc = broker._route_motion(80, 0)
@@ -218,6 +219,7 @@ check("a gentle move across a device's OWN seam still crosses",
 # explicit yes would just be in the way.
 broker._cross_button = True
 broker._side_held = 0
+broker._side_seen = True          # this mouse HAS sent one at some point
 broker.active = True
 broker.active_target = "device-1"
 broker.active_display = "device-1-1"
@@ -264,5 +266,35 @@ left_pc = broker._route_motion(80, 0)
 check("a held side button crosses even when the option is off",
       left_pc is True and len(exits) == 1)
 broker._side_held = 0
+
+# --- and the option must never lock the pointer in ------------------------
+# If the option is on but this mouse has never sent a side button -- plenty
+# report theirs as browser back/forward, or not at all -- refusing every
+# crossing would trap the pointer with no way to reach the checkbox that turns
+# the option off.
+broker._cross_button = True
+broker._side_held = 0
+broker._side_seen = False         # nothing has ever arrived
+broker._gentle_logged = 0.0
+broker.active = True
+broker.active_target = "device-1"
+broker.active_display = "device-1-1"
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._note_motion(600)          # a deliberate push
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("with no side button ever seen, a push still gets you out",
+      left_pc is True and len(exits) == 1)
+
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._armed_until = 0.0         # the previous push's 350 ms grace has expired
+broker._note_motion(3)            # ...but a drift still does not
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("and a gentle drift still does not", left_pc is False and not exits)
+broker._cross_button = False
+broker._side_seen = False
 
 print("RESULT: ALL PASS")
