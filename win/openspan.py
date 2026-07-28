@@ -157,7 +157,9 @@ IPAD_OFF_FILL = "#2b313d"   # iPad box when NOT connected -> muted grey
 IPAD_OFF_LINE = "#4a5468"
 IPAD_IDLE_FILL = "#413615"  # connected but portal OFF -> amber (idle/paused)
 IPAD_IDLE_LINE = "#f5c451"
-PORTAL = "#ffd43b"
+PORTAL = "#a78bfa"       # crossing edges -- violet, so they read as routes
+HOVER_FILL = "#1b1f2b"   # the detail card that appears on mouseover
+HOVER_LINE = "#3a4358"
 DANGER = "#e06c68"
 SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
 BORDER = "#39435a"  # card edge for the in-frame modal
@@ -1768,6 +1770,11 @@ class MultiArrangeCanvas(tk.Canvas):
         self.bind("<ButtonPress-1>", self._press)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<ButtonRelease-1>", self._release)
+        self._hover = None
+        self._hover_item = None
+        self.bind("<Motion>", self._on_hover)
+        self.bind("<Leave>", lambda _e: (setattr(self, "_hover", None),
+                                         self.delete("hovercard")))
         self.redraw()
         # Persist the v1->v2 migration immediately. A Mac can be paired before
         # the user drags anything, and the portal process must already know its
@@ -2013,23 +2020,92 @@ class MultiArrangeCanvas(tk.Canvas):
                 res_w, res_h = oriented_resolution(item)
                 refresh = item.get("refresh_hz", 60)
                 rotation = item.get("rotation", 0)
-            hz = int(refresh) if float(refresh).is_integer() else refresh
-            rotate_note = f" · {rotation}°" if rotation else ""
-            # Show the DIAGONAL exactly as typed -- not a derived width. The
-            # number on the screen should be the number that was entered.
-            diagonal = item.get("diagonal_in")
-            size_note = f"\n{float(diagonal):g}\"" if diagonal else ""
+            # ONE SHORT LINE. Resolution, refresh, rotation and size used to
+            # be stamped on every rectangle, which on a desk of portrait panels
+            # meant four lines of text in a box narrower than the text. The
+            # arrangement is a picture of where things ARE; the numbers belong
+            # where they are asked for, which is the hover card.
             self.create_text(
-                (x0 + x1) / 2, (y0 + y1) / 2,
-                text=f"{name}\n{res_w}×{res_h} @ {hz} Hz{rotate_note}"
-                     f"{size_note}",
-                fill=text_color, justify="center",
-                font=("Segoe UI", 8, "bold"))
+                (x0 + x1) / 2, (y0 + y1) / 2, text=self._short_label(key, item),
+                fill=text_color, justify="center", width=max(40, x1 - x0 - 10),
+                font=("Segoe UI", 9, "bold"))
             if chosen:
                 self.create_rectangle(
                     x1 - 10, y1 - 10, x1 + 2, y1 + 2,
                     fill=PORTAL, outline=PORTAL)
         self._draw_portals()
+        self._draw_hover()
+
+    def _short_label(self, key, item):
+        """What a rectangle says when nobody is asking for detail."""
+        if key[0] == "local":
+            return "This PC" + ("\nPRIMARY" if item["primary"] else "")
+        target = self.target(key[1])
+        # A device with one screen is named by the DEVICE -- "iPad" says more
+        # than "Display 1". A device with several is named by the screen, since
+        # the device is obvious from the group they form.
+        if len(target.get("displays", [])) <= 1:
+            return target["name"]
+        return item.get("name") or target["name"]
+
+    def _detail_lines(self, key, item):
+        """Everything about one surface, for the hover card."""
+        if key[0] == "local":
+            title = "This PC" + ("  ·  primary" if item["primary"] else "")
+            res_w, res_h, rotation = item["w"], item["h"], 0
+        else:
+            target = self.target(key[1])
+            screen = item.get("name") or ""
+            title = (target["name"] if screen in ("", target["name"])
+                     else f"{target['name']}  ·  {screen}")
+            res_w, res_h = oriented_resolution(item)
+            rotation = int(item.get("rotation", 0))
+        refresh = item.get("refresh_hz", 60)
+        hz = int(refresh) if float(refresh).is_integer() else refresh
+        lines = [f"{res_w} × {res_h} @ {hz} Hz"]
+        if rotation:
+            lines.append(f"rotated {rotation}°")
+        diagonal = item.get("diagonal_in")
+        if diagonal:
+            lines.append(f"{float(diagonal):g}\" diagonal")
+        x, y, width, height = self._rect(key, item)
+        lines.append(f"desk  x {x} → {x + width}    y {y} → {y + height}")
+        return title, lines
+
+    def _hit_key(self, event):
+        world_x, world_y = self.c2w(event.x, event.y)
+        for key, item in reversed(list(self._items())):
+            x, y, width, height = self._rect(key, item)
+            if x <= world_x <= x + width and y <= world_y <= y + height:
+                return key, item
+        return None, None
+
+    def _on_hover(self, event):
+        if self.action:                       # mid-drag: stay out of the way
+            return
+        key, item = self._hit_key(event)
+        if key == self._hover:
+            return
+        self._hover = key
+        self._hover_item = item
+        self._draw_hover()
+
+    def _draw_hover(self):
+        self.delete("hovercard")
+        if not self._hover or not self._hover_item:
+            return
+        title, lines = self._detail_lines(self._hover, self._hover_item)
+        pad, lead = 9, 15
+        left, bottom = 10, int(self.winfo_height()) - 10
+        text_id = self.create_text(
+            left + pad, bottom - pad, anchor="sw", justify="left",
+            text=title + "\n" + "\n".join(lines),
+            fill=FG, font=("Segoe UI", 8), tags="hovercard")
+        bx0, by0, bx1, by1 = self.bbox(text_id)
+        self.create_rectangle(
+            bx0 - pad, by0 - pad, bx1 + pad, by1 + pad,
+            fill=HOVER_FILL, outline=HOVER_LINE, width=1, tags="hovercard")
+        self.tag_raise(text_id)
 
     def _draw_portals(self):
         for portal in compute_portals(self.config):
