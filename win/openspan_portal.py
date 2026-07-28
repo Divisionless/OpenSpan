@@ -688,6 +688,12 @@ class Portal:
                  else monitor["y"] + monitor["h"] - inset)
         return int(round(x)), int(round(y))
 
+    def _screen(self, target, display_id):
+        """A display's human name, for the log. "it went to the wrong screen"
+        is unanswerable from a log that never says WHICH screen."""
+        display = self._displays.get((target, display_id))
+        return (display or {}).get("name", display_id)
+
     def _display_at(self, target, x, y):
         """Which of this device's screens contains a desk point."""
         for (device, _display_id), display in self._displays.items():
@@ -860,10 +866,18 @@ class Portal:
         # portal we FIRST came in by -- on the wrong monitor.
         self.cur = self._portal_for(target, display) or self.cur
         self.entry_along = float(along)
+        if target == old_target and display != old_display:
+            print(f"[portal]  ·  {target}: "
+                  f"{self._screen(target, old_display)} --{from_side or '?'}--> "
+                  f"{self._screen(target, display)} "
+                  f"at ({self.vx:.0f},{self.vy:.0f})")
         if target != old_target:
             self._emit_kbd()
-            print(f"[portal] >>> direct handoff {old_target}/{old_display} "
-                  f"-> {target}/{display}")
+            print(f"[portal] >>> direct handoff "
+                  f"{old_target}/{self._screen(old_target, old_display)} "
+                  f"--{from_side or '?'}--> "
+                  f"{target}/{self._screen(target, display)} "
+                  f"at ({self.vx:.0f},{self.vy:.0f})")
 
     def _route_motion(self, dx, dy):
         """Advance the virtual desk cursor; return True after exiting to PC."""
@@ -961,7 +975,8 @@ class Portal:
         user32.SetCursorPos(self.cx, self.cy)
         name = portal.get("target_name", self.active_target)
         print(f"[portal] >>> {name} mode ON via {portal['axis']}"
-              f"={portal['line']}  (Esc x3 to bail)")
+              f"={portal['line']} -> {self._screen(self.active_target, self.active_display)}"
+              f" at ({self.vx:.0f},{self.vy:.0f})  (Esc x3 to bail)")
         # Announce whatever is ALREADY physically held. _kbd_proc keeps
         # self.mods current in every mode, but nothing told the device we just
         # entered -- so "hold Ctrl, cross the edge, scroll" arrived as a BARE
@@ -1047,7 +1062,9 @@ class Portal:
         name = self.active_target or "target"
         self.active_target = None
         self.active_display = None
-        print(f"[portal] <<< {name} mode OFF (control back on PC)")
+        print(f"[portal] <<< {name} mode OFF (control back on PC)"
+              + (f" -- pinned {pin_side} at ({self.vx:.0f},{self.vy:.0f})"
+                 if pinned else ""))
 
     def _hit_portal(self, x, y):
         for p in self.portals:
