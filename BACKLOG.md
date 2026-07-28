@@ -4,6 +4,43 @@ Not started. Recorded so it is not lost, in the order it was raised.
 
 ---
 
+## A dying portal must not leave a button held  ·  do this first
+
+Doug, 28 July: *"when the program closes it does not hold down a button — just
+now when you closed it it left a held down to the managed mac and i had to
+disable bluetooth to recover it."*
+
+**Severity is the point.** A held button on a machine you are not sitting at,
+with no keyboard or mouse attached to it, is unrecoverable from that machine.
+Disabling Bluetooth was the only way out. Everything else in this file is
+convenience; this one strands the user.
+
+A HID report is STATE, so whatever the last report said is what the device
+believes until something says otherwise. Kill the portal mid-drag and the last
+thing it said was "button down", forever.
+
+**The graceful path is the easy half.** Portal shutdown, the app's Stop button
+and window close should each send a full release to every connected lane before
+exiting — `{"cmd":"mouse","buttons":0,...}` and `{"cmd":"kbd","mods":0,"keys":[]}`.
+
+**The graceful path is also not enough.** A hard kill cannot run cleanup, and
+that is exactly how the exe is replaced during development (`taskkill /F`), how
+a crash ends, and how Windows shutdown can end it. So the release has to be
+owned by something that survives the portal's death:
+
+> **The guest daemon should release everything when its command socket closes.**
+
+It already accepts one connection per lane and can see the disconnect. On close:
+zero the buttons, zero the keys, once. That covers every way the Windows side can
+die, including the ones it cannot anticipate — and it costs two reports.
+
+Belt and braces worth considering alongside it: a watchdog on the daemon that
+releases if no command arrives for N seconds while a button is held. A button
+held for thirty seconds with no other traffic is not a drag, it is a corpse.
+
+
+---
+
 ## Target settings panel
 
 An inline panel per device (never a pop-out) recording what OpenSpan silently
