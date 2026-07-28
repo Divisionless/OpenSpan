@@ -232,6 +232,35 @@ def _normalize_display(display, fallback_id, fallback_name):
     return row
 
 
+def dedupe_display_ids(config):
+    """No two devices may name a screen the same thing.
+
+    A screen's id is only ever meaningful inside its own device, so a clash was
+    survivable -- until something keyed by the id alone met it. It happened for
+    real: the display editor minted "mac-N" whatever device was open, so a third
+    device's second screen collided with the Managed Mac's. Rename the intruder
+    rather than leave a config that reads as if one screen belongs to two
+    machines. Geometry is recomputed from the rectangles, so nothing refers to
+    the old name afterwards."""
+    taken = set()
+    renamed = []
+    for device in config.get("devices", []):
+        device_id = str(device.get("id") or "device")
+        for display in device.get("displays", []):
+            ident = str(display.get("id") or "")
+            if ident and ident not in taken:
+                taken.add(ident)
+                continue
+            probe = 1
+            while f"{device_id}-{probe}" in taken:
+                probe += 1
+            fresh = f"{device_id}-{probe}"
+            renamed.append((ident or "(blank)", fresh))
+            display["id"] = fresh
+            taken.add(fresh)
+    return renamed
+
+
 def normalize_config(raw, live_monitors):
     """Return a complete v2 config while preserving every v1 iPad setting."""
     if not live_monitors:
@@ -378,6 +407,10 @@ def normalize_config(raw, live_monitors):
                     neighbors.append((display["x"], display["y"],
                                       display["w"], display["h"]))
             head["x"], head["y"] = snap_rect_to_neighbors(rect, neighbors)
+    # A screen's id is only meaningful inside its own device, but a clash still
+    # reads as if one screen belongs to two machines -- and the editor really
+    # did mint one. Heal it on load, before any geometry is derived from it.
+    dedupe_display_ids(result)
     return refresh_geometry(result)
 
 
@@ -729,7 +762,7 @@ def _portal(target, display, monitor, edge, axis, line, span, sign, exit_to):
     }
 
 
-def validate_mac_displays(rows):
+def validate_mac_displays(rows, device_id=None):
     """Normalize editor rows; raises ValueError with a user-facing message."""
     if not 1 <= len(rows) <= 8:
         raise ValueError("Choose between 1 and 8 Mac displays.")
@@ -762,10 +795,11 @@ def validate_mac_displays(rows):
             # SAME colliding name -- two displays then share one id, and the
             # portal's (target, id) dict silently drops one panel (misrouted
             # input) while the canvas can no longer drag it.
+            base = device_id or "display"
             probe = index + 1
-            while f"mac-{probe}" in seen:
+            while f"{base}-{probe}" in seen:
                 probe += 1
-            ident = f"mac-{probe}"
+            ident = f"{base}-{probe}"
         seen.add(ident)
         row = {
             "id": ident,

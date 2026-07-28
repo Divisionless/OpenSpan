@@ -28,8 +28,8 @@ from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
     BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
     compute_portals, device_by_id, physical_size,
-    normalize_config, oriented_resolution, portal_signature,
-    refresh_geometry, remove_device,
+    dedupe_display_ids, normalize_config, oriented_resolution,
+    portal_signature, refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
 )
@@ -1833,7 +1833,7 @@ class MultiArrangeCanvas(tk.Canvas):
         return target["displays"] if target else []
 
     def replace_mac_displays(self, rows, device_id=None):
-        rows = validate_mac_displays(rows)
+        rows = validate_mac_displays(rows, device_id)
         target = self.target(device_id) if device_id else (
             self.targets[0] if self.targets else None)
         if target is None:
@@ -2190,13 +2190,20 @@ class MacDisplayEditor:
     """Dark, modal editor for a DEVICE's displays (count/resolution/rotation/
     Hz/physical size). Works on any device -- `device_id` selects which."""
 
+    @staticmethod
+    def _device_label(canvas, device_id):
+        for device in canvas.config.get("devices", []):
+            if device.get("id") == device_id:
+                return device.get("name") or device_id
+        return "Device"
+
     def __init__(self, parent, canvas, device_id=None):
         self.parent = parent
         self.canvas = canvas
         self.device_id = device_id
         self.rows = []
         self.top = tk.Toplevel(parent)
-        self.top.title("Managed Mac displays")
+        self.top.title(f"{self._device_label(canvas, device_id)} displays")
         self.top.geometry("900x420")
         self.top.minsize(820, 340)
         self.top.configure(bg=BG)
@@ -2204,7 +2211,8 @@ class MacDisplayEditor:
         _paint_dark_titlebar(self.top)
         tk.Label(
             self.top,
-            text="Managed Mac display configuration",
+            text=f"{self._device_label(canvas, device_id)} "
+                 f"display configuration",
             bg=BG, fg=FG, font=("Segoe UI Semibold", 15)).pack(
                 anchor="w", padx=18, pady=(16, 2))
         tk.Label(
@@ -2240,6 +2248,20 @@ class MacDisplayEditor:
         self.top.grab_set()
         self.top.focus_force()
 
+    def _fresh_display_id(self):
+        """An id belonging to THIS device.
+
+        Adding a screen used to mint "mac-N" whatever device you were editing --
+        the last hardcoded remnant of the two-device model, living in the one
+        dialog that is used for every device. A third device's second screen
+        therefore came out as "mac-2", colliding with the Mac's own."""
+        base = self.device_id or "display"
+        used = {row["id"] for row in self.rows}
+        index = len(self.rows) + 1
+        while f"{base}-{index}" in used:
+            index += 1
+        return f"{base}-{index}"
+
     def _add_row(self, display=None):
         if len(self.rows) >= 8:
             return
@@ -2247,9 +2269,9 @@ class MacDisplayEditor:
         frame = tk.Frame(self.body, bg=BG)
         frame.pack(fill="x", pady=3)
         values = {
-            "id": display.get("id", f"mac-{len(self.rows) + 1}"),
+            "id": display.get("id", self._fresh_display_id()),
             "name": tk.StringVar(
-                value=display.get("name", f"Mac Display {len(self.rows) + 1}")),
+                value=display.get("name", f"Screen {len(self.rows) + 1}")),
             "res_w": tk.StringVar(value=str(display.get("res_w", 3840))),
             "res_h": tk.StringVar(value=str(display.get("res_h", 2160))),
             "rotation": tk.StringVar(
@@ -4655,6 +4677,12 @@ class App:
             r = subprocess.CompletedProcess(
                 [], 1, "", f"No radio is assigned to {label}")
         else:
+            # The guest will listen on this port, but Windows can only
+            # reach it through a NAT rule on the VM. Devices added after start
+            # had no rule: the lane came up perfectly, the guest-side check for
+            # a listening socket passed, and then every command from this side
+            # timed out -- so pairing failed with a healthy daemon behind it.
+            ensure_device_forwards(self.canvas.config)
             reset_arg = " --reset" if reset else ""
             unit = f"openspanble@{device_id}"
             restart = f"systemctl restart {unit}; " if reset else ""

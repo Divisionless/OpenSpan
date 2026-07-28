@@ -571,3 +571,48 @@ _st["inflight"] = True
 check("busy: an in-flight device defers the audio auto-reconnect",
       app._any_device_busy() is True)
 _st["inflight"] = False
+
+
+# --- a new SCREEN belongs to the device you are editing ---------------------
+# Adding a screen used to mint "mac-N" whatever device was open -- the last
+# hardcoded remnant of the two-device model, in the one dialog used for every
+# device. A third device's second screen therefore came out as "mac-2", the
+# same id the Managed Mac's own second screen already had.
+class _FakeEditor:
+    _fresh_display_id = openspan.MacDisplayEditor._fresh_display_id
+
+    def __init__(self, device_id, rows):
+        self.device_id = device_id
+        self.rows = [{"id": r} for r in rows]
+
+
+check("a device's FIRST added screen is named after that device",
+      _FakeEditor("device-1", []).\
+      _fresh_display_id() == "device-1-1")
+check("and so is its second -- never 'mac-2'",
+      _FakeEditor("device-1", ["device-1-1"]).\
+      _fresh_display_id() == "device-1-2")
+check("an id already taken on this device is skipped, not reused",
+      _FakeEditor("device-1", ["device-1-1", "device-1-2"]).\
+      _fresh_display_id() == "device-1-3")
+check("a device with no id still gets something, and not a Mac one",
+      _FakeEditor(None, []).\
+      _fresh_display_id().startswith("display-"))
+
+# and a config that already carries a clash must heal itself on load, because
+# one was written before the editor was fixed
+_clashed = {"devices": [
+    {"id": "mac", "displays": [{"id": "mac-1"}, {"id": "mac-2"}]},
+    {"id": "device-1", "displays": [{"id": "device-1-1"}, {"id": "mac-2"}]},
+    {"id": "device-2", "displays": [{"id": "mac-2"}, {"id": ""}]},
+]}
+_renamed = openspan.dedupe_display_ids(_clashed)
+_after = [[_s["id"] for _s in _d["displays"]] for _d in _clashed["devices"]]
+check("the device that had the id first keeps it",
+      _after[0] == ["mac-1", "mac-2"])
+check("a clashing id is renamed onto the device it actually belongs to",
+      _after[1] == ["device-1-1", "device-1-2"])
+check("and so is a third clash, and a blank id",
+      _after[2] == ["device-2-1", "device-2-2"])
+check("no id is left shared after the migration",
+      len({i for row in _after for i in row}) == 6)

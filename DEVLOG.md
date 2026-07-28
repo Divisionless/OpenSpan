@@ -789,3 +789,31 @@ The "no silent wall" invariant now leans from inside each link's live band
 rather than from a screen's centre.
 
 Twelve invariants, eight suites.
+
+## 2026-07-28 — A third device: the lane was perfect, Windows just had no route to it
+
+Doug added a Managed Laptop. *"adding process went really smoothly until i tried
+to pair it."*
+
+The guest was flawless: `openspanble@device-1` active, hci1
+(3C:6A:D2:3C:D4:4E), advertising name set, `:9957` listening, GATT registered.
+From Windows, `127.0.0.1:9957` simply timed out — the VM's NAT table had rules
+for 9955, 9956, ssh and audio, and nothing for the new device.
+
+`ensure_device_forwards()` was only ever called at startup and during
+provisioning, so a device added afterwards had no rule. The pair worker then
+looked like it was working: its readiness check runs `ss -ltn` **on the guest**,
+which passed, and only the next step — talking to the port from Windows — could
+fail. A healthy daemon behind an unreachable port.
+
+Fixed by ensuring the forwards from inside the pair worker, before anything
+needs the port.
+
+**And a second fault the save exposed:** the display editor minted new screen ids
+as `mac-N` whatever device was open — the last hardcoded remnant of the
+two-device model, living in the one dialog used for every device. The laptop's
+second screen therefore came out as `mac-2`, the id the Managed Mac's own second
+screen already had. Ids are now derived from the device being edited, the
+fallback in `validate_mac_displays` takes the device too, `dedupe_display_ids()`
+heals a config that already carries a clash, and the dialog's title and heading
+name the actual device instead of saying "Managed Mac" at everyone.
