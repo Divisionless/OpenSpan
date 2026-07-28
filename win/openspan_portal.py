@@ -85,8 +85,16 @@ SEND_HZ = 120
 # clamps. That is only true when LEAVING a device, so the gate applies there and
 # never to a seam between two screens of the same device, where the target's
 # pointer really does flow across.
-CROSS_SPEED = 1200.0       # raw mouse counts per second
-CROSS_WINDOW = 0.10        # seconds of movement that count as momentum
+CROSS_SPEED = 900.0        # counts per second that ARMS a crossing
+CROSS_WINDOW = 0.10        # seconds of movement that count as one push
+CROSS_GRACE = 0.35         # how long a push stays armed
+#
+# Momentum ARMS a crossing rather than gating it at the instant of contact,
+# because measuring at contact fails twice over: a hand decelerates as it
+# arrives, so the push that got it there has already decayed; and on the PC side
+# the cursor STOPS at the monitor edge, so pushing harder moves it no further,
+# reports no motion, and could never re-arm. Push deliberately and the boundary
+# is open for a moment. Drift into it and it never opens at all.
 CORNER_ZONE = 50.0         # desk units (half an inch) at both ends of every
                            # edge. It has to be big enough to protect a corner
                            # control and no bigger: at one inch it took a THIRD
@@ -369,6 +377,8 @@ class Portal:
     _rem_y = 0.0                # truncated away to nothing
     _motion = ()                # recent (time, raw distance) for the momentum
     _last_pt = None             # gate; _last_pt tracks the free Windows cursor
+    _armed_until = 0.0          # a deliberate push holds the boundary open
+    _gentle_logged = 0.0        # rate-limit for the "too gentle" note
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -768,17 +778,18 @@ class Portal:
         return (display or {}).get("name", display_id)
 
     def _note_motion(self, distance):
-        """Remember how far the hand has moved lately."""
+        """Watch for a deliberate push, and arm crossing when one happens."""
         now = time.monotonic()
         self._motion = tuple(
             row for row in self._motion if now - row[0] <= CROSS_WINDOW
         ) + ((now, float(distance)),)
+        speed = sum(d for _t, d in self._motion) / CROSS_WINDOW
+        if speed >= CROSS_SPEED:
+            self._armed_until = now + CROSS_GRACE
 
     def _has_momentum(self):
-        """Is the hand moving deliberately, or working carefully?"""
-        now = time.monotonic()
-        travelled = sum(d for t, d in self._motion if now - t <= CROSS_WINDOW)
-        return travelled / CROSS_WINDOW >= CROSS_SPEED
+        """Did the hand push deliberately, recently enough to mean it?"""
+        return time.monotonic() < self._armed_until
 
     @staticmethod
     def _corner_safe_span(display, side):
@@ -1308,6 +1319,10 @@ class Portal:
             leaving = (destination.get("kind") == "local"
                        or destination.get("target") != self.active_target)
             if leaving and not self._has_momentum():
+                if time.monotonic() - self._gentle_logged > 2.0:
+                    self._gentle_logged = time.monotonic()
+                    print(f"[portal] stayed put at the {side} edge -- too "
+                          f"gentle to cross (push to leave)")
                 continue
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
