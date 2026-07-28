@@ -532,5 +532,36 @@ for (target, display_id), display in broker._displays.items():
 check("driving hard into a corner never crosses anywhere",
       not escaped, "; ".join(sorted(set(escaped))[:4]))
 
+
+# =========================================================================
+# P7. NO CROSSING EVER PAYS FOR A RE-SYNC.
+#
+# A re-sync ends at a corner of the arrangement. If it happens because someone
+# crossed, that crossing then has to carry the pointer all the way back -- on
+# this desk about 110 reports, a second and a half of the pointer sailing across
+# two screens while they watch. It is correct and it is horrible, and the answer
+# is to do it when the lane comes up instead, while nobody is looking.
+# =========================================================================
+expensive = []
+for portal in broker.portals:
+    target = portal.get("target")
+    lo, hi = portal["span"]
+    broker._last_seen = {}
+    broker.active = False
+    while not broker.q.empty():
+        broker.q.get_nowait()
+    broker._park_at_door(target)          # what the lane coming up now does
+    parked = len(drain_reports(broker, target))
+    broker.enter(portal, (lo + hi) / 2.0)
+    crossing = len(drain_reports(broker, target))
+    if crossing > 32:
+        expensive.append(
+            f"{portal.get('target_name', target)} via {portal['axis']}"
+            f"={portal['line']}: {crossing} reports "
+            f"(parking cost {parked}, which nobody waits for)")
+
+check("a crossing after the lane came up is cheap -- the re-sync already ran",
+      not expensive, "; ".join(expensive[:4]))
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

@@ -690,3 +690,37 @@ A 120 px mouse move becomes 412 iPad px before iPadOS sees it, 38% of that
 screen in a single report. Lowering *sensitivity* would slow careful movement
 too; the acceleration is what jumps. `pointer_accel` 0 on the iPad is the
 targeted change.
+
+## 2026-07-28 — Re-sync when the lane comes up, not when someone crosses
+
+Doug, after the corner work: *"crossing this boundary lands me in the top left
+of the ipad screen."*
+
+Measured on the live layout, and he was describing the re-sync landing exactly:
+the iPad's plan ends at (−2333, 0), which **is** the iPad's top-left corner.
+
+The corner fix had already made every *warm* crossing land correctly — replaying
+all three PC entrances shows the pointer arriving within 10 desk units of the
+model. What remained was the **cold** crossing: the first one of a session had
+to run the re-sync itself, so it started at a corner of the arrangement and then
+carried the pointer all the way back — 106–110 reports, about a second and a
+half of it sailing across two screens while he watched.
+
+The answer is not to make the re-sync cheaper, it is to stop doing it at the
+worst possible moment. **A lane coming up is the right moment:** nobody is
+looking at that device, and there is time. `_park_at_door()` re-syncs then and
+leaves the pointer at the entrance it is most likely to be met at, so no
+crossing ever pays for a re-sync. New invariant asserts exactly that, with a
+32-report budget; the parking cost is unbounded and nobody waits for it.
+
+**The other report was geometry, not a fault.** "Moving across puts me into the
+managed mac display shown in the bottom right corner" — DISPLAY1 only touches
+the bottom 833 desk units of Mac Display 3's right edge (that screen is 1569
+tall), so a crossing from it lands low by construction. Verified that arrivals
+track the crossing point along every boundary:
+
+```
+Managed Mac via x=4    cross at -1080 -> (-99, -833)
+                       cross at  -540 -> (-99, -416)
+                       cross at     0 -> (-99, -100)
+```

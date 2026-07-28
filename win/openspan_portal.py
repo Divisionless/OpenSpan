@@ -551,6 +551,12 @@ class Portal:
                           f"{'READY' if ready else 'not ready'} "
                           f"(kbd_subscribed={ready})", flush=True)
                 self.target_ready[target] = ready
+                # A lane that has just come up is the cheapest possible moment
+                # to find out where its pointer is: nobody is looking at it.
+                # Doing it here means no crossing ever pays for a re-sync.
+                if ready and target not in self._last_seen \
+                        and not (self.active and self.active_target == target):
+                    self._park_at_door(target)
                 if not ready:
                     # The lane went away. Anything could have moved that
                     # device's pointer while we could not see it -- its own
@@ -1035,6 +1041,33 @@ class Portal:
                  else f" -> ({x:.0f},{y:.0f})")
               + f" on {self._screen(target, self._last_seen[target][0])}")
         return (x, y)
+
+    def _park_at_door(self, target):
+        """Establish a device's pointer BEFORE anyone crosses to it.
+
+        A re-sync ends at a corner of the arrangement, and the crossing that
+        triggered it then has to carry the pointer all the way back -- on this
+        desk about 110 reports, a second and a half of the pointer sailing
+        across two screens while the user watches. Correct, and horrible.
+
+        The fix is to stop doing it at the worst possible moment. The lane
+        coming up is the right moment: nobody is looking at that device, and
+        there is time. So re-sync then, and leave the pointer at the entrance it
+        is most likely to be met at. The first crossing is then no more
+        expensive than any other."""
+        portal = next((entry for entry in self.portals
+                       if entry.get("target") == target), None)
+        if portal is not None:
+            lo, hi = portal["span"]
+            door = self._entry_point(portal, (lo + hi) / 2.0)
+        else:
+            display = next((row for (device, _i), row in self._displays.items()
+                            if device == target), None)
+            if not display:
+                return
+            door = (float(display["x"]) + float(display["w"]) / 2,
+                    float(display["y"]) + float(display["h"]) / 2)
+        self._resync(target, restore=door)
 
     def _place(self, target, display, vx, vy):
         """The ONLY discontinuous assignment of the model position.
