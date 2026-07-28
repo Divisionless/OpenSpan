@@ -410,6 +410,7 @@ class Portal:
     _chord_target = None        # a chord gates ONLY the device it runs on
     _side_held = 0              # which mouse side buttons are down (bitmask)
     _cross_button = False       # hold a side button to cross a device edge
+    _button_jumps = False       # ...and while held, go to the NEAREST surface
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -498,6 +499,14 @@ class Portal:
         # that is not moving between machines.
         self._cross_button = bool(
             self.cfg.get("cross_requires_side_button", False))
+        # While a side button is held, ignore the adjacency graph and go to
+        # whatever surface is NEAREST in the direction of travel. The graph
+        # exists to make an accidental edge crossing land somewhere sensible;
+        # a held button is not an accident, so the question stops being "what
+        # does the layout say is next to this edge" and becomes "what is over
+        # there" -- which is what the hand meant.
+        self._button_jumps = bool(
+            self.cfg.get("side_button_jumps_nearest", False))
         self._device_remap = {
             device["id"]: (dict(device["modifier_remap"])
                            if isinstance(device.get("modifier_remap"), dict)
@@ -708,6 +717,79 @@ class Portal:
             if portal.get("target") == target                     and portal.get("target_display") == display:
                 return portal
         return None
+
+    _DIR = {"left": (-1.0, 0.0), "right": (1.0, 0.0),
+            "top": (0.0, -1.0), "bottom": (0.0, 1.0)}
+
+    def _surfaces(self):
+        """Everything the pointer can be on: every device screen, every monitor."""
+        for (device, display_id), display in self._displays.items():
+            yield ("target", device, display_id, display)
+        for name, monitor in self._monitors.items():
+            yield ("local", None, name, monitor)
+
+    @staticmethod
+    def _surface_rect(kind, item):
+        if kind == "local":
+            return (float(item.get("layout_x", item["x"])),
+                    float(item.get("layout_y", item["y"])),
+                    float(item.get("layout_w", item["w"])),
+                    float(item.get("layout_h", item["h"])))
+        return (float(item["x"]), float(item["y"]),
+                float(item["w"]), float(item["h"]))
+
+    def _nearest_surface(self, side, point):
+        """The closest surface THAT WAY, ignoring what touches what.
+
+        Distance is measured from the point to the rectangle itself, so a big
+        screen further off-axis does not beat a small one directly ahead. Only
+        surfaces actually lying in the direction of travel are considered --
+        holding the button and pushing left should never send you right."""
+        step_x, step_y = self._DIR[side]
+        px, py = point
+        best = None
+        for kind, device, ident, item in self._surfaces():
+            if kind == "target" and (device, ident) == (
+                    self.active_target, self.active_display):
+                continue
+            if kind == "target" and not self.target_ready.get(device, False):
+                continue
+            x, y, width, height = self._surface_rect(kind, item)
+            cx, cy = x + width / 2, y + height / 2
+            # must be THAT way, by its centre
+            if step_x and (cx - px) * step_x <= 0:
+                continue
+            if step_y and (cy - py) * step_y <= 0:
+                continue
+            gap_x = max(x - px, 0.0, px - (x + width))
+            gap_y = max(y - py, 0.0, py - (y + height))
+            distance = math.hypot(gap_x, gap_y)
+            if best is None or distance < best[0]:
+                best = (distance, kind, device, ident, item)
+        return best
+
+    def _jump_nearest(self, side, point):
+        """Hand control to the nearest surface that way. True if we left."""
+        found = self._nearest_surface(side, point)
+        if not found:
+            return None
+        _distance, kind, device, ident, item = found
+        opposite = {"left": "right", "right": "left",
+                    "top": "bottom", "bottom": "top"}[side]
+        x, y, width, height = self._surface_rect(kind, item)
+        along = point[1] if side in ("left", "right") else point[0]
+        if kind == "local":
+            print(f"[portal] jump: nearest {side} is {ident} -- returning "
+                  f"to the PC")
+            self.leave(exit_to=self._local_exit_point(
+                {"monitor": ident}, opposite, along), pin_side=side)
+            return True
+        print(f"[portal] jump: nearest {side} is "
+              f"{self._screen(device, ident)}")
+        self._switch_target(
+            {"kind": "target", "target": device, "display": ident},
+            opposite, along, from_side=side)
+        return False
 
     def _matching_link(self, side, along):
         for link in self.links:
@@ -1371,6 +1453,11 @@ class Portal:
         # points per lean plus up to 300 ms of travel, gone from the model and
         # never recovered -- which is exactly the drift they were meant to stop.
         for _overshoot, side, along in sorted(crossings, reverse=True):
+            # A HELD BUTTON MEANS "OVER THERE", not "wherever the graph says".
+            if self._button_jumps and self._side_held and not self.buttons:
+                left = self._jump_nearest(side, (self.vx, self.vy))
+                if left is not None:
+                    return left
             link = self._matching_link(side, along)
             if not link:
                 continue

@@ -688,7 +688,8 @@ def portal_signature(config):
     # above, so including them would add nothing but the display names they
     # carry -- and a rename would then drop the portal's hooks mid-use.
     return json.dumps(
-        [monitors, devices, bool(config.get("cross_requires_side_button"))],
+        [monitors, devices, bool(config.get("cross_requires_side_button")),
+         bool(config.get("side_button_jumps_nearest"))],
         sort_keys=True, default=str)
 
 

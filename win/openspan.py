@@ -3535,6 +3535,15 @@ class App:
             variable=self.cross_button,
             command=self._on_cross_button).grid(
             row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 3))
+        self.button_jumps = tk.BooleanVar(
+            value=bool(self.canvas.config.get(
+                "side_button_jumps_nearest", False)))
+        ttk.Checkbutton(
+            ctl, text="↦  …and go straight to the nearest screen that way",
+            variable=self.button_jumps,
+            command=self._on_button_jumps).grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=(26, 5),
+            pady=(0, 3))
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -4053,6 +4062,17 @@ class App:
                 pass
         except Exception:  # noqa: BLE001
             pass
+
+    def _on_button_jumps(self):
+        """While a side button is held, ignore adjacency and go to the nearest."""
+        on = bool(self.button_jumps.get())
+        self.canvas.config["side_button_jumps_nearest"] = on
+        self.canvas.save()
+        _emit("event",
+              "with a side button held, the pointer now goes to the NEAREST "
+              "screen that way, whatever the layout says is adjacent."
+              if on else
+              "crossings follow the arrangement again.")
 
     def _on_cross_button(self):
         """Require an explicit hold before control leaves this machine."""
