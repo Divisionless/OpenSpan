@@ -724,3 +724,68 @@ Managed Mac via x=4    cross at -1080 -> (-99, -833)
                        cross at  -540 -> (-99, -416)
                        cross at     0 -> (-99, -100)
 ```
+
+## 2026-07-28 — The sender was cancelling every re-sync, and a boundary you could leave by but not return through
+
+Two faults, found together after the display resolutions were corrected.
+
+### 1. sender() summed a re-sync into nothing
+
+A re-sync is three deliberate movements — shove hard left, shove hard up, walk
+back — and its whole purpose is that the device **clamps between them**.
+`sender()` summed a tick's motion into one net vector before putting it on the
+wire. Those three cancel algebraically: the pointer never reached an edge, never
+clamped, and the position the model then recorded as measured fact had never
+been established at all.
+
+Every re-sync on a device that was *not* running target-acceleration
+compensation had therefore been a no-op since the day it was written — the iPad,
+in other words. The Mac escaped only because its compensated reports already
+took a separate path that kept them individually.
+
+Fixed by never merging two deliberate movements: an exact report (a shove, a
+warp) is emitted on its own; only consecutive live hook samples — one continuous
+movement inside one 8 ms tick — are coalesced, and never across an exact report.
+Splitting a large delta into ≤127 chunks is still fine; it is only *merging*
+that destroys the movement.
+
+Measured after: the iPad's re-sync emits **31 intact reports** and the pointer
+lands **1 desk unit** from the model. The Mac, 110 reports, 6 units.
+
+Found by three independent lenses of a 29-agent investigation, each arriving at
+it separately.
+
+### 2. A boundary you could leave by but not return through
+
+Doug: *"crossing this boundary still acts strange."* The log said it outright:
+
+```
+resync mac: ... back to (-59,-800)          <- exited here
+<<< mac mode OFF -- resynced to (-59,-800)
+>>> Managed Mac mode ON ... at (-99,-352)   <- had to re-enter far below
+```
+
+The corner rule was being applied to each **screen's own edge**, but the two
+sides of a boundary have different edges. Mac Display 3's right edge runs
+y ∈ [−1569, 0]; the PC monitor beside it covers only [−833, 0]:
+
+```
+EXIT band  (trimmed from the SCREEN's edge): [-833, -100]
+ENTRY band (trimmed from the SPAN)         : [-733, -100]
+              -> [-833, -733] was exit-only
+```
+
+Now both sides trim the **shared overlap**, which is the one thing they agree
+on, and arrivals are clamped into that same band — so the way back is open at
+the exact point you land. A consequence worth knowing: where a neighbour spans
+only part of an edge, the middle of that edge can legitimately be a wall.
+
+### Testing
+
+`sender()` split into `_flush_queue()` so a test can drive the **real** batching.
+Every previous test walked the *queue*, which is why none of them could see
+fault 1. New invariant: **a re-sync survives the sender and really does clamp.**
+The "no silent wall" invariant now leans from inside each link's live band
+rather than from a screen's centre.
+
+Twelve invariants, eight suites.

@@ -197,40 +197,51 @@ check("the model takes ALL the motion the wire carried (no gate eats any)",
       worst[1] < 1e-6,
       f"worst drift {worst[1]:.3f} desk units on {worst[0]}")
 
-# and a single sustained lean must actually cross, not stall against a gate
+# and a single sustained lean must actually cross, not stall against a gate.
+# Leaning is done from inside each link's LIVE BAND -- the shared overlap minus
+# a corner at each end -- because that is the only place a crossing is meant to
+# fire. A screen's own centre is not necessarily in it: where a neighbour spans
+# only part of an edge, the middle of that edge can legitimately be a wall.
 stalled = []
-for (target, display_id), display in broker._displays.items():
-    for side, (dx, dy) in (("left", (-40, 0)), ("right", (40, 0)),
-                           ("top", (0, -40)), ("bottom", (0, 40))):
+for link in broker.links:
+    source = link["source"]
+    if source.get("kind") != "target":
+        continue
+    key = (source.get("target"), source.get("display"))
+    display = broker._displays.get(key)
+    if not display:
+        continue
+    target, display_id = key
+    lo, hi = broker._live_band(link)
+    if hi <= lo:
+        continue
+    push = {"left": (-40, 0), "right": (40, 0),
+            "top": (0, -40), "bottom": (0, 40)}[link["side"]]
+    for frac in (0.05, 0.5, 0.95):
+        along = lo + (hi - lo) * frac
         broker.active = True
+        broker._last_seen = {}
         broker.active_target, broker.active_display = target, display_id
         broker.vx = float(display["x"]) + float(display["w"]) / 2
         broker.vy = float(display["y"]) + float(display["h"]) / 2
-        broker._last_seen = {}
-        # An outer edge of the desk has nothing beyond it and SHOULD stop the
-        # pointer. The defect was an edge that has a neighbour over only part
-        # of its length, where the rest was a silent unbounded wall.
-        if not any(
-                link["source"].get("kind") == "target"
-                and link["source"].get("target") == target
-                and link["source"].get("display") == display_id
-                and link.get("side") == side
-                for link in broker.links):
-            continue
+        if link["side"] in ("left", "right"):
+            broker.vy = along
+        else:
+            broker.vx = along
         moved_off = False
         for _ in range(400):
-            if broker._route_motion(dx, dy):
-                moved_off = True     # left to the PC
+            if broker._route_motion(*push):
+                moved_off = True
                 break
-            if (broker.active_target, broker.active_display) != (
-                    target, display_id):
-                moved_off = True     # handed to another surface
+            if (broker.active_target, broker.active_display) != key:
+                moved_off = True
                 break
         while not broker.q.empty():
             broker.q.get_nowait()
         if not moved_off:
-            stalled.append(f"{target}/{display_id} {side}")
-check("no edge is a silent wall -- every sustained lean leads somewhere",
+            stalled.append(f"{target}/{display_id} {link['side']} at {along:.0f}")
+
+check("every crossing fires across the whole of its live band",
       not stalled, "stalled at: " + ", ".join(stalled[:6]))
 
 
@@ -562,6 +573,48 @@ for portal in broker.portals:
 
 check("a crossing after the lane came up is cheap -- the re-sync already ran",
       not expensive, "; ".join(expensive[:4]))
+
+
+# =========================================================================
+# P8. WHAT THE SENDER EMITS MUST STILL ESTABLISH THE POSITION.
+#
+# Every other test here walks the QUEUE. The queue is not what reaches the
+# device -- sender() batches it first, and it used to SUM a tick's motion into
+# one net vector. A re-sync is "shove hard left, then hard up, then walk back":
+# summing those cancels them algebraically, so the pointer never reaches an
+# edge, never clamps, and the position the model then recorded as measured fact
+# was never established at all. Every re-sync on a device whose reports were not
+# already kept separate had been a no-op, invisibly, and no test could see it
+# because they all stopped at the queue.
+# =========================================================================
+emitted = []
+broker.send = lambda target, message: emitted.append((target, message))
+lost = []
+for target in sorted({device for device, _display in broker._displays}):
+    broker._last_seen = {}
+    emitted.clear()
+    while not broker.q.empty():
+        broker.q.get_nowait()
+    broker._park_at_door(target)
+    broker._flush_queue()                       # the REAL batching
+    wire = [(m["dx"], m["dy"]) for who, m in emitted
+            if who == target and m.get("cmd") == "mouse"]
+    claim = broker._last_seen.get(target)
+    if not claim or not wire:
+        lost.append(f"{target}: nothing reached the wire")
+        continue
+    display = next(row for (device, _i), row in broker._displays.items()
+                   if device == target)
+    start = (float(display["x"]) + float(display["w"]) * 0.7,
+             float(display["y"]) + float(display["h"]) * 0.7)
+    landed = simulate_clamped(target, start[0], start[1], wire)
+    miss = math.hypot(landed[0] - claim[1], landed[1] - claim[2])
+    if miss > 2.0 * ARRIVE_MARGIN:
+        lost.append(f"{target}: {len(wire)} reports on the wire put the pointer "
+                    f"{miss:.0f} units from where the model recorded it")
+
+check("a re-sync survives the sender and really does clamp",
+      not lost, "; ".join(lost[:4]))
 
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

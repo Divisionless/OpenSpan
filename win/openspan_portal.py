@@ -672,7 +672,7 @@ class Portal:
             return None
         return min(candidates, key=lambda row: row[0])[1]
 
-    def _position_inside(self, destination, to_side, along):
+    def _position_inside(self, destination, to_side, along, band=None):
         """Where a crossing LANDS: the crossing coordinate itself, in desk units.
 
         This used to stretch the overlap span across the destination's whole
@@ -697,12 +697,15 @@ class Portal:
         width, height = float(display["w"]), float(display["h"])
         margin_x = min(float(ARRIVE_MARGIN), max(2.0, width * 0.1))
         margin_y = min(float(ARRIVE_MARGIN), max(2.0, height * 0.1))
-        # Arrive inside the band where a crossing can fire, so the way back
-        # is open the instant you land.
-        lo_y, hi_y = self._corner_safe_span(display, "left")
-        lo_x, hi_x = self._corner_safe_span(display, "top")
-        lo_x, hi_x = max(lo_x, x + margin_x), min(hi_x, x + width - margin_x)
-        lo_y, hi_y = max(lo_y, y + margin_y), min(hi_y, y + height - margin_y)
+        # Arrive inside the very band a crossing can fire in, so the way back
+        # is open at the exact point you land.
+        lo_y, hi_y = y + margin_y, y + height - margin_y
+        lo_x, hi_x = x + margin_x, x + width - margin_x
+        if band is not None:
+            if to_side in ("left", "right"):
+                lo_y, hi_y = max(lo_y, band[0]), min(hi_y, band[1])
+            else:
+                lo_x, hi_x = max(lo_x, band[0]), min(hi_x, band[1])
         if to_side == "left":
             return x + margin_x, self._clamp(along, lo_y, hi_y)
         if to_side == "right":
@@ -752,6 +755,20 @@ class Portal:
         zone = min(CORNER_ZONE, (hi - lo) * 0.25)
         return lo + zone, hi - zone
 
+    @staticmethod
+    def _live_band(link):
+        """Where this crossing may fire: the SHARED OVERLAP, corners removed.
+
+        Taken from the link's span rather than from either screen's own edge,
+        because the span is the one thing both sides agree on. Trimming a
+        screen's edge instead gave the two sides different answers wherever a
+        screen was taller than its neighbour: you could leave through a strip
+        that the other side would not let you back in by, so a crossing that
+        worked one way was a dead wall the other."""
+        lo, hi = float(link["span"][0]), float(link["span"][1])
+        zone = min(CORNER_ZONE, (hi - lo) * 0.25)
+        return lo + zone, hi - zone
+
     def _display_at(self, target, x, y):
         """Which of this device's screens contains a desk point."""
         for (device, _display_id), display in self._displays.items():
@@ -768,7 +785,7 @@ class Portal:
         if not self._device_compensate.get(target):
             dx, dy = int(round(px)), int(round(py))
             if dx or dy:
-                self.q.put((target, "m", dx, dy, 0))
+                self.q.put((target, "m", dx, dy, 1))   # 1 = exact, never merge
             return
         # The Apple inverse is defined PER REPORT, so a warp to a compensated
         # device has to be pre-split into single legal reports here rather than
@@ -785,7 +802,7 @@ class Portal:
             dy = max(-127, min(127, int(round(uy * counts))))
             if not (dx or dy):
                 break
-            self.q.put((target, "m", dx, dy, 0))
+            self.q.put((target, "m", dx, dy, 1))   # 1 = exact, never merge
             remaining -= apple_pixels(math.hypot(dx, dy))
 
     def _warp(self, target, from_x, from_y, to_x, to_y):
@@ -1090,7 +1107,8 @@ class Portal:
         self.vx, self.vy = float(vx), float(vy)
         self._last_seen[target] = (display, self.vx, self.vy)
 
-    def _switch_target(self, destination, to_side, along, from_side=None):
+    def _switch_target(self, destination, to_side, along, from_side=None,
+                       band=None):
         target = destination.get("target")
         display = destination.get("display")
         old_target = self.active_target
@@ -1115,7 +1133,7 @@ class Portal:
             self.q.put((old_target, "k", 0, [], 0))
             self.q.put((old_target, "b", 0, 0, 0))
         self._place(target, display,
-                    *self._position_inside(destination, to_side, along))
+                    *self._position_inside(destination, to_side, along, band))
         # The exit portal must follow the surface we are ACTUALLY on. self.cur
         # was set once by enter() and never updated, so bailing out after a
         # device-to-device handoff dropped the real cursor back through the
@@ -1183,13 +1201,8 @@ class Portal:
             crossings.append((y - ny, "top", self._clamp(nx, x, right)))
         if ny > bottom:
             crossings.append((ny - bottom, "bottom", self._clamp(nx, x, right)))
-        # NOTHING CROSSES AT A CORNER. The pointer still goes there and still
-        # works there -- it simply stays on this surface, which is the whole
-        # point of being able to reach a corner at all.
-        crossings = [
-            row for row in crossings
-            if (lambda lo, hi: lo <= row[2] <= hi)(
-                *self._corner_safe_span(display, row[1]))]
+        # (the corner rule is applied per LINK below, against the shared
+        #  overlap, so both sides of every boundary agree on where it lives)
         # No pressure accumulator and no cooldown. Both existed only because an
         # arrival used to land ON the trigger it arrived through; geometry does
         # that job now (ARRIVE_MARGIN, on both surfaces and both axes). Both
@@ -1199,6 +1212,12 @@ class Portal:
         for _overshoot, side, along in sorted(crossings, reverse=True):
             link = self._matching_link(side, along)
             if not link:
+                continue
+            # NOTHING CROSSES AT A CORNER. The pointer still goes there and
+            # still works there -- it simply stays on this surface, which is
+            # the whole point of being able to reach a corner at all.
+            band_lo, band_hi = self._live_band(link)
+            if not band_lo <= along <= band_hi:
                 continue
             destination = link["destination"]
             if destination.get("kind") == "local":
@@ -1210,7 +1229,7 @@ class Portal:
             if self.buttons:
                 break
             self._switch_target(destination, link["to_side"], along,
-                                from_side=side)
+                                from_side=side, band=(band_lo, band_hi))
             return False
         # Nothing consumed the overshoot, so the target's own cursor is pinned
         # against a real screen edge -- and so is the model.
@@ -1668,6 +1687,14 @@ class Portal:
         period = 1.0 / SEND_HZ
         while True:
             time.sleep(period)
+            self._flush_queue()
+
+    def _flush_queue(self):
+        """Drain the queue and put it on the wire. Separated from the loop so a
+        test can drive the REAL batching: the bug that made every re-sync a
+        no-op lived here, and a test that walked the queue instead of what this
+        method emits could never have seen it."""
+        if True:
             batches = {}
             while True:
                 try:
@@ -1676,21 +1703,34 @@ class Portal:
                     break
                 target = target or self.active_target
                 batch = batches.setdefault(target, {
-                    "dx": 0, "dy": 0, "wheel": 0, "moves": [],
+                    "wheel": 0, "moves": [],
                     "button": False, "keys": [], "texts": [],
                 })
                 if kind == "m":
-                    if self._device_compensate.get(target):
-                        # Each report for a compensated device was solved
-                        # individually against the target's own acceleration
-                        # curve. Summing them inside this tick and re-splitting
-                        # the total destroys that: the curve is steeper for a
-                        # big report, so the merged pair travels much further
-                        # than the two it replaced. Keep them intact.
-                        batch["moves"].append((a, b))
+                    # EXACT movements must never be merged with anything.
+                    #
+                    # A re-sync is "shove hard left, then hard up, then walk
+                    # back". Those are three deliberate movements whose whole
+                    # purpose is that the device CLAMPS between them. Summing
+                    # them inside one tick cancels them algebraically: the
+                    # pointer never reaches an edge, never clamps, and simply
+                    # drifts by the net vector -- so the position the model then
+                    # records as measured fact was never established at all.
+                    # That is what a re-sync had been doing on every device
+                    # whose reports were not already kept separate.
+                    #
+                    # Live hook motion is different: consecutive samples in one
+                    # 8 ms tick are one continuous movement and coalescing them
+                    # is free. So coalesce only those, only with each other, and
+                    # never across an exact report -- order is preserved either
+                    # way, which matters because a warp follows a shove.
+                    exact = bool(c) or self._device_compensate.get(target)
+                    if (not exact and batch["moves"]
+                            and not batch["moves"][-1][2]):
+                        prev_x, prev_y, _flag = batch["moves"][-1]
+                        batch["moves"][-1] = (prev_x + a, prev_y + b, False)
                     else:
-                        batch["dx"] += a
-                        batch["dy"] += b
+                        batch["moves"].append((a, b, exact))
                 elif kind == "w":
                     batch["wheel"] += c
                 elif kind == "b":
@@ -1700,30 +1740,34 @@ class Portal:
                 elif kind == "t":
                     batch["texts"].append(a)
             if not batches:
-                continue
+                return
             for target, batch in batches.items():
                 for text in batch["texts"]:
                     self.send(target, {"cmd": "text", "text": text})
                 for mods, keys in batch["keys"]:
                     self.send(
                         target, {"cmd": "kbd", "mods": mods, "keys": keys})
-                for mdx, mdy in batch["moves"]:
-                    self.send(
-                        target,
-                        {"cmd": "mouse", "dx": mdx, "dy": mdy,
-                         "buttons": self.buttons, "wheel": 0})
-                adx, ady, awheel = (
-                    batch["dx"], batch["dy"], batch["wheel"])
-                if adx or ady or awheel:
-                    while adx or ady or awheel:
-                        sx = max(-127, min(127, adx)); adx -= sx
-                        sy = max(-127, min(127, ady)); ady -= sy
+                # In order. A HID delta is one signed byte, so anything
+                # larger is split -- splitting preserves the movement exactly,
+                # it is only MERGING that destroys it.
+                awheel = batch["wheel"]
+                for mdx, mdy, _exact in batch["moves"]:
+                    while mdx or mdy or awheel:
+                        sx = max(-127, min(127, mdx)); mdx -= sx
+                        sy = max(-127, min(127, mdy)); mdy -= sy
                         sw = max(-127, min(127, awheel)); awheel -= sw
                         self.send(
                             target,
                             {"cmd": "mouse", "dx": sx, "dy": sy,
                              "buttons": self.buttons, "wheel": sw})
-                elif batch["button"] and not batch["moves"]:
+                while awheel:                      # wheel with no movement
+                    sw = max(-127, min(127, awheel)); awheel -= sw
+                    self.send(
+                        target,
+                        {"cmd": "mouse", "dx": 0, "dy": 0,
+                         "buttons": self.buttons, "wheel": sw})
+                if not batch["moves"] and not batch["wheel"] \
+                        and batch["button"]:
                     self.send(
                         target,
                         {"cmd": "mouse", "dx": 0, "dy": 0,
@@ -1752,4 +1796,16 @@ class Portal:
 
 
 if __name__ == "__main__":
+    # The portal's stdout is a FILE, not a console, so Python block-buffers it
+    # at 8 KB. Only the handful of prints that pass flush=True ever reached
+    # portal.log promptly; everything else -- every crossing, every re-sync --
+    # sat in the buffer until one of them happened to flush it. The log was
+    # therefore minutes behind reality, and reading it led to wrong conclusions
+    # about what the program had just done. A log you cannot trust to be current
+    # is worse than no log.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:  # noqa: BLE001 -- older/odd streams; not worth failing over
+        pass
     Portal().run()
