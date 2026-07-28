@@ -44,9 +44,6 @@ somewhere sensible instead of somewhere arbitrary.
 
 ## Smaller
 
-- **Auto-reconnect across the login → user-session handoff.** macOS tears down
-  and re-establishes Bluetooth at that boundary, so a device drops once during
-  sign-in and needs a manual Connect. Not a fault — but worth handling.
 - **Pushing from a standstill while already against an edge cannot be seen.**
   Windows clamps the cursor and reports no movement, so the momentum gate never
   arms. Reading raw input rather than cursor position would fix it.
@@ -74,3 +71,32 @@ Worth knowing before designing it: bonds live on the guest per radio, so two
 profiles that assign the same radio to different devices would fight over one
 lane. Either a profile owns its radio assignments (and switching re-provisions),
 or it does not touch them at all.
+
+## Automatic reconnect while the portal is on
+
+Definite, per Doug. If the portal is running, a device that drops should come
+back on its own.
+
+**The portal being on is the whole condition, and it is the right one.** It is a
+statement of intent: these machines are in use right now. With the portal off,
+silence is what the user asked for, and reconnecting would fight a deliberate
+Disconnect — one of the four verbs, and the only way to hand a device back.
+
+Where it goes: `_status_watcher` already polls every lane at 0.8 s, already knows
+`kbd_subscribed`, and already clears `_last_seen` when a lane drops. The trigger
+exists; what is missing is the action.
+
+What it must not do:
+
+- **hammer a device that is off or asleep.** The audio auto-reconnect already
+  learned this — it pauses after three consecutive failures (`_auto_conn_fails`)
+  and defers while any device is mid-verb (`_any_device_busy`). Follow that.
+- **override an explicit Disconnect.** A device the user disconnected on purpose
+  stays disconnected until they say otherwise, portal or no portal.
+- **reconnect during pairing.** Pair owns the lane while it runs.
+
+Known trigger worth handling first, because it is reproducible: macOS tears down
+and re-establishes Bluetooth across the login → user-session handoff, so a Mac
+drops once during sign-in and currently needs a manual Connect at exactly the
+moment the user has no keyboard.
+
