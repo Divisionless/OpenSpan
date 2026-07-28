@@ -162,10 +162,16 @@ check("the record follows the model, so the next warp starts from truth",
 
 p5 = make_portal(clipboard_capable=False)
 p5.enter(p5.portals[0], 100)
-check("a first-ever entry still falls back to the entry point",
-      isinstance(p5.vx, float) and isinstance(p5.vy, float))
-check("and queues no warp, because nothing is known to correct",
-      not [e for e in drain(p5) if e[1] == "m"])
+entry5 = p5._entry_point(p5.portals[0], 100)
+check("a first-ever entry still lands on the entry point",
+      (p5.vx, p5.vy) == entry5)
+# It used to assert a position and hope, because nothing was known to correct.
+# Now it FINDS OUT: shove the pointer to a boundary the geometry says is
+# unambiguous, so the warp that follows starts from a fact instead of nothing.
+check("a first-ever entry RE-SYNCS rather than assuming",
+      bool([e for e in drain(p5) if e[1] == "m"]))
+check("and the device's position is known afterwards",
+      p5._last_seen.get("dev") == ("dev-1", entry5[0], entry5[1]))
 
 # --- our acceleration must be identical on the wire and in the model -------
 # This is the whole reason acceleration belongs on THIS side: when the target

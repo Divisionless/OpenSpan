@@ -545,3 +545,49 @@ record is the boundary itself — measured, not remembered.
 
 **Still true only if** the desk arrangement matches the target's own display
 arrangement: the pin lands where that OS clamps, not where we think it should.
+
+## 2026-07-27 — The union is an L, so one shove establishes nothing
+
+Doug: *"i was on the ipad then i traverse up and it goes into the bottom of the
+middle managed mac display, should not be possible... It doesn't make sense we
+are missing something."*
+
+He was right that something was missing, and it was not the routing. Replaying
+that crossing headlessly from four prior states routes to Mac Display 3 every
+time, and the warp lands the pointer there. The fault is one step earlier.
+
+**The Mac's screens do not form a rectangle.** Two 32" portraits beside a
+shorter, vertically-offset 32" landscape make the union an **L**. On an L, the
+boundary you reach by shoving one way DEPENDS on the other axis:
+
+```
+shove left    -> boundary [-5986]           SAME everywhere -- safe to shove blind
+shove right   -> boundary [-2848, -59]      DEPENDS on the other axis
+shove top     -> boundary [-2179, -1569]    DEPENDS on the other axis
+shove bottom  -> boundary [0, 610]          DEPENDS on the other axis
+```
+
+So the exit pin — one shove, in the direction of travel — did not establish a
+position. It established *one of two*, and which one depended on the axis we
+merely believed. Leaving the Mac rightward recorded x = −59 (the landscape's
+right edge); if the believed Y was wrong at all, macOS had actually clamped the
+pointer at −2848, the portraits' right edge. 2789 desk units of error. The next
+warp in from the iPad spent that error going left and put the pointer on the
+middle portrait — precisely what was reported.
+
+And the believed Y *was* wrong, because the first crossing of a portal session
+had nothing to pin from.
+
+**`_resync()`**: shove first along whichever axis the geometry says has ONE
+boundary everywhere — a fact regardless of what was believed — then, with that
+axis known, shove perpendicular, where the boundary is now determinate. Both
+directions are derived from the rectangles; a device whose screens *do* form a
+rectangle finds the first axis immediately. Runs once per device per portal
+session, the moment nothing is known, before any warp.
+
+New invariant, and the decisive one: **a cold re-sync lands in the same place no
+matter where it started** — simulated from every corner and centre of every
+screen, with the device's own clamping modelled. On this desk it converges to
+(−5986, −2179), the top-left of Mac Display 1, from all sixteen starting points.
+
+Cost: iPad 2 reports (~30 ms); Mac 69 reports (~1.0 s), once per session.

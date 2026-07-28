@@ -453,5 +453,77 @@ check("the shove always reaches the device's own clamp",
 check("and the record is the boundary itself -- measured, not remembered",
       not mislabelled, "; ".join(mislabelled[:4]))
 
+# =========================================================================
+# P6. A COLD RE-SYNC CONVERGES FROM ANYWHERE.
+#
+# A device's screens rarely form a rectangle: a shorter panel beside two taller
+# ones makes the union an L. On an L, the boundary you reach by shoving one way
+# DEPENDS on the other axis -- so a single shove establishes one of several
+# positions, not one, and nothing can tell which. That is how a pointer ended up
+# two screens away from the model. The re-sync must therefore land in the SAME
+# place no matter where it started, or it has established nothing.
+# =========================================================================
+def simulate_clamped(target, start_x, start_y, reports):
+    """Like simulate(), but the device CLAMPS at the edge of its own union --
+    which is the entire mechanism a shove relies on."""
+    x, y = float(start_x), float(start_y)
+    compensating = broker._device_compensate.get(target)
+    gain = float(broker._device_gain.get(target, 1.0)) or 1.0
+    for a, b in reports:
+        if compensating:
+            length = math.hypot(a, b)
+            travelled = P.apple_pixels(length)
+            px = 0.0 if length == 0 else a / length * travelled
+            py = 0.0 if length == 0 else b / length * travelled
+        else:
+            px, py = float(a), float(b)
+        # ~1 px per sub-step: a shove is ONE huge report, and walking it coarsely
+        # stops short of the clamp by up to a whole sub-step, which looks like a
+        # convergence failure that is really just the simulation's resolution.
+        steps = max(32, int(abs(px) + abs(py)))
+        for _ in range(steps):
+            display = broker._display_at(target, x, y)
+            if not display:
+                break
+            res_w, res_h = oriented_resolution(display)
+            step_x = px / steps * gain * float(display["w"]) / max(1.0, float(res_w))
+            step_y = py / steps * gain * float(display["h"]) / max(1.0, float(res_h))
+            if broker._display_at(target, x + step_x, y + step_y):
+                x, y = x + step_x, y + step_y
+            elif broker._display_at(target, x + step_x, y):
+                x += step_x                      # slide along the boundary
+            elif broker._display_at(target, x, y + step_y):
+                y += step_y
+    return x, y
+
+
+diverged = []
+for target in sorted({device for device, _display in broker._displays}):
+    starts = []
+    for (device, _display_id), display in broker._displays.items():
+        if device != target:
+            continue
+        x, y = float(display["x"]), float(display["y"])
+        w, h = float(display["w"]), float(display["h"])
+        starts += [(x + w / 2, y + h / 2), (x + 5, y + 5),
+                   (x + w - 5, y + h - 5), (x + 5, y + h - 5)]
+    broker._last_seen = {}
+    while not broker.q.empty():
+        broker.q.get_nowait()
+    claimed = broker._resync(target)
+    reports = drain_reports(broker, target)
+    if claimed is None:
+        continue
+    for start in starts:
+        landed = simulate_clamped(target, start[0], start[1], reports)
+        if math.hypot(landed[0] - claimed[0], landed[1] - claimed[1]) > 2.0:
+            diverged.append(
+                f"{target}: from ({start[0]:.0f},{start[1]:.0f}) landed "
+                f"({landed[0]:.0f},{landed[1]:.0f}), claimed "
+                f"({claimed[0]:.0f},{claimed[1]:.0f})")
+
+check("a cold re-sync lands in the same place no matter where it started",
+      not diverged, "; ".join(sorted(set(diverged))[:4]))
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

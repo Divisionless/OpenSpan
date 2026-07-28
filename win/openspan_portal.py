@@ -777,6 +777,106 @@ class Portal:
             return None
         return min(bounds) if side in ("left", "top") else max(bounds)
 
+    def _union(self, target):
+        """The bounding box of everything this device shows."""
+        rects = [display for (device, _d), display in self._displays.items()
+                 if device == target]
+        if not rects:
+            return None
+        return (min(float(r["x"]) for r in rects),
+                min(float(r["y"]) for r in rects),
+                max(float(r["x"]) + float(r["w"]) for r in rects),
+                max(float(r["y"]) + float(r["h"]) for r in rects))
+
+    def _axis_bounds(self, target, side):
+        """Every DISTINCT outer boundary this device presents on one side.
+
+        More than one means the boundary in that direction depends on the OTHER
+        axis -- the device's screens do not form a rectangle. Shoving that way
+        without already knowing the other axis lands in one of several places,
+        and we cannot tell which."""
+        values = set()
+        for (device, _display_id), display in self._displays.items():
+            if device != target:
+                continue
+            if side in ("left", "right"):
+                lo = float(display["y"])
+                hi = lo + float(display["h"])
+            else:
+                lo = float(display["x"])
+                hi = lo + float(display["w"])
+            for sample in (lo + 1.0, (lo + hi) / 2.0, hi - 1.0):
+                bound = self._outer_bound(target, side, sample)
+                if bound is not None:
+                    values.add(round(bound, 3))
+        return values
+
+    def _shove(self, target, side):
+        """Drive the pointer far enough that the device MUST clamp it.
+
+        Distance is the device's whole extent on that axis, converted at its
+        DENSEST screen so the shove cannot fall short on any of them, plus the
+        overshoot. Used when we do not know where the pointer is, so there is
+        nothing to warp from -- only a direction."""
+        union = self._union(target)
+        if not union:
+            return
+        min_x, min_y, max_x, max_y = union
+        horizontal = side in ("left", "right")
+        span = (max_x - min_x) if horizontal else (max_y - min_y)
+        rates = []
+        for (device, _display_id), display in self._displays.items():
+            if device != target:
+                continue
+            res_w, res_h = oriented_resolution(display)
+            rates.append((res_w / max(1.0, float(display["w"]))) if horizontal
+                         else (res_h / max(1.0, float(display["h"]))))
+        pixels = span * max(rates or [1.0]) + PIN_OVERSHOOT
+        if side == "left":
+            self._emit_move(target, -pixels, 0.0)
+        elif side == "right":
+            self._emit_move(target, pixels, 0.0)
+        elif side == "top":
+            self._emit_move(target, 0.0, -pixels)
+        else:
+            self._emit_move(target, 0.0, pixels)
+
+    def _resync(self, target):
+        """Find out where a device's pointer is, believing NOTHING.
+
+        A device's screens rarely form a rectangle -- a shorter panel beside two
+        taller ones makes the union an L -- and on an L the boundary you reach
+        by shoving one way DEPENDS on the other axis. So a single shove does not
+        establish a position: it establishes one of several, and we cannot tell
+        which. That is how the pointer ended up two screens away from the model.
+
+        So: shove first along whatever axis has ONE boundary everywhere, which
+        is a fact no matter what we believed. That axis is now known, which
+        makes the perpendicular boundary determinate, so shove that way too.
+        Both directions are derived from the actual geometry -- no arrangement
+        is assumed, and a device whose screens DO form a rectangle simply finds
+        the first axis immediately."""
+        blind = next((side for side in ("left", "right", "top", "bottom")
+                      if len(self._axis_bounds(target, side)) == 1), None)
+        if blind is None:
+            return None      # no safe direction: leave the position unclaimed
+        self._shove(target, blind)
+        anchor = next(iter(self._axis_bounds(target, blind)))
+        second = "top" if blind in ("left", "right") else "left"
+        bound = self._outer_bound(target, second, anchor)
+        if bound is None:
+            return None
+        self._shove(target, second)
+        x, y = ((anchor, bound) if blind in ("left", "right")
+                else (bound, anchor))
+        display = self._display_at(target, x, y)
+        self._last_seen[target] = (
+            display["id"] if display else self.active_display, x, y)
+        print(f"[portal] resync {target}: shove {blind} then {second} -> "
+              f"({x:.0f},{y:.0f}) on "
+              f"{self._screen(target, self._last_seen[target][0])}")
+        return (x, y)
+
     def _pin(self, target, side, along):
         """Shove this device's pointer hard against its own outer boundary.
 
@@ -829,6 +929,12 @@ class Portal:
         the session -- the model asserts and accepts one unverified placement,
         which then self-corrects the moment the pointer meets any real edge."""
         previous = self._last_seen.get(target)
+        if previous is None:
+            # Nothing is known about this device's pointer -- so find out,
+            # rather than assert a position and hope. Once per device per portal
+            # session; every crossing after this one is exact.
+            self._resync(target)
+            previous = self._last_seen.get(target)
         if previous and self._displays.get((target, previous[0])):
             self._warp(target, previous[1], previous[2], float(vx), float(vy))
         self.active_target = target
