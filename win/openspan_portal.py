@@ -68,7 +68,10 @@ SEND_HZ = 120
 # satisfies TWO edges at once, so which surface you land on comes down to which
 # overshoot happened to be larger that report. Both problems go away by simply
 # not crossing there, in either direction.
-CORNER_ZONE = 100.0        # desk units = one inch, at both ends of every edge
+CORNER_ZONE = 50.0         # desk units (half an inch) at both ends of every
+                           # edge. It has to be big enough to protect a corner
+                           # control and no bigger: at one inch it took a THIRD
+                           # of the iPad's short edge out of service.
 MAX_WARP_REPORTS = 256     # a runaway backstop, not a design limit: a
                            # diagonal re-sync across a large arrangement
                            # legitimately needs ~100
@@ -752,7 +755,7 @@ class Portal:
         else:
             lo = float(display["x"])
             hi = lo + float(display["w"])
-        zone = min(CORNER_ZONE, (hi - lo) * 0.25)
+        zone = min(CORNER_ZONE, (hi - lo) * 0.15)
         return lo + zone, hi - zone
 
     @staticmethod
@@ -766,7 +769,7 @@ class Portal:
         that the other side would not let you back in by, so a crossing that
         worked one way was a dead wall the other."""
         lo, hi = float(link["span"][0]), float(link["span"][1])
-        zone = min(CORNER_ZONE, (hi - lo) * 0.25)
+        zone = min(CORNER_ZONE, (hi - lo) * 0.15)
         return lo + zone, hi - zone
 
     def _display_at(self, target, x, y):
@@ -1024,6 +1027,50 @@ class Portal:
                       f"{' then '.join(sides)} -> "
                       f"({landing[0]:.0f},{landing[1]:.0f})")
 
+    def _pin_axis(self, target, side):
+        """Shove hard in the direction you just left by. Doug's design.
+
+        Grounding to a corner is unnecessary, and it was the reason every
+        transition toured the outside of the arrangement. Leaving an edge only
+        needs ONE thing to become true: the axis you crossed. So push hard that
+        way as the last act -- the device clamps the pointer on that edge and
+        the coordinate is a measurement -- and leave the other axis completely
+        alone, which preserves your position ALONG the edge exactly, for free.
+
+        The corner walk is still there for the one case it is actually needed:
+        when nothing at all is known (_resync, once when a lane comes up). From
+        then on this is enough, because the along axis never drifts -- no motion
+        is discarded and every jump is paid for.
+
+        The push goes well past the edge, so the clamp lands even if the model
+        was a little out; being a little out is exactly what it corrects."""
+        # crossing sides are named top/bottom; shove directions up/down
+        side = {"top": "up", "bottom": "down"}.get(side, side)
+        landing = self._slide(target, self.vx, self.vy, side)
+        self._warp(target, self.vx, self.vy, landing[0], landing[1])
+        step_x, step_y = SHOVE_DIRECTIONS[side]
+        union = self._union(target)
+        if not union:
+            return False
+        wide = tall = 1.0
+        for (device, _display_id), display in self._displays.items():
+            if device != target:
+                continue
+            res_w, res_h = oriented_resolution(display)
+            wide = max(wide, res_w / max(1.0, float(display["w"])))
+            tall = max(tall, res_h / max(1.0, float(display["h"])))
+        if step_x:
+            push = (union[2] - union[0]) * wide * 0.5 + SHOVE_OVERSHOOT
+            self._emit_move(target, step_x * push, 0.0)
+        else:
+            push = (union[3] - union[1]) * tall * 0.5 + SHOVE_OVERSHOOT
+            self._emit_move(target, 0.0, step_y * push)
+        display = self._display_at(target, landing[0], landing[1])
+        self._last_seen[target] = (
+            display["id"] if display else self.active_display,
+            landing[0], landing[1])
+        return True
+
     def _resync(self, target, restore=None):
         """Find out where a device's pointer is, believing NOTHING.
 
@@ -1113,9 +1160,12 @@ class Portal:
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
-        # Leaving a device records where its pointer is; it does not go
-        # hunting for a corner to prove it. See leave().
+        # Leaving a DEVICE (not just one of its screens) pins the axis you
+        # left by, exactly as when handing control back to the PC.
         pinned = False
+        if old_target is not None and target != old_target \
+                and from_side is not None:
+            pinned = self._pin_axis(old_target, from_side)
         if old_target is not None and not pinned:
             # Record UNCONDITIONALLY otherwise, including a same-device screen
             # handoff. Skipping those let a device's saved position go
@@ -1217,7 +1267,7 @@ class Portal:
             destination = link["destination"]
             if destination.get("kind") == "local":
                 self.leave(exit_to=self._local_exit_point(
-                    destination, link["to_side"], along), resync=True)
+                    destination, link["to_side"], along), pin_side=side)
                 return True
             # Never tear a drag across devices. The handoff re-arms as soon as
             # the physical button is released.
@@ -1271,26 +1321,23 @@ class Portal:
             threading.Timer(
                 0.3, lambda: self._send_chord(FKA_FETCH)).start()
 
-    def leave(self, exit_to=None, resync=False):   # resync kept for callers
+    def leave(self, exit_to=None, pin_side=None):
         if not self.active:
             return
-        # NO RE-SYNC ON THE WAY OUT.
+        # THE LAST ACT: a hard push in the direction you just left by. It
+        # makes that one axis a measurement and leaves the other untouched, so
+        # your position along the edge is preserved exactly. No corner is
+        # visited and nothing is dragged around the outside of the arrangement.
         #
-        # A re-sync drives the pointer into an edge and parks it at a corner --
-        # that is how it establishes truth, and it is unavoidable when the
-        # position is genuinely unknown. But doing it on EVERY exit meant every
-        # crossing dragged the pointer along edges, and on iPadOS an edge IS a
-        # gesture: the top edge pulls Notification Centre, the bottom the Dock
-        # and app switcher, the side Slide Over. Going in and out repeatedly
-        # opened them constantly.
-        #
-        # It is also unnecessary. Between re-syncs the model cannot drift: no
-        # motion is discarded, and every jump is paid for on the wire. The
-        # position is established once, when the lane comes up, and re-
-        # established whenever it becomes unknowable -- a dropped lane. In
-        # between, transitions travel between interior points, through the
-        # middle rather than around the outside.
+        # A bail (Esc x3, a dropped lane) has no direction and skips it --
+        # nothing moved the pointer, so the existing record still holds.
         pinned = False
+        if pin_side is not None and self.active_target is not None:
+            pinned = self._pin_axis(self.active_target, pin_side)
+            if pinned:
+                record = self._last_seen[self.active_target]
+                self.active_display = record[0]
+                self.vx, self.vy = record[1], record[2]
         self._rem_x = self._rem_y = 0.0
         self.active = False
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
@@ -1344,7 +1391,7 @@ class Portal:
         self.active_target = None
         self.active_display = None
         print(f"[portal] <<< {name} mode OFF (control back on PC)"
-              + (f" -- resynced to ({self.vx:.0f},{self.vy:.0f})"
+              + (f" -- pinned {pin_side} at ({self.vx:.0f},{self.vy:.0f})"
                  if pinned else ""))
 
     def _corner_px(self, portal):

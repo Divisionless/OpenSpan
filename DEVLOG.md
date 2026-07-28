@@ -853,3 +853,38 @@ and the motion that carries the model past it is already on the wire before
 routing sees it. On an iPad that overshoot is exactly the gesture. Clipping the
 transmitted motion at the edge would fix it, and needs `_route_motion` to report
 how much it consumed before the crossing so `_mouse_proc` sends only that.
+
+## 2026-07-28 — Pin the axis you left by. No corners.
+
+Doug: *"we shouldn't need to ground truth -- in my mind what we do is when we
+leave a monitor to go to another device we send a hard +3000px push in that
+exact same direction as final action. We don't need to ground to corners if we
+do that, and we preserve relative mouse location every single time."*
+
+Right, and better than what was there. Leaving an edge only needs ONE thing to
+become true: the axis you crossed. Push hard that way as the last act and the
+device clamps the pointer on that edge, making the coordinate a measurement —
+while the other axis is never touched, so position ALONG the edge is preserved
+exactly, for free. No corner is visited and nothing is dragged around the
+outside of the arrangement.
+
+The corner walk survives for the one case that actually needs it: when nothing
+at all is known, once, when a lane comes up. From then on the one-axis pin is
+sufficient, because the along axis cannot drift — no motion is discarded and
+every jump is paid for.
+
+| leaving | reports | records | along axis |
+|---|---|---|---|
+| iPad | 2 (~30 ms) | its edge, same height | preserved |
+| Managed Mac | 19–36 (~285–540 ms) | its edge, same height | preserved |
+
+**And the dead corner was too big.** `CORNER_ZONE` was one inch — modest on a
+32" panel, but a third of the iPad's 6-inch edge, which is why iPad → PC
+bottom-left had stopped working. Now half an inch, capped at 15% of any span:
+worst dead share across the whole desk is 16%, was 33%.
+
+**Known trade-off:** the hard push necessarily goes past the edge, and on iPadOS
+past an edge is a gesture. Leaving the iPad rightward pushes ~940 px beyond its
+edge. If Slide Over still appears, the fix is to clip what we TRANSMIT at the
+edge on the crossing report, which needs `_route_motion` to report how much it
+consumed.
