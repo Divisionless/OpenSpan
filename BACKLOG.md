@@ -100,3 +100,53 @@ and re-establishes Bluetooth across the login → user-session handoff, so a Mac
 drops once during sign-in and currently needs a manual Connect at exactly the
 moment the user has no keyboard.
 
+
+## Publishing
+
+**Nothing is published.** `main` is at `f60a712` — the single-iPad build from
+before any of this. Branch `multidevice` is **62 commits ahead** and holds the
+entire multi-device layer, the position model, and everything from the 27–28
+July session. `github.com/Divisionless/OpenSpan` and
+`douglasknoll.com/openspan.html` both still show the old build.
+
+Held deliberately, pending Doug's go. When it happens, in order:
+
+1. **Scrub before anything else.** Real hardware MACs have leaked into tests and
+   docs once before and a test caught it, not me. Scan with
+   `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}` — the **dash** form is the one that
+   got missed last time — across the whole tree including `BACKLOG.md`,
+   `DEVLOG.md`, `POSITION_MODEL.md` and every test. Also check for the guest SSH
+   key, `bt_prefs.json`, and anything naming the employer or the client.
+2. **Decide what `openspan_config.json` ships as.** The repo copy currently
+   describes Doug's actual desk — three devices, real radios, real screen sizes.
+   It should ship empty, or as an obviously-fictional example.
+3. **Merge `multidevice` → `main`**, then push. One merge, not a rebase: the
+   history is the record of how the position model was arrived at, and the
+   DEVLOG references it.
+4. **README** needs rewriting for N devices. It still describes one iPad.
+5. **`douglasknoll.com/openspan.html`** — the hero screenshot is the pre-
+   four-verb UI and predates the Devices panel, the arrangement canvas and the
+   crossing options. Needs a fresh screenshot from Doug (Firefox-first rule:
+   deploy, hand him the live link, he eyeballs it).
+6. **Decide what to say about the position model.** `POSITION_MODEL.md` is
+   written for a hostile reader and is the strongest thing in the repo; it should
+   probably be linked from the README and from the site.
+
+## Open questions from testing, unresolved
+
+Recorded so they are not quietly forgotten. None are blocking.
+
+- **Ctrl+Z on the Mac.** The wire is provably correct — `mods=0x01
+  keys=['0x1d']`, held 80 ms, clean release — so whatever happens to it happens
+  after it leaves this machine. Ctrl+Alt+V's theft cannot explain it, since Z is
+  not a hotkey. The five-second discriminator not yet run: **press Ctrl+A in
+  TextEdit.** Selects all ⇒ the per-keyboard modifier swap is reaching our
+  device. Cursor jumps to start of line ⇒ it is not.
+- **The accent picker on the Mac.** Last seen before the compensated-lane flood
+  fix and the all-clear heartbeat. May be gone. If it returns, do not debug by
+  hand — run a timestamped `btmon` capture on that radio while typing, which
+  settles what leaves the air versus what we send.
+- **Whether the mouse side buttons are ever seen at all.** `portal.log` will now
+  say `mouse side button detected` the first time one arrives, from either hook.
+  If that line never appears, that mouse reports them a third way and the
+  press-to-jump feature cannot fire.
