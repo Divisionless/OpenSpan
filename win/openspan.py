@@ -3539,7 +3539,8 @@ class App:
             value=bool(self.canvas.config.get(
                 "side_button_jumps_nearest", False)))
         ttk.Checkbutton(
-            ctl, text="↦  …and go straight to the nearest screen that way",
+            ctl, text="↦  …and jump straight to the nearest screen  "
+                      "(recommended for complex arrangements)",
             variable=self.button_jumps,
             command=self._on_button_jumps).grid(
             row=3, column=0, columnspan=3, sticky="w", padx=(26, 5),

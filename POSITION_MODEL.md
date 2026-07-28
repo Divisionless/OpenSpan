@@ -167,3 +167,56 @@ clamps.
 left. Counting reports cannot see that; counting rising edges can. And a click
 that does not register is exactly what makes a person click a second time, which
 is how a *lost* event gets reported as a *duplicated* one.
+
+---
+
+## The recommended mode for a complex arrangement: press to jump
+
+Everything above solves *edge crossing* — moving between machines by pushing the
+pointer at a border, the way a single desktop works. It is the right default and
+it now behaves correctly.
+
+But edge crossing has a cost that grows with the arrangement, and it is
+geometric rather than a defect:
+
+- **Edges only partly overlap.** A 17" monitor beside a 32" panel shares about
+  half that panel's edge. The rest is a wall, correctly, because nothing is
+  there. On this desk the PC covers only the bottom 53% of Mac Display 3's right
+  edge, so returning to the PC means being in the bottom half.
+- **Distance is real.** Reaching a border means driving there — 3,840 points
+  across one 4K panel before the boundary even begins.
+- **A corner is ambiguous**, so the ends of every boundary are deliberately
+  dead, which costs a little more of each edge.
+- **Not everything is adjacent.** A device with no neighbour on a side has
+  nothing to cross to, and never can.
+
+None of that is fixable by better geometry, because the geometry is telling the
+truth. The arrangement is a **map**, and edge crossing makes you drive it.
+
+**So: hold a mouse side button and the press itself crosses.** It takes the edge
+the pointer is nearest and goes to whatever lies that way, ignoring the
+adjacency graph entirely — nearest by distance to the rectangle, only in the
+direction of travel, skipping any device whose lane is not ready. Press again to
+hop again. While it is held, the corner bands and the momentum requirement both
+lift, because an explicit request is not an accident and needs no second opinion.
+
+The reasoning in one line: **the adjacency graph exists to make an accidental
+crossing land somewhere sensible. A pressed button is not an accident** — so the
+question stops being "what does the layout say is next to this edge" and becomes
+"what is over there", which is what the hand meant.
+
+For two adjacent screens, edge crossing is lovely and this is unnecessary. From
+about three devices — or any arrangement where surfaces do not tile neatly —
+this is the mode to use. Both remain available and both are always correct; this
+one is simply faster to think in.
+
+**Turning it on:** the two checkboxes beside "Invert scroll wheel". The second
+is indented under the first because it only means anything when that is on.
+
+**If the button appears to do nothing**, check `portal.log` for
+`mouse side button detected`. Side buttons do not all arrive the same way — some
+mice send `WM_XBUTTON` on the mouse hook, others send browser back/forward on the
+keyboard hook. Both are accepted. If neither line ever appears, that mouse
+reports them some third way. And if the option is on while no side button has
+ever arrived, crossing falls back to a deliberate push rather than refusing
+everything, so the pointer can always reach the control that turns it off.
