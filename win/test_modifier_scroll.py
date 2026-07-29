@@ -434,8 +434,30 @@ pn.mods = 0
 pn.raw_keys = {}
 pn._chord_until = 0.0
 combos_n = [(r[2], list(r[3])) for r in press(pn, VK_LCTRL, VK_LALT, VK_V)]
-check("but a normal device still lets the clipboard hotkey take it",
-      want not in combos_n)
+check("and now reaches a NORMAL device too -- the exemption was the wrong "
+      "shape, the hotkey was",
+      want in combos_n)
+
+# Ctrl+Alt+V used to be taken from every non-verbatim device to type the PC
+# clipboard. Doug reported twice that Cmd+Ctrl+V did not paste on the Mac, and
+# this was why: through the alt->cmd remap it is an ordinary application chord,
+# and the portal ate it before the Mac ever saw it. Carving out one device kind
+# only narrowed the bug. Paste-from-the-PC now lives on Ctrl+Alt+Shift+V, which
+# already meant exactly that for the iPad.
+VK_LSHIFT = 0xA0
+ps = make_portal(clipboard_capable=False)
+ps.active = True
+ps.active_target = "dev"
+ps._device_verbatim = {"dev": False}
+ps.mods = 0
+ps.raw_keys = {}
+ps._chord_until = 0.0
+shifted = [(r[2], list(r[3]))
+           for r in press(ps, VK_LCTRL, VK_LALT, VK_LSHIFT, VK_V)]
+want_shift = (P.IPAD_MOD_BIT["ctrl"] | P.IPAD_MOD_BIT["alt"]
+              | P.IPAD_MOD_BIT["shift"], [P.VK_HID[VK_V]])
+check("and the Shift chord is the one the portal keeps for itself",
+      want_shift not in shifted)
 
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

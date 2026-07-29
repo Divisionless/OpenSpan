@@ -268,13 +268,17 @@ check("a held side button crosses even when the option is off",
 broker._side_held = 0
 
 # --- and the option must never lock the pointer in ------------------------
-# If the option is on but this mouse has never sent a side button -- plenty
-# report theirs as browser back/forward, or not at all -- refusing every
-# crossing would trap the pointer with no way to reach the checkbox that turns
-# the option off.
+# If the option is on but this mouse HAS no side buttons -- some report theirs
+# as browser back/forward, some have none -- refusing every crossing would
+# strand the pointer on a target it could only leave with Esc x3.
+#
+# Stated, not inherited: this used to depend on whether a button had been seen
+# in this process, which made the case fire on Doug's five-button mouse after
+# every restart and quietly undo the setting he had ticked.
 broker._cross_button = True
 broker._side_held = 0
-broker._side_seen = False         # nothing has ever arrived
+broker._side_seen = False         # nothing has arrived in this process
+broker._mouse_has_side_buttons = lambda: False   # and there is nothing to send
 broker._gentle_logged = 0.0
 broker.active = True
 broker.active_target = "device-1"
@@ -296,5 +300,61 @@ left_pc = broker._route_motion(80, 0)
 check("and a gentle drift still does not", left_pc is False and not exits)
 broker._cross_button = False
 broker._side_seen = False
+del broker._mouse_has_side_buttons
+
+# --- a restart must not undo the setting ----------------------------------
+# Doug: "my second profile is not respecting my selection to not allow device
+# crossing without pressing the mouse button" ... "it was absolutely crossing on
+# mouse proximity without touching the button as well".
+#
+# His portal.log holds the whole story: the gate working ("stayed put at the
+# right edge -- hold a mouse side button to cross"), then "ready - 3 portal(s)
+# loaded" -- the restart an arrangement switch triggers -- then at once "no side
+# button has ever arrived from this mouse -- falling back to a deliberate push"
+# and a crossing he never asked for. _side_seen is per-PROCESS, and the portal
+# restarts on every config change, so the gate forgot on every switch.
+broker._cross_button = True
+broker._side_held = 0
+broker._side_seen = False                        # exactly as after a restart
+broker._mouse_has_side_buttons = lambda: True    # the mouse Windows reports
+broker.active = True
+broker.active_target = "device-1"
+broker.active_display = "device-1-1"
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+broker._armed_until = 0.0
+broker._note_motion(600)          # the same deliberate push as above
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("a fresh portal honours the setting before any button is pressed",
+      left_pc is False and not exits)
+
+broker._side_held = 0x0002
+broker.vx, broker.vy = -1925.0, 200.0
+broker._motion = ()
+exits.clear()
+left_pc = broker._route_motion(80, 0)
+check("and the side button still crosses on a fresh portal",
+      left_pc is True and len(exits) == 1)
+broker._side_held = 0
+broker._cross_button = False
+del broker._mouse_has_side_buttons
+
+# --- while a device is captured the keyboard is dumb as a rock -------------
+# Ctrl+Alt+I threw him at the iPad mid-sentence; Ctrl+Alt+V is why Cmd+Ctrl+V
+# never pasted. A combination the portal swallows is one the target never sees.
+import inspect  # noqa: E402
+hook = inspect.getsource(openspan_portal.Portal)
+for combo, vk in (("Ctrl+Alt+Q", "0x51"), ("Ctrl+Alt+I", "0x49")):
+    line = [ln for ln in hook.splitlines()
+            if f"vk == {vk} and ctrl and alt" in ln]
+    check(f"{combo} is not taken from a captured device",
+          bool(line) and "not self.active" in line[0])
+check("plain Ctrl+Alt+V is not swallowed at all any more",
+      not [ln for ln in hook.splitlines()
+           if "vk == 0x56 and ctrl and alt and self.active" in ln])
+check("but paste-from-the-PC still works, on the Shift chord",
+      "vk == 0x56 and ctrl and alt and shift" in hook
+      and "get_clipboard_text()" in hook)
 
 print("RESULT: ALL PASS")

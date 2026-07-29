@@ -411,7 +411,7 @@ class Portal:
     _key_down_at = 0.0          # to measure how long a key is actually held
     _chord_target = None        # a chord gates ONLY the device it runs on
     _side_held = 0              # which mouse side buttons are down (bitmask)
-    _side_seen = False          # has a side button EVER arrived? (lockout guard)
+    _side_seen = False          # has a side button arrived in THIS process?
     _cross_button = False       # hold a side button to cross a device edge
     _button_jumps = False       # ...and while held, go to the NEAREST surface
 
@@ -1003,6 +1003,26 @@ class Portal:
             self._jump_now()
         return was != self._side_held
 
+    @staticmethod
+    def _mouse_has_side_buttons():
+        """Does the mouse on this desk have buttons 4 and 5 at all?
+
+        Asked of Windows rather than learned by watching, because learning
+        cannot survive a restart and the portal restarts whenever the config
+        changes -- switching an arrangement, moving a screen, adding a device.
+        Every one of those quietly put the crossing gate back to "this mouse
+        seems to have no side buttons" and let ordinary movement through, while
+        the checkbox went on saying the opposite.
+
+        SM_CMOUSEBUTTONS is the number of buttons Windows believes it has; four
+        or more means the two side buttons exist. It is true the instant the
+        process starts, which is the entire point.
+        """
+        try:
+            return ctypes.windll.user32.GetSystemMetrics(43) >= 4
+        except Exception:  # noqa: BLE001
+            return False
+
     def _may_cross(self):
         """Is leaving this machine something the user actually asked for?
 
@@ -1016,12 +1036,13 @@ class Portal:
         is the only way through, in which case nothing else will do."""
         if self._side_held:
             return True
-        if self._cross_button and self._side_seen:
+        if self._cross_button and (self._side_seen
+                                   or self._mouse_has_side_buttons()):
             return False
         if self._cross_button:
-            # The option is on but this mouse has never sent a side button.
-            # Refusing every crossing would trap the pointer with no way to
-            # reach the checkbox that turns the option off.
+            # The option is on and this mouse genuinely has no side buttons --
+            # not merely "none pressed yet". Refusing every crossing would
+            # strand the pointer on a target it cannot leave except by Esc x3.
             if time.monotonic() - self._gentle_logged > 5.0:
                 self._gentle_logged = time.monotonic()
                 print("[portal] no side button has ever arrived from this "
@@ -1932,31 +1953,48 @@ class Portal:
                         self.raw_keys.pop(vk, None)
                 self._emit_kbd()
                 return 1
-            if down and vk == 0x51 and ctrl and alt:      # Ctrl+Alt+Q
-                if self.active:                           # legacy bail, kept
-                    self.leave()                          # as a backup
-                return 1
-            if down and vk == 0x49 and ctrl and alt:      # Ctrl+Alt+I
-                if self.active:
-                    self.leave()
-                else:
-                    ready = next(
-                        (portal for portal in self.portals
-                         if self.target_ready.get(
-                             portal.get("target"), False)),
-                        None)
-                    if ready:
-                        self.enter(ready, self.cy)
+            # ---- PC-side hotkeys, and ONLY while nothing is captured ------
+            # Doug: "the keyboard should be dumb as a rock and simply do what i
+            # do." A combination we swallow is a combination the target never
+            # sees, and on a Mac reached through the alt->cmd remap these are
+            # Cmd+Option chords that real applications use. Ctrl+Alt+I stole the
+            # letter i mid-sentence and threw the pointer at the iPad; Ctrl+Alt+V
+            # is why Cmd+Ctrl+V never pasted.
+            #
+            # So they fire only when no device is captured. Esc x3 remains the
+            # bail-out and is the one thing that is always ours -- it is
+            # advertised on every entry line in the log for exactly this reason.
+            if down and vk == 0x51 and ctrl and alt and not self.active:
+                return 1                                  # Ctrl+Alt+Q, legacy
+            if down and vk == 0x49 and ctrl and alt and not self.active:
+                ready = next(
+                    (portal for portal in self.portals
+                     if self.target_ready.get(portal.get("target"), False)),
+                    None)
+                if ready:
+                    self.enter(ready, self.cy)
                 return 1
             shift = self.mods & 0x22
             if up and vk in self._hot_down:
                 self._hot_down.discard(vk)  # re-arm the hotkey on release
             if down and vk == 0x56 and ctrl and alt and shift:
-                # Ctrl+Alt+Shift+V: tell the iPad to FETCH the PC clipboard
-                # (runs its "Paste from PC" shortcut via the FKA chord)
-                if self._clipboard_devices.get(self.active_target) and self._chord_armed(vk):
-                    print("[portal] asking iPad to fetch the PC clipboard")
-                    self._send_chord(FKA_FETCH)
+                # Ctrl+Alt+Shift+V means one thing -- PASTE FROM THE PC -- done
+                # whichever way the captured device allows. A device with the
+                # helper shortcuts installed runs them; anything else has the
+                # clipboard typed into it, which is what plain Ctrl+Alt+V used
+                # to do before it was handed back to the target it belongs to.
+                if self._clipboard_devices.get(self.active_target):
+                    if self._chord_armed(vk):
+                        print("[portal] asking iPad to fetch the PC clipboard")
+                        self._send_chord(FKA_FETCH)
+                elif self.active:
+                    text = get_clipboard_text()
+                    if text:
+                        print(f"[portal] typing {len(text)} chars of clipboard "
+                              f"to {self.active_target}")
+                        # through the queue: the sender thread owns the socket,
+                        # so nothing else may write it concurrently
+                        self.q.put((self.active_target, "t", text, 0, 0))
                 return 1
             if down and vk == 0x43 and ctrl and alt and shift:
                 # Ctrl+Alt+Shift+C: tell the iPad to PUSH its clipboard to
@@ -1966,18 +2004,7 @@ class Portal:
                           "the PC")
                     self._send_chord(FKA_PUSH)
                 return 1
-            if down and vk == 0x56 and ctrl and alt and self.active:
-                # Ctrl+Alt+V. Only while a device is captured: with none, the
-                # queued target is None, the sender falls back to the default
-                # port, and this typed the Windows clipboard into whichever
-                # device happens to own it.
-                text = get_clipboard_text()
-                if text:
-                    print(f"[portal] pasting {len(text)} chars to iPad")
-                    # through the queue: the sender thread owns the socket,
-                    # so nothing else may write it concurrently
-                    self.q.put((self.active_target, "t", text, 0, 0))
-                return 1
+
             # keep physical modifier byte current in every mode
             if vk in VK_MOD:
                 if down:

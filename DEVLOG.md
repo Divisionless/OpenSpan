@@ -1079,3 +1079,71 @@ the code), and `save_profile` stripping `links` (the mechanism is real —
 `normalize_config` reads a missing `links` as "pre-adjacency" and re-runs a
 one-time snap — but it does not move anything on this desk). `links` is kept in
 the snapshot anyway: a latent trap that costs one line to close.
+
+## 29 July, later — the gate its own restart switched off
+
+Doug: *"my second profile is not respecting my selection to not allow device
+crossing without pressing the mouse button"*, and, when I narrowed it wrongly to
+the second symptom, *"it doesn't change the diagnosis, it is another symptom, it
+was absolutely crossing on mouse proximity without touching the button as well."*
+
+He was right on both counts. Two independent faults, and his `portal.log` holds
+the first one in five consecutive lines:
+
+```
+[portal] stayed put at the right edge -- hold a mouse side button to cross
+...
+[portal] ready — 3 portal(s) loaded.
+[portal] no side button has ever arrived from this mouse -- falling back to a
+         deliberate push so nothing gets stuck
+[portal] >>> Managed Mac mode ON via x=4 -> Mac Display 3
+```
+
+The gate working, a restart, the gate gone, a crossing he did not ask for.
+
+**`_side_seen` was per-process.** The lockout guard asked "has a side button
+arrived *in this process*", and the portal restarts on every config change —
+which now includes every arrangement switch. So each switch put the gate back to
+"this mouse appears to have no side buttons" and let ordinary movement through,
+while the checkbox went on saying it would not. Nothing was wrong with the
+profiles: both files and the live config carry
+`cross_requires_side_button: true`.
+
+The fix is to stop learning something the operating system already knows.
+`GetSystemMetrics(SM_CMOUSEBUTTONS)` returns **5** for his mouse, and it returns
+it the instant the process starts. A guard that has to be taught cannot survive
+a restart; one that asks cannot forget. The old "never seen one" path remains
+for a mouse that genuinely has two or three buttons, because refusing every
+crossing there would strand the pointer on a target.
+
+*The escape-hatch test passed throughout, on a five-button mouse, because it
+asserted `_side_seen = False` and inherited the rest from the machine it ran on.
+It now states the mouse it is describing.*
+
+### And the keyboard was still not dumb as a rock
+
+The second symptom — *"when i was typing it was switching to the ipad - i think
+when i hit the letter i"* — is a different fault with the same shape as one he
+reported hours earlier.
+
+Three combinations were being swallowed with a bare `ctrl and alt` test:
+
+| | was | through the Mac's alt→cmd remap |
+|---|---|---|
+| `Ctrl+Alt+I` | enter/leave a device | **Cmd+Option+I** — Web Inspector, and the letter i |
+| `Ctrl+Alt+Q` | legacy bail | Cmd+Option+Q |
+| `Ctrl+Alt+V` | type the PC clipboard | **Cmd+Ctrl+V** — the paste he reported broken, twice |
+
+A combination the portal swallows is one the target never sees. `Ctrl+Alt+V` had
+been given an exemption for `keyboard_verbatim` devices earlier in the day, which
+only narrowed the bug — the hotkey was the problem, not which devices it applied
+to.
+
+All three now fire **only while nothing is captured**. Esc ×3 remains the bail
+and is the one chord that is always ours; it is printed on every entry line in
+the log for exactly this reason. Paste-from-the-PC moved to `Ctrl+Alt+Shift+V`,
+which already meant precisely that for the iPad — a device with the helper
+shortcuts runs them, anything else has the clipboard typed into it.
+
+Doug's own words are the rule this should have been written to in the first
+place: *"the keyboard should be dumb as a rock and simply do what i do."*
