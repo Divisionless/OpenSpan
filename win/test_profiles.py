@@ -219,6 +219,13 @@ check("and it still survives a round-trip through an arrangement",
       canvas.config.get("cross_requires_side_button") is True)
 A.delete_profile("Loud")
 
+# a switch can therefore CHANGE them, so the checkboxes must be re-read
+import inspect  # noqa: E402
+src = inspect.getsource(A.App._switch_profile)
+check("switching re-reads both crossing checkboxes from the new arrangement",
+      "self.cross_button.set(" in src and "self.button_jumps.set(" in src,
+      "the boxes would keep showing the previous arrangement's settings")
+
 # ---- a name and its filename are the same string ---------------------------
 for typed, expect in (("Mac 4K (day)", "Mac 4K _day_"), ("Desk 2.0", "Desk 2_0"),
                       ("  padded  ", "padded"), ("///", "___"), ("", "unnamed"), ("...", "___"),

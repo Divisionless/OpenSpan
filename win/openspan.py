@@ -4476,6 +4476,15 @@ class App:
             _emit("err", f"could not load “{name}”: {exc}")
             return
         self.canvas.adopt(loaded)
+        # An arrangement now carries the whole-desk settings with it, so a
+        # switch can change them -- and these two checkboxes were built once and
+        # never looked at the config again. A tick that no longer matches what
+        # the portal was told is worse than no tick at all: it is the UI
+        # answering a question it has stopped being able to answer.
+        self.cross_button.set(
+            bool(self.canvas.config.get("cross_requires_side_button", False)))
+        self.button_jumps.set(
+            bool(self.canvas.config.get("side_button_jumps_nearest", False)))
         self.canvas.redraw()
         self.canvas.save()          # persists AND reloads the portal
         self._rebuild_device_rows()
