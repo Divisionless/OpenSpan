@@ -8,6 +8,7 @@ pairing, hand off the Bluetooth radio, and edit the keymap.
 Pure standard library (tkinter + ctypes). No dependencies.
 """
 
+import copy
 import json
 import math
 import os
@@ -20,7 +21,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
 
 # reuse the monitor enumeration + presets from the setup module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -185,6 +186,161 @@ def _paint_dark_titlebar(win):
         pass
 
 
+class FrameModal(tk.Frame):
+    """A modal that lives INSIDE the window, wearing a Toplevel's API.
+
+    Nothing here may open a separate OS window. Windows places a new window, not
+    the user, so on a multi-monitor desk the thing you just clicked for appears
+    on a screen you were not looking at.
+
+    It IS a Frame, so `tk.Label(modal, ...)` and `.pack()` behave exactly as they
+    did inside a Toplevel; the window-manager calls a dialog makes -- title,
+    transient, geometry, grab_set, protocol, destroy -- are answered here, so
+    each dialog needed one line changed rather than a rewrite.
+
+    Two of those calls do real work rather than nothing:
+
+    * `bind` is installed on the WINDOW, not on this frame. A Toplevel sees
+      events from its children; an intermediate frame does not. Left on the
+      frame, `win.bind("<Return>", ok)` would silently stop firing the moment
+      focus sat in the dialog's own entry box -- which is the only place focus
+      ever is. It is taken back off at close, restoring whatever was bound
+      before.
+    * `geometry("900x420")` sizes the card, clamped to the window it now lives
+      in. Position (`"+x+y"`) is discarded: a card in the middle of the window
+      has no screen coordinate to be moved to.
+    """
+
+    def __init__(self, parent, **kw):
+        kw.setdefault("bg", BG)
+        self._host = parent.winfo_toplevel()
+        self._scrim = tk.Frame(self._host, bg=SCRIM)
+        self._scrim.place(x=-20, y=-20, relwidth=1, relheight=1,
+                          width=40, height=40)
+        self._scrim.lift()
+        self._scrim.bind("<Button-1>", lambda _e: self._dismiss())
+        self._card = tk.Frame(self._scrim, bg=kw["bg"],
+                              highlightbackground=BORDER, highlightthickness=1)
+        self._card.place(relx=0.5, rely=0.5, anchor="center")
+        self._card.bind("<Button-1>", lambda _e: "break")
+        super().__init__(self._card, **kw)
+        self.pack(fill="both", expand=True)
+        self._title = ""
+        self._on_close = None
+        self._closed = False
+        self._binds = {}
+        self._prev_grab = None
+        self.bind("<Escape>", lambda _e: self._dismiss())
+
+    # ---- the window-manager surface the dialogs already call --------------
+    def title(self, text=None):
+        if text is not None:
+            self._title = str(text)
+        return self._title
+
+    def protocol(self, _name, func=None):
+        self._on_close = func
+
+    def transient(self, *_a):
+        return None
+
+    def resizable(self, *_a):
+        return None
+
+    def minsize(self, *_a):
+        return None
+
+    def withdraw(self):
+        return None
+
+    def deiconify(self):
+        return None
+
+    def iconify(self):
+        return None
+
+    def attributes(self, *_a):
+        return None
+
+    def configure(self, cnf=None, **kw):
+        # the card is the visible panel; a dialog recolouring itself must not
+        # leave a rim of the old colour around its own edge
+        colour = kw.get("bg", kw.get("background"))
+        if colour:
+            self._card.configure(bg=colour)
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+    def geometry(self, spec=None):
+        if not spec:
+            return ""
+        want = re.match(r"^(\d+)x(\d+)", str(spec))
+        if not want:
+            return ""          # "+x+y" -- a screen position we do not have
+        self._host.update_idletasks()
+        self._card.place_configure(
+            width=min(int(want.group(1)),
+                      max(240, self._host.winfo_width() - 40)),
+            height=min(int(want.group(2)),
+                       max(200, self._host.winfo_height() - 40)))
+        return ""
+
+    def bind(self, sequence=None, func=None, add=None):
+        if sequence is None or func is None or add:
+            return super().bind(sequence, func, add)
+        if sequence not in self._binds:
+            self._binds[sequence] = self._host.bind(sequence)
+        self._host.bind(sequence, func)
+        return ""
+
+    def grab_set(self):
+        try:
+            self._prev_grab = self._host.grab_current()
+            self._scrim.grab_set()
+        except tk.TclError:
+            pass
+
+    def grab_release(self):
+        try:
+            self._scrim.grab_release()
+            if self._prev_grab is not None:
+                self._prev_grab.grab_set()   # a modal opened OVER a modal
+        except tk.TclError:
+            pass
+        self._prev_grab = None
+
+    def focus_force(self):
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
+
+    def _dismiss(self):
+        if self._on_close:
+            self._on_close()
+        else:
+            self.destroy()
+
+    def destroy(self):
+        if self._closed:
+            return
+        self._closed = True
+        for sequence, previous in self._binds.items():
+            try:
+                self._host.unbind(sequence)
+                if previous:
+                    self._host.bind(sequence, previous)
+            except tk.TclError:
+                pass
+        self._binds.clear()
+        self.grab_release()
+        try:
+            self._scrim.destroy()
+        except tk.TclError:
+            pass
+
+
 def _dialog(parent, title, message, buttons):
     """Show a dark modal dialog INSIDE the app window — an in-frame overlay, not
     a separate OS window — and block until a button is chosen. `buttons` is a
@@ -280,16 +436,80 @@ def dark_alert(parent, title, message, ok="OK"):
     _dialog(parent, title, message, [(ok, True, "Accent.TButton")])
 
 
+PROFILE_DIR = os.path.join(ROOT, "profiles")
+# What a profile deliberately does NOT carry. These follow the HARDWARE, not the
+# situation: a radio is a physical dongle, a port is a lane on the guest, and the
+# bonds behind them live on the guest per radio. Two arrangements of the same
+# desk must not fight over one lane.
+MACHINE_FIELDS = ("radio", "port")
+
+
+def _profile_path(name):
+    safe = "".join(c if c.isalnum() or c in " -_" else "_"
+                   for c in str(name)).strip() or "unnamed"
+    return os.path.join(PROFILE_DIR, safe + ".json")
+
+
+def list_profiles():
+    try:
+        return sorted(f[:-5] for f in os.listdir(PROFILE_DIR)
+                      if f.endswith(".json"))
+    except OSError:
+        return []
+
+
+def save_profile(config, name):
+    """Snapshot the arrangement under a name. Machine fields are dropped."""
+    snapshot = copy.deepcopy(config)
+    snapshot.pop("portals", None)      # both are derived; recomputed on load
+    snapshot.pop("links", None)
+    for device in snapshot.get("devices", []):
+        for field in MACHINE_FIELDS:
+            device.pop(field, None)
+    snapshot["profile"] = str(name)
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    with open(_profile_path(name) + ".new", "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle, indent=2)
+    os.replace(_profile_path(name) + ".new", _profile_path(name))
+    return name
+
+
+def load_profile(name, current):
+    """A saved arrangement, wearing THIS machine's radios and ports.
+
+    Which dongle drives which device is a fact about the desk, not about the
+    arrangement -- so it is carried over from what is running now, matched by
+    device id, and never restored from the file."""
+    with open(_profile_path(name), encoding="utf-8") as handle:
+        loaded = json.load(handle)
+    hardware = {device.get("id"): device
+                for device in current.get("devices", [])}
+    for device in loaded.get("devices", []):
+        live = hardware.get(device.get("id"), {})
+        for field in MACHINE_FIELDS:
+            if field in live:
+                device[field] = live[field]
+    loaded["profile"] = str(name)
+    return loaded
+
+
+def delete_profile(name):
+    try:
+        os.remove(_profile_path(name))
+        return True
+    except OSError:
+        return False
+
+
 def dark_prompt(parent, title, message, default=""):
     """Dark single-line text prompt. Returns the string, or None on cancel.
     Native dialogs are light-themed, so this stays in the app's own look."""
-    win = tk.Toplevel(parent)
-    win.withdraw()
+    win = FrameModal(parent)
     win.title(title)
     win.configure(bg=CARD)
     win.transient(parent)
     win.resizable(False, False)
-    _paint_dark_titlebar(win)
+
     tk.Label(win, text=title, bg=CARD, fg=FG,
              font=("Segoe UI Semibold", 11)).pack(
         anchor="w", padx=18, pady=(16, 2))
@@ -1744,25 +1964,13 @@ class MultiArrangeCanvas(tk.Canvas):
                 raw = json.load(handle)
         except (OSError, ValueError):
             pass
-        self.config = normalize_config(raw, live)
-        _migrate_radio_assignments(self.config)
         # What the portal will read when it starts. save() compares against
         # this, so the first cosmetic save of a session does not bounce a
         # perfectly good portal.
+        self._told_portal = None
+        self.target_states = {}
+        self.adopt(raw, live)
         self._told_portal = portal_signature(self.config)
-        self.monitors = self.config["monitors"]
-        self.targets = self.config["devices"]
-        # No device is privileged. `ipad` here is simply "the first display of
-        # the first device" -- a convenience handle for the legacy single-device
-        # helpers below; it is None when the user has not added a device yet.
-        self.ipad = None
-        self.selected = None
-        if self.targets and self.targets[0].get("displays"):
-            self.ipad = self.targets[0]["displays"][0]
-            self.selected = ("target", self.targets[0]["id"], self.ipad["id"])
-        self.target_states = {
-            device["id"]: "off" for device in self.targets}
-        self.ipad_state = "off"  # compatibility for existing tests/callers
         self.action = None
         self.drag_off = (0, 0)
         self._resize_anchor = None
@@ -1780,6 +1988,43 @@ class MultiArrangeCanvas(tk.Canvas):
         # the user drags anything, and the portal process must already know its
         # three displays/independent daemon port when that connect edge lands.
         self._persist()
+
+    def adopt(self, raw, live=None):
+        """Make `raw` the arrangement this canvas is showing.
+
+        Every derived handle the canvas keeps is rebuilt from the config here
+        and NOWHERE else, so switching arrangements cannot leave one of them
+        pointing into the previous desk. That is not hypothetical: `ipad` and
+        `selected` hold references to specific display dicts, and a stale one
+        survives every redraw looking perfectly valid.
+
+        Connection state is keyed by device id and deliberately kept across the
+        swap -- a device that is live right now is still live a moment later; a
+        different picture of the desk does not disconnect anything.
+        """
+        self.config = normalize_config(raw, live or enum_monitors())
+        # normalize_config returns a clean v3 dict built from a field whitelist,
+        # so the arrangement's NAME does not survive it. Carry it across here --
+        # without this the app forgets which arrangement it is showing the moment
+        # it loads one, and the next launch offers no way to tell.
+        name = str((raw if isinstance(raw, dict) else {}).get("profile") or "")
+        if name:
+            self.config["profile"] = name
+        _migrate_radio_assignments(self.config)
+        self.monitors = self.config["monitors"]
+        self.targets = self.config["devices"]
+        # No device is privileged. `ipad` here is simply "the first display of
+        # the first device" -- a convenience handle for the legacy single-device
+        # helpers below; it is None when the user has not added a device yet.
+        self.ipad = None
+        self.selected = None
+        if self.targets and self.targets[0].get("displays"):
+            self.ipad = self.targets[0]["displays"][0]
+            self.selected = ("target", self.targets[0]["id"], self.ipad["id"])
+        known = dict(self.target_states)
+        self.target_states = {device["id"]: known.get(device["id"], "off")
+                              for device in self.targets}
+        self.ipad_state = "off"  # compatibility for existing tests/callers
 
     def target(self, target_id):
         return device_by_id(self.config, target_id)
@@ -2271,6 +2516,17 @@ class MultiArrangeCanvas(tk.Canvas):
             os.replace(CONFIG + ".new", CONFIG)
         except OSError:
             pass
+        # An arrangement that is SELECTED is the one being used, so every edit
+        # belongs to it. Without this there would be a saved copy and a live
+        # copy drifting apart, and switching away -- the whole point of having
+        # arrangements -- would silently throw away everything done since.
+        # There is no unsaved state to lose because there is no unsaved state.
+        name = str(self.config.get("profile") or "")
+        if name and name in list_profiles():
+            try:
+                save_profile(self.config, name)
+            except OSError:
+                pass
 
 
 class MacDisplayEditor:
@@ -2289,13 +2545,13 @@ class MacDisplayEditor:
         self.canvas = canvas
         self.device_id = device_id
         self.rows = []
-        self.top = tk.Toplevel(parent)
+        self.top = FrameModal(parent)
         self.top.title(f"{self._device_label(canvas, device_id)} displays")
         self.top.geometry("900x420")
         self.top.minsize(820, 340)
         self.top.configure(bg=BG)
         self.top.transient(parent)
-        _paint_dark_titlebar(self.top)
+
         tk.Label(
             self.top,
             text=f"{self._device_label(canvas, device_id)} "
@@ -3486,6 +3742,32 @@ class App:
             anchor="w", padx=8, pady=(6, 0))
         self.canvas = MultiArrangeCanvas(
             arr_wrap, on_change=self._portal_changed, height=270)
+
+        # ---- arrangements -------------------------------------------------
+        # A screen's resolution really does change -- the managed Mac's
+        # landscape panel gets switched between 4K and 2K -- and every distance
+        # on that screen changes with it. Rather than re-entering the whole desk
+        # each time, keep a named copy of each arrangement and switch.
+        #
+        # Named INLINE, in the entry below. No pop-out asks for a name: a new
+        # window lands on whichever monitor Windows picks, which on this desk is
+        # rarely the one being looked at.
+        prow = tk.Frame(arr_wrap, bg=CARD)
+        prow.pack(fill="x", padx=8, pady=(6, 0))
+        tk.Label(prow, text="Arrangement:", bg=CARD, fg=MUTED).pack(side="left")
+        self.profile_name = tk.StringVar(
+            value=str(self.canvas.config.get("profile", "") or "Current"))
+        self.profile_pick = ttk.Combobox(
+            prow, textvariable=self.profile_name, width=24,
+            values=list_profiles(), state="normal")
+        self.profile_pick.pack(side="left", padx=6)
+        self.profile_pick.bind("<<ComboboxSelected>>", self._switch_profile)
+        ttk.Button(prow, text="Save as", width=8,
+                   command=self._save_profile).pack(side="left")
+        ttk.Button(prow, text="Duplicate", width=10,
+                   command=self._duplicate_profile).pack(side="left", padx=4)
+        ttk.Button(prow, text="Delete", width=7,
+                   command=self._delete_profile).pack(side="left")
         self.canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
         row = tk.Frame(arr_wrap, bg=CARD)
@@ -4063,6 +4345,90 @@ class App:
                 pass
         except Exception:  # noqa: BLE001
             pass
+
+    def _refresh_profiles(self, select=None):
+        self.profile_pick["values"] = list_profiles()
+        if select is not None:
+            self.profile_name.set(select)
+
+    def _save_profile(self):
+        """Name the desk as it stands now, and start using that name.
+
+        There is no plain "save": whatever is on the canvas is already stored,
+        and stored into the selected arrangement if there is one. This is how an
+        unnamed desk gets its first name, and how a copy gets a chosen one
+        instead of the automatic name Duplicate gives it.
+        """
+        name = self.profile_name.get().strip()
+        active = str(self.canvas.config.get("profile") or "")
+        if not name:
+            _emit("err", "type a name for this arrangement first.")
+            return
+        if name in list_profiles() and name != active and not dark_confirm(
+                self.root, "Replace that arrangement?",
+                f"“{name}” already exists. Replace it with the desk as it is "
+                f"now? The one it is replacing cannot be recovered."):
+            return
+        save_profile(self.canvas.config, name)
+        self.canvas.config["profile"] = name
+        self.canvas.save()
+        self._refresh_profiles(name)
+        _emit("ok", f"this desk is now the “{name}” arrangement.")
+
+    def _duplicate_profile(self):
+        """Copy this arrangement under a new name and switch to it.
+
+        The copy is what gets edited -- resolutions, sizes, positions -- so the
+        one being used stays exactly as it is until the new one is chosen."""
+        base = self.profile_name.get().strip() or "Arrangement"
+        taken = set(list_profiles())
+        index = 2
+        name = f"{base} {index}"
+        while name in taken:
+            index += 1
+            name = f"{base} {index}"
+        save_profile(self.canvas.config, name)
+        self.canvas.config["profile"] = name
+        self.canvas.save()
+        self._refresh_profiles(name)
+        _emit("ok", f"duplicated as “{name}” — this is the one being edited "
+                    f"now; “{base}” keeps the screens it had.")
+
+    def _switch_profile(self, _event=None):
+        name = self.profile_name.get().strip()
+        if name not in list_profiles():
+            return          # a name being typed for Save as, not a selection
+        if name == str(self.canvas.config.get("profile") or ""):
+            return
+        try:
+            loaded = load_profile(name, self.canvas.config)
+        except (OSError, ValueError) as exc:
+            _emit("err", f"could not load “{name}”: {exc}")
+            return
+        self.canvas.adopt(loaded)
+        self.canvas.redraw()
+        self.canvas.save()          # persists AND reloads the portal
+        self._rebuild_device_rows()
+        ensure_device_forwards(self.canvas.config)
+        _emit("ok", f"arrangement “{name}” is now in use.")
+
+    def _delete_profile(self):
+        name = self.profile_name.get().strip()
+        if name not in list_profiles():
+            return
+        if not dark_confirm(self.root, "Delete arrangement?",
+                            f"Delete the saved arrangement “{name}”? The "
+                            f"screens in use right now do not change."):
+            return
+        delete_profile(name)
+        if name == str(self.canvas.config.get("profile") or ""):
+            # the desk itself does not change -- it just stops having a name,
+            # which is what stops _persist writing it back to a deleted file
+            self.canvas.config.pop("profile", None)
+            self.canvas.save()
+        self._refresh_profiles("Current")
+        _emit("event", f"arrangement “{name}” deleted. The screens in use did "
+                       f"not change.")
 
     def _on_button_jumps(self):
         """While a side button is held, ignore adjacency and go to the nearest."""
@@ -5102,13 +5468,12 @@ class App:
         """Type each screen's real diagonal in inches. Size is DERIVED from it
         (with the aspect its resolution and rotation imply), so the arrangement
         is physically truthful instead of being drawn to taste."""
-        win = tk.Toplevel(self.root)
-        win.withdraw()
+        win = FrameModal(self.root)
         win.title("Screen sizes")
         win.configure(bg=CARD)
         win.transient(self.root)
         win.resizable(False, False)
-        _paint_dark_titlebar(win)
+
         tk.Label(win, text="Screen sizes", bg=CARD, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(
             anchor="w", padx=18, pady=(16, 2))
@@ -5202,13 +5567,12 @@ class App:
         if not record:
             return
         label = record.get("name", device_id)
-        win = tk.Toplevel(self.root)
-        win.withdraw()
+        win = FrameModal(self.root)
         win.title(f"Input — {label}")
         win.configure(bg=CARD)
         win.transient(self.root)
         win.resizable(False, False)
-        _paint_dark_titlebar(win)
+
         tk.Label(win, text=f"Input settings — {label}", bg=CARD, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(
             anchor="w", padx=18, pady=(16, 2))

@@ -46,6 +46,8 @@ OpenSpan-Codex*.exe
 # personal / machine-specific runtime state (never publish)
 bt_prefs.json
 openspan_config.json
+# named arrangements are pictures of the user's actual desk
+profiles/
 mode.txt
 # Windows shortcuts embed the creating machine's name/IDs — never publish
 *.lnk

@@ -796,7 +796,7 @@ Doug added a Managed Laptop. *"adding process went really smoothly until i tried
 to pair it."*
 
 The guest was flawless: `openspanble@device-1` active, hci1
-(3C:6A:D2:3C:D4:4E), advertising name set, `:9957` listening, GATT registered.
+(a real dongle address, redacted), advertising name set, `:9957` listening, GATT registered.
 From Windows, `127.0.0.1:9957` simply timed out — the VM's NAT table had rules
 for 9955, 9956, ssh and audio, and nothing for the new device.
 
@@ -940,3 +940,84 @@ Three real faults fell out of it anyway:
 
 New tests count rising EDGES rather than reports — the only way to see a click
 that was never sent.
+
+---
+
+## 29 July — arrangements, and the last of the pop-outs
+
+### Two desks, one of which is the Mac at 2K
+
+Doug: *"I sometimes change my managed mac's landscape screen to 2k resolution.
+So I need to be able to duplicate the current arrangement and then resize/arrange
+all screens and devices attached to it."*
+
+A resolution is not a cosmetic field here. The physical size a screen is drawn
+at, the desk units it spans, the scale from HID counts to target points, and the
+crossing band on each of its edges are all derived from it — so switching that
+panel between 4K and 2K means re-entering the desk, twice a day, from memory.
+
+Arrangements are named copies of the desk, in `ROOT\profiles\*.json`. What one
+carries is the line that matters:
+
+| in the arrangement | belongs to the machine |
+|---|---|
+| screens, positions, sizes, resolutions, rotations | `radio` — a physical dongle |
+| which devices exist, their names and input settings | `port` — a lane on the guest |
+
+**Radios and ports never travel.** Bonds live on the guest *per radio*, so an
+arrangement that remembered which dongle drove the Mac would, after a dongle
+moved, point that lane at a radio holding no bond for it — a device that pairs,
+goes green, and does nothing. Loading takes those two fields from whatever is
+running now, matched by device id.
+
+Three things fell out of building it that were not obvious:
+
+1. **`normalize_config` returns a fresh dict from a field whitelist**, so the
+   arrangement's own name did not survive being loaded. The app forgot which
+   arrangement it was showing the moment it showed it.
+2. **The canvas keeps references, not just data.** `ipad` and `selected` point at
+   specific display dicts. A switch that rebuilt the config and left those
+   behind would keep a live handle into the desk that is no longer on screen —
+   valid-looking through every redraw. Installing a config is now one method,
+   `MultiArrangeCanvas.adopt()`, and it is the only place those are rebuilt.
+   Connection state is deliberately kept across the swap: a different picture of
+   the desk does not disconnect anything.
+3. **A selected arrangement is written through on every save.** Otherwise there
+   would be a saved copy and a live copy drifting apart, and switching away —
+   the entire point — would silently discard everything done since. There is no
+   unsaved state to lose because there is no unsaved state. `Save as` names an
+   unnamed desk; it is not a commit step.
+
+### The dialogs stopped being windows
+
+Doug, on the display editor appearing on a screen he was not looking at:
+*"i don't want this program to generate popouts — if i click into something i
+want it right there."*
+
+Four `tk.Toplevel` dialogs remained. Rather than rewrite each, `FrameModal` is a
+`tk.Frame` that answers the window-manager calls a dialog makes — `title`,
+`transient`, `geometry`, `minsize`, `grab_set`, `protocol`, `destroy` — and
+lives inside the app window over a scrim. Each dialog changed one line.
+
+Two of its methods do real work, and both are failures that would have been
+silent rather than loud:
+
+- **`bind` installs on the window, not on the frame.** A Toplevel sees events
+  from its children; an intermediate frame does not. Left alone,
+  `win.bind("<Return>", ok)` would stop firing the moment focus entered the
+  dialog's own entry box — which is the only place focus ever is. The bindings
+  come back off at close, restoring whatever was there before.
+- **`grab_set` remembers the previous grab and hands it back.** A confirm opened
+  over the display editor would otherwise leave nothing grabbing, and the editor
+  underneath would quietly stop being modal.
+
+`geometry("900x420")` now sizes the card, clamped to the window; `"+x+y"` is
+discarded, because a card in the middle of a window has no screen coordinate.
+The two native `messagebox` calls left in the legacy `--setup` path went too, and
+the unused `messagebox`/`simpledialog` imports with them.
+
+`test_frame_modal.py` runs headless against a withdrawn root and ends by
+**parsing** all four modules for `Toplevel`/`messagebox`/`filedialog`/
+`simpledialog` — parsing rather than grepping, because `dark_confirm`'s docstring
+names the native dialog it replaced and a text search cannot tell that from a
+call.

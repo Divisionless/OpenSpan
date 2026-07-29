@@ -16,7 +16,7 @@ import json
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 if getattr(sys, "frozen", False):  # frozen exe: data lives at the exe
     CONFIG_PATH = os.path.join(
@@ -308,8 +308,12 @@ class SetupApp:
 
     def _save(self):
         if not self._portals():
-            if not messagebox.askyesno(
-                    "No portal",
+            # imported here, not at module scope: openspan imports THIS
+            # module, so the other direction only works once it is loaded --
+            # which it is by the time anyone can click Save.
+            from openspan import dark_confirm
+            if not dark_confirm(
+                    self.root, "No portal",
                     "The iPad isn't touching any monitor, so there's no "
                     "edge to cross. Save anyway?"):
                 return
@@ -325,9 +329,10 @@ class SetupApp:
             json.dump(cfg, f, indent=2)
         self.status.config(text=f"Saved → {os.path.basename(CONFIG_PATH)}",
                            foreground="#1a7f37")
-        messagebox.showinfo("Saved",
-                            f"Arrangement saved to:\n{CONFIG_PATH}\n\n"
-                            "Now run openspan_portal.py to use it.")
+        from openspan import dark_alert
+        dark_alert(self.root, "Saved",
+                   f"Arrangement saved to:\n{CONFIG_PATH}\n\n"
+                   "Now run openspan_portal.py to use it.")
 
 
 if __name__ == "__main__":

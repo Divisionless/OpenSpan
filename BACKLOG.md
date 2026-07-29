@@ -89,25 +89,21 @@ somewhere sensible instead of somewhere arbitrary.
   routing sees it. On iPadOS that overshoot is a gesture. Needs `_route_motion`
   to report how much it consumed.
 
-## Profiles
+## Profiles  ·  ~~done 29 July~~
 
-Named, switchable configurations.
+Shipped as **Arrangements** — see the DEVLOG entry for 29 July. A profile carries
+the desk (screens, positions, sizes, resolutions, devices, input settings) and
+never carries `radio` or `port`, which follow the hardware. The selected
+arrangement is written through on every save, so there is no unsaved state to
+lose on a switch. Covered by `win/test_profiles.py`.
 
-Doug's, one word, so the scope is his to set. The open question is where the line
-falls, because the config already mixes two kinds of thing:
+Still open, deliberately:
 
-- **belongs in a profile** — the desk arrangement, which devices exist, their
-  displays and sizes, per-device input settings, the side-button rule
-- **belongs to the machine** — `vm_name`, daemon ports, radio assignments,
-  bonds. Those follow the hardware, not the situation.
-
-Switching must reload the portal, which `portal_signature` already handles for
-free: a profile switch is a config change like any other.
-
-Worth knowing before designing it: bonds live on the guest per radio, so two
-profiles that assign the same radio to different devices would fight over one
-lane. Either a profile owns its radio assignments (and switching re-provisions),
-or it does not touch them at all.
+- **`vm_name` and the guest's own settings** are not in an arrangement either.
+  Nothing needs them to be yet.
+- **A device in an arrangement that this machine no longer has** loads with no
+  radio and a freshly allocated port. It appears in the list, greyed, and cannot
+  connect. That is honest, but there is no way to say "drop it from here".
 
 ## Automatic reconnect while the portal is on
 
@@ -153,10 +149,18 @@ Held deliberately, pending Doug's go. When it happens, in order:
    `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}` — the **dash** form is the one that
    got missed last time — across the whole tree including `BACKLOG.md`,
    `DEVLOG.md`, `POSITION_MODEL.md` and every test. Also check for the guest SSH
-   key, `bt_prefs.json`, and anything naming the employer or the client.
-2. **Decide what `openspan_config.json` ships as.** The repo copy currently
-   describes Doug's actual desk — three devices, real radios, real screen sizes.
-   It should ship empty, or as an obviously-fictional example.
+   key and anything naming the employer or the client.
+
+   Checked 29 July: **every tracked file is clean.** One real dongle address had
+   reached `DEVLOG.md` (the laptop NAT entry) and is now redacted. The files
+   holding the rest — `bt_prefs.json`, `openspan_config.json`, and now
+   `profiles/` — are all gitignored, so a fresh clone has no desk in it at all.
+   Worth re-running rather than trusting this line: history still contains
+   whatever was committed before the ignores existed.
+2. **`openspan_config.json` is untracked**, so there is nothing to decide about
+   what it ships as — a clone starts with no config and the app builds one from
+   the live monitors. Confirm that a first run on a clean machine is actually
+   pleasant, since nobody has ever done one.
 3. **Merge `multidevice` → `main`**, then push. One merge, not a rebase: the
    history is the record of how the position model was arrived at, and the
    DEVLOG references it.
