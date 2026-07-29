@@ -24,6 +24,8 @@ win/app-out.txt
 win/err.txt
 win/out.txt
 win/sender-err.txt
+buildlog.txt
+traytest.txt
 
 # --- Python / editor junk ---
 __pycache__/
