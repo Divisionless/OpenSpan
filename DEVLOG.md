@@ -1021,3 +1021,61 @@ the unused `messagebox`/`simpledialog` imports with them.
 `simpledialog` — parsing rather than grepping, because `dark_confirm`'s docstring
 names the native dialog it replaced and a text search cannot tell that from a
 call.
+
+### What the pre-swap review found
+
+The build was finished and verified before it was allowed to replace the running
+app, and a 13-agent adversarial review ran against the same commit in parallel.
+Six defects survived refutation; two were refuted. Worth recording because one of
+them had been live for far longer than this change.
+
+**A config's top-level settings were being erased on every load.**
+`normalize_config` builds its result from a whitelist — `version`, `monitors`,
+`devices`, plus the derived `portals`/`links` — and both side-button crossing
+settings live at the top level. So every launch dropped them and the next save
+wrote the config back without them, while the checkboxes went on reading that
+same config and showing whatever was left. `openspan_config.json` had neither key
+in it. **Press-to-jump, the thing Doug called flawless, was switching itself off
+between sessions** and nothing said so.
+
+Arrangements would have made it worse (a switch is a load), but they did not
+cause it. The fix carries unrecognised top-level keys across by DIFFERENCE, not
+by name — listing the keys works exactly until the next setting is added at the
+top level and nobody remembers the line exists.
+
+**An arrangement's name and its filename could drift apart.** `_profile_path`
+sanitised the name; everything else compared the raw one. "Mac 4K (day)" became
+`Mac 4K _day_.json`, after which the write-through's guard (is this name in
+`list_profiles()`, which returns stems?) never matched again — every edit lost at
+the next switch — Delete did nothing, and "Desk 2.0" and "Desk 2 0" silently
+overwrote each other. Now sanitised once, in `profile_name()`, and the sanitised
+form *is* the name from that point on: box, config and file all hold one string.
+
+**One click in the dimmed area destroyed a half-filled display table.** The
+scrim covers the whole window and was bound to close. The Toplevels it replaced
+had no click-outside gesture at all, and three of the four dialogs hold typed
+values — so this was a regression the conversion introduced, with no undo and no
+warning. The scrim now swallows the click.
+
+**The display editor lost its buttons at six screens.** The card was pinned at
+the requested 420px and the button bar was packed last, after a body with
+`expand=True`, so the bar was never laid out — and with no window left to drag
+bigger, the editor was a dead end. Two changes: the bar is packed first and
+anchored to the bottom, so the rows are what get squeezed; and `geometry()` is
+now a floor rather than a size, with `_fit()` measuring the built card and
+capping it to the window. Measured at 1–14 screens (the editor caps at 8 rows),
+Save and Cancel are always inside the card.
+
+**`dark_confirm` over a modal left nothing grabbing.** The commit message claimed
+otherwise; it was only true for FrameModal-over-FrameModal, and the display
+editor's confirms go through the older overlay. Now true for both.
+
+**Deleting an arrangement relabelled the one in use.** `_delete_profile` cleared
+the name box unconditionally.
+
+Refuted, and worth writing down so they are not re-raised: `ensure_device_forwards`
+on the Tk thread (real call, but every leg of the asserted freeze fails against
+the code), and `save_profile` stripping `links` (the mechanism is real —
+`normalize_config` reads a missing `links` as "pre-adjacency" and re-runs a
+one-time snap — but it does not move anything on this desk). `links` is kept in
+the snapshot anyway: a latent trap that costs one line to close.

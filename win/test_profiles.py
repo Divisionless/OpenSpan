@@ -91,8 +91,11 @@ check("no radio or port travels with an arrangement",
            if "radio" in d or "port" in d],
       str([{k: v for k, v in d.items() if k in ("radio", "port")}
            for d in saved["devices"]]))
-check("derived geometry is not frozen into it",
-      "portals" not in saved and "links" not in saved)
+check("the derived portal list is not frozen into it",
+      "portals" not in saved)
+check("but `links` IS kept, because normalize_config reads its absence as "
+      "\"this predates the adjacency graph\" and re-snaps every screen",
+      "links" in saved)
 check("every screen the desk has is in it",
       [len(d["displays"]) for d in saved["devices"]] == [1, 1])
 check("saving does not disturb the arrangement in use",
@@ -184,6 +187,66 @@ wide = A.portal_signature(canvas.config)
 canvas.adopt(desk(landscape_w=2560), LIVE)
 check("the portal is told, because the signature really changed",
       A.portal_signature(canvas.config) != wide)
+
+# ---- nothing the app keeps at the top of the config may be lost ------------
+# The blocker this closes: the two side-button crossing settings live at the top
+# level, and normalize_config builds its result from a whitelist. Every load
+# dropped them and the next save wrote the config back without them, while the
+# checkboxes went on reading the same config and showing whatever was left. Doug
+# called press-to-jump "flawless"; it was being switched off behind him.
+canvas = A.MultiArrangeCanvas.__new__(A.MultiArrangeCanvas)
+canvas._told_portal = None
+canvas.target_states = {}
+loud = dict(desk(), cross_requires_side_button=True,
+            side_button_jumps_nearest=True, some_future_setting="keep me")
+canvas.adopt(loud, LIVE)
+check("a top-level setting survives being loaded",
+      canvas.config.get("cross_requires_side_button") is True
+      and canvas.config.get("side_button_jumps_nearest") is True,
+      str({k: v for k, v in canvas.config.items()
+           if "button" in k}))
+check("including one this test invented, because they are carried by "
+      "difference and not by name",
+      canvas.config.get("some_future_setting") == "keep me")
+check("and the portal is told about it",
+      A.portal_signature(canvas.config)
+      != A.portal_signature(dict(canvas.config,
+                                 cross_requires_side_button=False)))
+A.save_profile(canvas.config, "Loud")
+carried = A.load_profile("Loud", canvas.config)
+canvas.adopt(carried, LIVE)
+check("and it still survives a round-trip through an arrangement",
+      canvas.config.get("cross_requires_side_button") is True)
+A.delete_profile("Loud")
+
+# ---- a name and its filename are the same string ---------------------------
+for typed, expect in (("Mac 4K (day)", "Mac 4K _day_"), ("Desk 2.0", "Desk 2_0"),
+                      ("  padded  ", "padded"), ("///", "___"), ("", "unnamed"), ("...", "___"),
+                      ("Mac 4K", "Mac 4K")):
+    check(f"“{typed}” is known as “{expect}”",
+          A.profile_name(typed) == expect, A.profile_name(typed))
+
+A.save_profile(normalize_config(desk(), LIVE), "Mac 4K (day)")
+check("a punctuated name is listed under the name it was given",
+      A.profile_name("Mac 4K (day)") in A.list_profiles(), str(A.list_profiles()))
+check("so the write-through guard matches it",
+      A.profile_name("Mac 4K (day)") in A.list_profiles())
+check("and deleting it works", A.delete_profile("Mac 4K (day)")
+      and A.profile_name("Mac 4K (day)") not in A.list_profiles())
+
+# ---- an arrangement must not move the screens it was saved to keep ----------
+tight = normalize_config(desk(), LIVE)
+tight["devices"][0]["displays"][0]["x"] = 2560 + 14   # a hair off touching
+tight = normalize_config(tight, LIVE)
+was = [(d["id"], s["x"], s["y"]) for d in tight["devices"]
+       for s in d["displays"]]
+A.save_profile(tight, "Tight")
+again = normalize_config(A.load_profile("Tight", tight), LIVE)
+now = [(d["id"], s["x"], s["y"]) for d in again["devices"]
+       for s in d["displays"]]
+check("loading an arrangement leaves every screen exactly where it was",
+      was == now, f"{was} -> {now}")
+A.delete_profile("Tight")
 
 # ---- an edit made to a selected arrangement belongs to it ------------------
 # The trap this closes: duplicate, spend ten minutes arranging screens, switch

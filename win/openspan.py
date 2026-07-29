@@ -218,7 +218,12 @@ class FrameModal(tk.Frame):
         self._scrim.place(x=-20, y=-20, relwidth=1, relheight=1,
                           width=40, height=40)
         self._scrim.lift()
-        self._scrim.bind("<Button-1>", lambda _e: self._dismiss())
+        # A click outside the card does NOT close it. The Toplevels these
+        # replaced had no click-outside gesture at all, and three of the four
+        # hold typed values -- one stray click in the dimmed area would discard
+        # a display table just filled in, with no undo and no warning. Escape
+        # and the dialog's own Cancel are the ways out.
+        self._scrim.bind("<Button-1>", lambda _e: "break")
         self._card = tk.Frame(self._scrim, bg=kw["bg"],
                               highlightbackground=BORDER, highlightthickness=1)
         self._card.place(relx=0.5, rely=0.5, anchor="center")
@@ -230,6 +235,7 @@ class FrameModal(tk.Frame):
         self._closed = False
         self._binds = {}
         self._prev_grab = None
+        self._want = (0, 0)
         self.bind("<Escape>", lambda _e: self._dismiss())
 
     # ---- the window-manager surface the dialogs already call --------------
@@ -273,18 +279,31 @@ class FrameModal(tk.Frame):
     config = configure
 
     def geometry(self, spec=None):
-        if not spec:
-            return ""
-        want = re.match(r"^(\d+)x(\d+)", str(spec))
-        if not want:
-            return ""          # "+x+y" -- a screen position we do not have
+        # Remembered, not applied: a Toplevel's geometry was a STARTING size on
+        # a window the user could then drag bigger. A card cannot be dragged, so
+        # the number is treated as a floor and the real size is settled in
+        # _fit(), once the dialog has actually been built.
+        if spec:
+            want = re.match(r"^(\d+)x(\d+)", str(spec))
+            if want:            # "+x+y" is a screen position we do not have
+                self._want = (int(want.group(1)), int(want.group(2)))
+        return ""
+
+    def _fit(self):
+        """Big enough for everything in it; never bigger than the window.
+
+        Pinning the requested height instead of measuring cost the display
+        editor its buttons: seven screens of rows pushed Save and Cancel past
+        420px, and with the window gone there was nothing left to drag bigger.
+        Contents first, window as the ceiling.
+        """
+        self._card.update_idletasks()
         self._host.update_idletasks()
         self._card.place_configure(
-            width=min(int(want.group(1)),
+            width=min(max(self._want[0], self._card.winfo_reqwidth()),
                       max(240, self._host.winfo_width() - 40)),
-            height=min(int(want.group(2)),
+            height=min(max(self._want[1], self._card.winfo_reqheight()),
                        max(200, self._host.winfo_height() - 40)))
-        return ""
 
     def bind(self, sequence=None, func=None, add=None):
         if sequence is None or func is None or add:
@@ -295,6 +314,9 @@ class FrameModal(tk.Frame):
         return ""
 
     def grab_set(self):
+        # every one of these dialogs grabs as its last build step, which makes
+        # this the one moment when the card is complete and can be measured
+        self._fit()
         try:
             self._prev_grab = self._host.grab_current()
             self._scrim.grab_set()
@@ -398,6 +420,11 @@ def _dialog(parent, title, message, buttons):
         if i == 0:
             focus_btn = b
 
+    # A confirm can open OVER a FrameModal (the display editor asks one). Take
+    # note of what is holding the grab so it can be given back -- releasing
+    # without restoring leaves the dialog underneath looking modal while the
+    # keyboard is free to wander behind it.
+    prev_grab = top.grab_current()
     prev_ret, prev_esc = top.bind("<Return>"), top.bind("<Escape>")
     top.bind("<Return>", lambda e: done(buttons[0][1]))
     top.bind("<Escape>", lambda e: done(buttons[-1][1]))
@@ -412,6 +439,8 @@ def _dialog(parent, title, message, buttons):
     finally:
         try:
             scrim.grab_release()
+            if prev_grab is not None:
+                prev_grab.grab_set()
         except tk.TclError:
             pass
         top.unbind("<Return>")
@@ -444,10 +473,27 @@ PROFILE_DIR = os.path.join(ROOT, "profiles")
 MACHINE_FIELDS = ("radio", "port")
 
 
+def profile_name(name):
+    """The name an arrangement is actually known by.
+
+    The file is named after the arrangement, so a name that is not a legal
+    filename produces a file whose stem no longer matches it -- and every
+    comparison between the two goes quietly wrong at once. "Mac 4K (day)" lands
+    in "Mac 4K _day_.json", after which the write-through stops firing (its
+    guard asks whether the name is in list_profiles(), which returns stems),
+    Delete does nothing, and "Desk 2.0" and "Desk 2 0" overwrite each other.
+    Every edit made after that is lost at the next switch, silently.
+
+    So the name is sanitised ONCE, here, and the sanitised form IS the name from
+    that moment on -- shown in the box, stored in the config, written into the
+    file. There is only one string.
+    """
+    return ("".join(c if c.isalnum() or c in " -_" else "_"
+                    for c in str(name)).strip() or "unnamed")
+
+
 def _profile_path(name):
-    safe = "".join(c if c.isalnum() or c in " -_" else "_"
-                   for c in str(name)).strip() or "unnamed"
-    return os.path.join(PROFILE_DIR, safe + ".json")
+    return os.path.join(PROFILE_DIR, profile_name(name) + ".json")
 
 
 def list_profiles():
@@ -459,14 +505,21 @@ def list_profiles():
 
 
 def save_profile(config, name):
-    """Snapshot the arrangement under a name. Machine fields are dropped."""
+    """Snapshot the arrangement under a name. Machine fields are dropped.
+
+    Returns the name it was actually saved as, which is the only one that
+    should be used afterwards."""
+    name = profile_name(name)
     snapshot = copy.deepcopy(config)
-    snapshot.pop("portals", None)      # both are derived; recomputed on load
-    snapshot.pop("links", None)
+    snapshot.pop("portals", None)      # derived, and recomputed on load
+    # `links` deliberately KEPT. normalize_config reads its absence as "this
+    # config predates the adjacency graph" and re-runs a one-time snap that
+    # nudges screens toward their neighbours -- so stripping it would let a
+    # saved arrangement move the very screens it was saved to preserve.
     for device in snapshot.get("devices", []):
         for field in MACHINE_FIELDS:
             device.pop(field, None)
-    snapshot["profile"] = str(name)
+    snapshot["profile"] = name
     os.makedirs(PROFILE_DIR, exist_ok=True)
     with open(_profile_path(name) + ".new", "w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, indent=2)
@@ -489,7 +542,7 @@ def load_profile(name, current):
         for field in MACHINE_FIELDS:
             if field in live:
                 device[field] = live[field]
-    loaded["profile"] = str(name)
+    loaded["profile"] = profile_name(name)
     return loaded
 
 
@@ -2002,14 +2055,24 @@ class MultiArrangeCanvas(tk.Canvas):
         swap -- a device that is live right now is still live a moment later; a
         different picture of the desk does not disconnect anything.
         """
+        raw = raw if isinstance(raw, dict) else {}
         self.config = normalize_config(raw, live or enum_monitors())
-        # normalize_config returns a clean v3 dict built from a field whitelist,
-        # so the arrangement's NAME does not survive it. Carry it across here --
-        # without this the app forgets which arrangement it is showing the moment
-        # it loads one, and the next launch offers no way to tell.
-        name = str((raw if isinstance(raw, dict) else {}).get("profile") or "")
-        if name:
-            self.config["profile"] = name
+        # normalize_config builds its result from a whitelist -- version,
+        # monitors, devices, plus the derived portals/links -- so ANYTHING else
+        # the app keeps at the top level is dropped by it.
+        #
+        # That already had teeth before arrangements existed: the two
+        # side-button crossing settings live up here, so every launch quietly
+        # discarded them and the next save wrote the config back without them.
+        # The checkboxes went on reading the same config and showing whatever
+        # was left, which is why it never looked broken.
+        #
+        # Carried across by DIFFERENCE rather than by name. Listing the keys
+        # would work exactly until the next setting is added at the top level
+        # and nobody remembers this line exists.
+        for key, value in raw.items():
+            if key not in self.config:
+                self.config[key] = value
         _migrate_radio_assignments(self.config)
         self.monitors = self.config["monitors"]
         self.targets = self.config["devices"]
@@ -2564,6 +2627,13 @@ class MacDisplayEditor:
                  "the physical width used on the drag canvas.",
             bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
                 anchor="w", padx=18, pady=(0, 12))
+        # The button bar is packed BEFORE the table and anchored to the
+        # bottom. pack hands out space in the order it is asked for, so a device
+        # with seven screens now squeezes the ROWS rather than pushing Save and
+        # Cancel out of the dialog -- which, with no window left to drag bigger,
+        # made the editor a dead end.
+        bar = tk.Frame(self.top, bg=BG)
+        bar.pack(side="bottom", fill="x", padx=18, pady=14)
         self.body = tk.Frame(self.top, bg=BG)
         self.body.pack(fill="both", expand=True, padx=18)
         headers = [
@@ -2579,8 +2649,6 @@ class MacDisplayEditor:
                          side="left", padx=(0, 5))
         for display in canvas.mac_displays(device_id):
             self._add_row(display)
-        bar = tk.Frame(self.top, bg=BG)
-        bar.pack(fill="x", padx=18, pady=14)
         ttk.Button(bar, text="+ Add display", command=self._add_row).pack(
             side="left")
         ttk.Button(bar, text="Cancel", command=self.top.destroy).pack(
@@ -4359,18 +4427,21 @@ class App:
         unnamed desk gets its first name, and how a copy gets a chosen one
         instead of the automatic name Duplicate gives it.
         """
-        name = self.profile_name.get().strip()
-        active = str(self.canvas.config.get("profile") or "")
-        if not name:
+        typed = self.profile_name.get().strip()
+        if not typed:
             _emit("err", "type a name for this arrangement first.")
             return
+        name = profile_name(typed)
+        active = str(self.canvas.config.get("profile") or "")
+        if name != typed:
+            _emit("event", f"saved as “{name}” — an arrangement is named after "
+                           f"its file, so punctuation becomes “_”.")
         if name in list_profiles() and name != active and not dark_confirm(
                 self.root, "Replace that arrangement?",
                 f"“{name}” already exists. Replace it with the desk as it is "
                 f"now? The one it is replacing cannot be recovered."):
             return
-        save_profile(self.canvas.config, name)
-        self.canvas.config["profile"] = name
+        self.canvas.config["profile"] = save_profile(self.canvas.config, name)
         self.canvas.save()
         self._refresh_profiles(name)
         _emit("ok", f"this desk is now the “{name}” arrangement.")
@@ -4380,22 +4451,21 @@ class App:
 
         The copy is what gets edited -- resolutions, sizes, positions -- so the
         one being used stays exactly as it is until the new one is chosen."""
-        base = self.profile_name.get().strip() or "Arrangement"
+        base = profile_name(self.profile_name.get().strip() or "Arrangement")
         taken = set(list_profiles())
         index = 2
         name = f"{base} {index}"
         while name in taken:
             index += 1
             name = f"{base} {index}"
-        save_profile(self.canvas.config, name)
-        self.canvas.config["profile"] = name
+        self.canvas.config["profile"] = save_profile(self.canvas.config, name)
         self.canvas.save()
         self._refresh_profiles(name)
         _emit("ok", f"duplicated as “{name}” — this is the one being edited "
                     f"now; “{base}” keeps the screens it had.")
 
     def _switch_profile(self, _event=None):
-        name = self.profile_name.get().strip()
+        name = profile_name(self.profile_name.get().strip())
         if name not in list_profiles():
             return          # a name being typed for Save as, not a selection
         if name == str(self.canvas.config.get("profile") or ""):
@@ -4413,7 +4483,7 @@ class App:
         _emit("ok", f"arrangement “{name}” is now in use.")
 
     def _delete_profile(self):
-        name = self.profile_name.get().strip()
+        name = profile_name(self.profile_name.get().strip())
         if name not in list_profiles():
             return
         if not dark_confirm(self.root, "Delete arrangement?",
@@ -4421,12 +4491,16 @@ class App:
                             f"screens in use right now do not change."):
             return
         delete_profile(name)
-        if name == str(self.canvas.config.get("profile") or ""):
+        active = str(self.canvas.config.get("profile") or "")
+        if name == active:
             # the desk itself does not change -- it just stops having a name,
             # which is what stops _persist writing it back to a deleted file
             self.canvas.config.pop("profile", None)
             self.canvas.save()
-        self._refresh_profiles("Current")
+            active = "Current"
+        # deleting an arrangement that is NOT in use must not relabel the one
+        # that is -- the box has to keep naming what is actually on the canvas
+        self._refresh_profiles(active)
         _emit("event", f"arrangement “{name}” deleted. The screens in use did "
                        f"not change.")
 

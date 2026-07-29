@@ -83,13 +83,12 @@ else:
 modal.geometry("900x420")
 root.update_idletasks()
 card = modal.master
-check("a requested size sizes the card and fits the window",
-      card.winfo_reqwidth() <= root.winfo_width()
-      and 0 < int(card.place_info().get("width") or 0) <= 900,
-      f"card asked for {card.place_info().get('width')} in a "
-      f"{root.winfo_width()}px window")
+check("a requested size is recorded, not applied on the spot",
+      modal._want == (900, 420)
+      and not card.place_info().get("width"),
+      f"want={modal._want} placed width={card.place_info().get('width')!r}")
 check("a screen position is discarded rather than obeyed",
-      modal.geometry("+400+120") == "" and modal.geometry() == "")
+      modal.geometry("+400+120") == "" and modal._want == (900, 420))
 
 # ---- binding: the failure that would have been silent ----------------------
 seen = []
@@ -101,6 +100,41 @@ root.update()
 root.event_generate("<Return>", when="now")
 check("Enter reaches the dialog while focus is in its own entry box",
       seen == ["modal"], f"handler fired {len(seen)} times")
+
+# ---- a stray click must not throw away what was typed ----------------------
+# The regression this closes: the scrim covers the whole window, and binding it
+# to close meant one click in the dimmed area destroyed the display editor with
+# a table of resolutions half filled in. The Toplevels it replaced had no
+# click-outside gesture at all.
+gone = []
+modal.protocol("WM_DELETE_WINDOW", lambda: gone.append("closed"))
+scrim_probe = card.master
+scrim_probe.event_generate("<Button-1>", x=5, y=5, when="now")
+root.update()
+check("clicking the dimmed area does not discard the dialog",
+      gone == [] and modal.winfo_exists(), f"{gone}")
+
+# ---- it is as big as its contents need, never bigger than the window --------
+tall = A.FrameModal(root)
+tall.geometry("900x420")
+for i in range(24):                      # a device with a lot of screens
+    tk.Label(tall, text=f"row {i}", bg="#101014", fg="#ddd").pack(fill="x")
+foot = tk.Frame(tall, bg="#101014", height=39)
+foot.pack(side="bottom", fill="x")
+tall.grab_set()                          # every dialog grabs last; that fits it
+root.update_idletasks()
+tall_card = tall.master
+check("a dialog taller than its requested size is not pinned to it",
+      int(tall_card.place_info()["height"]) > 420,
+      f"card height {tall_card.place_info().get('height')}")
+check("and is still not taller than the window it lives in",
+      int(tall_card.place_info()["height"]) <= root.winfo_height(),
+      f"card {tall_card.place_info().get('height')} vs "
+      f"window {root.winfo_height()}")
+check("a requested width is a floor, not a ceiling",
+      int(tall_card.place_info()["width"]) >= min(900, root.winfo_width() - 40),
+      str(tall_card.place_info().get("width")))
+tall.destroy()
 
 # ---- closing puts the window back exactly as it was ------------------------
 modal.grab_set()
@@ -130,6 +164,22 @@ check("and hands it back, so the first is still modal",
       root.grab_current() is first.master.master,
       f"grab is now {root.grab_current()}")
 first.destroy()
+
+# ---- a confirm opened OVER a modal ----------------------------------------
+# dark_confirm is not a FrameModal -- it is the older in-frame overlay -- and it
+# is opened BY the display editor. Releasing without restoring left nothing
+# grabbing, so the editor underneath stopped being modal to the keyboard.
+host = A.FrameModal(root)
+host.grab_set()
+host_scrim = host.master.master
+root.update()
+root.after(120, lambda: root.event_generate("<Escape>", when="now"))
+A.dark_alert(root, "Heads up", "Something happened.")
+root.update()
+check("a confirm opened over a modal hands the grab back when it closes",
+      root.grab_current() is host_scrim,
+      f"grab is {root.grab_current()}, expected {host_scrim}")
+host.destroy()
 
 # ---- the caller must not hang ----------------------------------------------
 done = []
