@@ -6823,7 +6823,11 @@ class App:
                 # costs an ssh) and cached; the timer is only the fallback for
                 # the first few seconds.
                 self._boot_why_probe()
-                self.status.set(self._boot_why
+                # getattr, not the attribute: the watcher's first tick arrives
+                # before any probe has finished, and a bare read would raise
+                # AttributeError inside the status poll -- which is exactly the
+                # kind of failure that turns into "the app just sits there"
+                self.status.set(getattr(self, "_boot_why", "")
                                 or "Booting the bridge… (~90s)")
             elif connected:
                 self.status.set("iPad connected — keyboard & mouse bridging.")

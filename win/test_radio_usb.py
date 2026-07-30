@@ -398,5 +398,67 @@ check("a wedged radio's explanation is not overwritten by a bare count",
 check("every Tk call in the worker goes through app.ui, including after()",
       "self.app.ui(lambda: self.after(" in reclaim_src)
 
+# ---- the boot banner ---------------------------------------------------------
+# "Booting the bridge... (~90s)" is the worst thing this app can say when
+# something is wrong, and it is what it said for as long as it was left running.
+# The chain is walked in dependency order; the first unmet condition IS the
+# message.
+import types  # noqa: E402
+boot_src = inspect.getsource(A.App._boot_why_probe)
+check("the reason is computed on a worker -- it costs an ssh",
+      "threading.Thread(target=work, daemon=True).start()" in boot_src)
+check("and is throttled, because the status poll runs hot",
+      "_boot_why_at" in boot_src and "12.0" in boot_src)
+
+
+class _BareApp:
+    """No prior state at all: the watcher's FIRST tick."""
+    ui = staticmethod(lambda fn: fn())
+    canvas = types.SimpleNamespace(config={})
+    _boot_why_probe = A.App._boot_why_probe
+
+
+bare = _BareApp()
+check("reading the reason before any probe has run cannot raise",
+      getattr(bare, "_boot_why", "") == "")
+try:
+    bare._boot_why_probe()
+    cold = True
+except Exception as exc:  # noqa: BLE001
+    cold = repr(exc)
+check("and probing from a cold object cannot raise either",
+      cold is True, str(cold))
+check("the banner never reads the attribute bare",
+      "self.status.set(self._boot_why" not in inspect.getsource(A.App))
+
+# ---- shutdown leaves nothing behind -----------------------------------------
+stop_src = inspect.getsource(A.stop_virtualbox_backend)
+check("shutdown waits for a real poweroff rather than sleeping 400ms",
+      "VMState=" in stop_src and "poweroff" in stop_src)
+check("and ends VBoxSVC -- what Windows names on restart, and where the "
+      "wedged USB state lives",
+      "VBoxSVC.exe" in stop_src)
+killed = [ln for ln in stop_src.splitlines() if "taskkill" in ln]
+check("exactly one process is ended, and it is VBoxSVC",
+      len(killed) == 1 and "VBoxSVC.exe" in stop_src,
+      str(killed))
+check("VBoxSDS is never a target: it is a Windows service, and stopping a "
+      "service is not this app's business",
+      not [ln for ln in stop_src.splitlines()
+           if "VBoxSDS" in ln and ("taskkill" in ln or "/IM" in ln
+                                   or "Stop-Process" in ln)])
+check("_full_stop actually calls it",
+      "stop_virtualbox_backend()" in inspect.getsource(A.App._full_stop))
+
+# ---- guest output is decoded as UTF-8 ---------------------------------------
+# systemctl prints the round status glyphs; the ANSI codepage raised
+# UnicodeDecodeError inside subprocess' reader THREAD, where the surrounding try
+# cannot see it -- so output came back EMPTY and every check built on it was
+# silently blind.
+for _fn in (A.ssh_guest, A.vbox):
+    _src = inspect.getsource(_fn)
+    check(f"{_fn.__name__} decodes as UTF-8",
+          'encoding="utf-8"' in _src and 'errors="replace"' in _src)
+
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)
