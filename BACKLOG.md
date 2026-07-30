@@ -57,7 +57,7 @@ the explanation of why it matters.
 | displays arrangement | must mirror the desk layout | crossings land on the wrong screen |
 | keyboard navigation | on (macOS) | Tab will not move between dialog buttons |
 | delay until repeat | not the shortest | accent picker appears during ordinary typing |
-| **pointer acceleration on/off** | know which | with it OFF the curve is linear and compensation must be **disabled**, not adjusted — the app currently assumes it is on and cannot tell |
+| **pointer acceleration on/off** | know which. Apple's own toggle: **System Settings › Mouse › Advanced** (confirmed on Tahoe 26.5.1 — nobody finds it by accident, so the panel must say where it is) | with it OFF the curve is linear and compensation must be **disabled**, not adjusted — the app currently assumes it is on and cannot tell |
 | **Windows' own pointer settings** | speed at 10, Enhance pointer precision ON | established 29 July: with our accel at 0 and the target's inverted out, the chain has NO acceleration unless EPP supplies it, and speed >10 doubles the source quantum. See the DEVLOG. |
 | **tracking-speed slider position** | mirror the actual value | `_APPLE_CURVE` is the curve at the DEFAULT slider position. At any other position every compensated calculation is wrong by whatever that slider does, silently. |
 
@@ -68,7 +68,28 @@ target's own clamp) but it does degrade within-screen precision, and a scalar
 `sensitivity` can only cancel it at one speed. One number settles it:
 `defaults read -g com.apple.mouse.scaling`.
 
-**The slider needs research before it can be mirrored.** It is not enough to
+**Research is the wrong approach; measure instead.** Doug cannot run `defaults` on
+a managed Mac, and neither will anyone he sends this to — a fix that needs a
+terminal on the target is not a fix. But the app already owns the wire and can
+clamp to a known origin, which is a ruler:
+
+1. shove left until the target's window server clamps — x is now a **fact**
+2. send single reports of one fixed magnitude, one at a time
+3. the user says when the pointer stops moving (the far clamp)
+4. `pixels_per_report = union_width / reports_counted`
+
+That is `apple_pixels(M)` measured on whatever slider position is actually set,
+with nothing installed on the target. Four magnitudes gives four curve points —
+the same method the shipped table came from, driven from inside the app.
+
+Better than mirroring the slider for two reasons: it works without knowing
+Apple's mapping at all, on any Mac; and it survives an OS update, which a
+hardcoded table does not. Store the measured points per device; fall back to
+`_APPLE_CURVE` when a device has never been calibrated, so nothing changes for
+anyone who does not run it. Strictly opt-in — it deliberately drags the pointer
+across a whole screen.
+
+**If the mapping is ever wanted anyway:** It is not enough to
 store the number — we need to know what macOS actually does with it. Whether it
 scales the input magnitude before the curve, scales the output after it, or
 selects a different curve entirely, decides how the compensation must be
