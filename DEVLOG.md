@@ -1250,3 +1250,57 @@ One more thing this turned up, unresolved and worth an eye: the adapter at
 the guest-side alias `OpenSpan Managed Laptop`. The app resolves controllers by
 MAC so nothing misroutes today, but the alias and the assignment disagree, and one
 of them is stale.
+
+### The root cause, and what a stranger can do about it
+
+Doug: *"i need this resolved in a normal human's circumstance of not having you to
+look into and orchestrate the file … i am considering what will happen when i send
+this to my friends for testing."*
+
+Fair. Everything up to here needed someone reading `VBox.log`.
+
+**A dongle's USB serial number IS its Bluetooth address.** Both of his report
+`ACA7F1299FCB` and `3C6AD23CD44E` — the two radio addresses in his config with
+the colons removed. That single fact carries most of the solution, because it can
+be read from the HOST, with the VM down and the guest unreachable, which is
+precisely when identification matters. The app no longer says *"TP-Link Bluetooth
+USB Adapter"*, a phrase useless to anyone holding two identical dongles. It says
+**"Managed Laptop's dongle"**.
+
+It is treated as a convention, not a law: twelve hex digits or the mapping is
+skipped and the product string is used, so a dongle that does not follow it still
+works, just unnamed.
+
+**And it explains the failure.** Both TP-Link filters matched `2357:0604` and
+nothing else, so two identical dongles arriving together raced two identical
+filters — which is why replugging both recovered one every time and left the
+other captured-away-from-Windows-but-never-delivered. `VBoxManage usbfilter
+modify --serialnumber` pins a filter to exactly one device, **accepts it on a
+running VM**, and there is then nothing left to race.
+
+Note this is an *assignment*, not a match. Asking each filter "which device do
+you match" has two answers and no way to choose — the same ambiguity VirtualBox
+is losing to. Filters are grouped by what they match on, and within a group the
+free dongles are paired off against the unpinned filters, deterministically by
+serial.
+
+`Repair radios` is now one button doing the whole ladder, cheapest first:
+
+1. **Pin any ambiguous filter.** Free, no restart, and it is the actual cause.
+2. **Attach what the VM has lost**, then verify the VM took it.
+3. **Name whatever is still missing by the machine it serves**, with the one
+   physical action left — and say to do them *one at a time*, because two
+   arriving together is what wedged it. A captured-but-never-delivered dongle
+   cannot be rescued by any command: `usbdetach` refuses it as *"not attached to
+   this machine"*. At that point hands are the only tool, and saying so plainly
+   is the whole job.
+
+**Still unexplained, and honestly so.** One of his two dongles wedges every
+single time while the other recovers every time. `VBox.log` shows a TP-Link
+attaching only ever to port 2 of RootHub#1, and for the second dongle **no attach
+attempt is logged at all** — captured, then silence, no error. That is not the
+filter race (the filters are pinned now) and not something the app can fix. The
+two are different models; the failing one is not the UB500. Next step if it
+persists: a VM restart, which rebuilds the USB state from scratch — at the cost
+of an iPad re-pair, which the app now says out loud rather than discovering
+afterwards.

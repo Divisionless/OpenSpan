@@ -62,15 +62,21 @@ Current State:      Captured
 UUID:               ff68aac3-03b2-4f97-818d-93803323a0be
 VendorId:           0x2357 (2357)
 ProductId:          0x0604 (0604)
+Port:               4
+USB version/speed:  1/Full
 Manufacturer:
 Product:            TP-Link UB500 Adapter
+SerialNumber:       ACA7F1299FCB
 Current State:      Busy
 
 UUID:               a21a565a-cd65-4a78-961f-4407a8e9f779
 VendorId:           0x2357 (2357)
 ProductId:          0x0604 (0604)
+Port:               3
+USB version/speed:  1/Full
 Manufacturer:
 Product:            TP-Link Bluetooth USB Adapter
+SerialNumber:       3C6AD23CD44E
 Current State:      Busy
 """
 
@@ -171,6 +177,71 @@ vendor_only = 'USBFilterActive1="on"\nUSBFilterName1="AnyTPLink"\n' \
 check("a vendor-only filter claims every device of that vendor",
       len(A.radio_report(USBHOST, vendor_only)["mine"]) == 2)
 
+# ---- naming a dongle something a human can find -----------------------------
+# "TP-Link Bluetooth USB Adapter" cannot be picked out of two identical dongles
+# behind a machine. It turns out it never had to be: a Bluetooth dongle's USB
+# SerialNumber IS its adapter address, so the host alone -- with the VM down and
+# the guest unreachable, which is exactly when it matters -- can say which of the
+# user's machines the thing in their hand belongs to.
+CONFIG = {"devices": [
+    {"id": "ipad", "name": "iPad", "radio": "58:A0:23:CD:6A:B7"},
+    {"id": "mac", "name": "Managed Mac", "radio": "AC:A7:F1:29:9F:CB"},
+    {"id": "device-1", "name": "Managed Laptop", "radio": "3C:6A:D2:3C:D4:4E"},
+]}
+
+for serial, expect in (("ACA7F1299FCB", "AC:A7:F1:29:9F:CB"),
+                       ("3c6ad23cd44e", "3C:6A:D2:3C:D4:4E"),
+                       ("AC:A7:F1:29:9F:CB", "AC:A7:F1:29:9F:CB")):
+    check(f"serial {serial} reads as a radio address",
+          A.serial_to_radio(serial) == expect, A.serial_to_radio(serial))
+for junk in ("", None, "abc", "NOTHEX123456", "ACA7F1299FC"):
+    check(f"{junk!r} is not mistaken for one", A.serial_to_radio(junk) == "")
+
+lost = A.radio_report(USBHOST, INFO)["lost"]
+named = sorted(A.usb_label(d, CONFIG) for d in lost)
+check("a dongle is named by the machine it serves",
+      named == ["Managed Laptop’s dongle", "Managed Mac’s dongle"],
+      str(named))
+check("and falls back to its product string when nothing identifies it",
+      A.usb_label({"name": "Some Dongle", "serial": "zz"}, CONFIG)
+      == "Some Dongle")
+check("with no config it still names something",
+      A.usb_label(lost[0]) and "dongle" not in A.usb_label(lost[0]))
+
+# ---- the root cause: two filters that cannot tell two dongles apart ---------
+# Replugging both recovered one and left the other captured-away-from-Windows-
+# but-never-delivered. Both filters matched 2357:0604 and nothing else, so two
+# identical dongles arriving together raced two identical filters. A filter
+# carrying the dongle's serial matches exactly one device and there is nothing
+# left to race -- and `usbfilter modify` accepts it on a RUNNING VM, so this is a
+# repair the app can just do.
+plan = A.radio_filter_plan(CONFIG, USBHOST, INFO)
+check("both ambiguous filters are planned for pinning",
+      len(plan) == 2, str(plan))
+check("each is pinned to a different dongle",
+      len({step["serial"] for step in plan}) == 2, str(plan))
+check("and each is described by the machine it will serve",
+      sorted(step["label"] for step in plan)
+      == ["Managed Laptop’s dongle", "Managed Mac’s dongle"],
+      str([step["label"] for step in plan]))
+check("the index is the 0-based one the usbfilter command wants, not the "
+      "1-based one --machinereadable prints",
+      sorted(step["index"] for step in plan) == [1, 2],
+      str([step["index"] for step in plan]))
+
+pinned_info = INFO.replace(
+    'USBFilterProductId2="0604"',
+    'USBFilterProductId2="0604"\nUSBFilterSerialNumber2="ACA7F1299FCB"'
+).replace(
+    'USBFilterProductId3="0604"',
+    'USBFilterProductId3="0604"\nUSBFilterSerialNumber3="3C6AD23CD44E"')
+check("an already-pinned filter is left alone",
+      A.radio_filter_plan(CONFIG, USBHOST, pinned_info) == [],
+      str(A.radio_filter_plan(CONFIG, USBHOST, pinned_info)))
+check("the lone Intel filter is not pinned -- there is nothing to confuse it "
+      "with, and pinning it would break the day the adapter changes",
+      not [step for step in plan if step["name"] == "IntelBT"])
+
 # ---- an attach that is accepted but never lands -----------------------------
 # Doug: "I clicked reclaim, don't think anything happened, take a look."
 #
@@ -234,7 +305,8 @@ try:
     calls.clear()
     got, failed = A.reclaim_radios(settle=0, attempts=3, verify=lambda: set())
     check("“busy with a previous request” is reported as itself",
-          not got and A.WEDGED_ADVICE == failed[0][1], str(failed)[:120])
+          not got and failed[0][1].startswith(A.WEDGED_ADVICE),
+          str(failed)[:140])
     check("and it is not retried, because retrying provably cannot clear it",
           len([c for c in calls if "usbattach" in c]) == 1,
           f"tried {len([c for c in calls if 'usbattach' in c])} times")
@@ -249,8 +321,8 @@ check("the check runs on a worker thread, never in front of the UI",
       in inspect.getsource(A.BtPanel._radio_usb_check))
 check("and every widget it touches is marshaled to the UI thread",
       "self.app.ui(apply)" in inspect.getsource(A.BtPanel._radio_usb_apply))
-check("reclaiming is one button, and it says how many it will take back",
-      "self.reclaim_btn" in src and "Reclaim {lost} radio" in src)
+check("repairing is one button, and it says how many radios it covers",
+      "self.reclaim_btn" in src and "Repair {lost} radio" in src)
 check("reclaiming does not scan, pair or connect anything",
       not [word for word in ("bluetoothctl", "openspan_bt.py", "pair ", "trust")
            if word in inspect.getsource(A.reclaim_radios)])
@@ -261,8 +333,13 @@ reclaim_src = inspect.getsource(A.BtPanel._reclaim_radios)
 check("the outcome reaches the status line, not only the log box",
       reclaim_src.count("_radio_usb_apply") >= 2, reclaim_src.count(
           "_radio_usb_apply"))
+# the count is only re-read when nothing failed; otherwise the sentence naming
+# the physical action would be replaced by "2 of 3 radios are attached", which is
+# true, useless, and exactly what made the last build look like it did nothing
+after = reclaim_src.split('if outcome["failed"]:', 1)
 check("a wedged radio's explanation is not overwritten by a bare count",
-      "if not failed:" in reclaim_src)
+      len(after) == 2
+      and after[1].index("else:") < after[1].index("_radio_usb_check()"))
 check("every Tk call in the worker goes through app.ui, including after()",
       "self.app.ui(lambda: self.after(" in reclaim_src)
 

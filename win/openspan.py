@@ -827,6 +827,10 @@ def parse_usb_host(text):
             current["name"] = value
         elif key == "manufacturer":
             current["maker"] = value
+        elif key == "serialnumber":
+            current["serial"] = value
+        elif key == "port":
+            current["port"] = value
         elif key == "current state":
             current["state"] = value
     if current.get("uuid"):
@@ -834,7 +838,7 @@ def parse_usb_host(text):
     return devices
 
 
-def parse_usb_filters(info):
+def parse_usb_filters(info, keep_serial=False):
     """The VM's USB filters, from `showvminfo --machinereadable`.
 
     A filter is the machine's own statement of "this device belongs to me", which
@@ -849,6 +853,7 @@ def parse_usb_filters(info):
         for field, name in (("USBFilterName", "name"),
                             ("USBFilterVendorId", "vendor"),
                             ("USBFilterProductId", "product_id"),
+                            ("USBFilterSerialNumber", "serial"),
                             ("USBFilterActive", "active")):
             if key.startswith(field) and key[len(field):].isdigit():
                 rows.setdefault(key[len(field):], {})[name] = value
@@ -860,12 +865,15 @@ def parse_usb_filters(info):
         product = (row.get("product_id") or "").lower()
         if not vendor:
             continue
-        filters.append({
+        spec = {
             "name": row.get("name", ""),
             "vendor": vendor if vendor.startswith("0x") else "0x" + vendor,
             "product_id": (product if product.startswith("0x")
                            else "0x" + product) if product else "",
-        })
+        }
+        if keep_serial:
+            spec["serial"] = (row.get("serial") or "").strip()
+        filters.append(spec)
     return filters
 
 
@@ -908,10 +916,108 @@ def radio_report(usbhost, info):
     return {"mine": mine, "lost": lost, "held": held, "filters": filters}
 
 
-def usb_label(device):
-    """How to name a dongle to someone who has to go and find it."""
+def serial_to_radio(serial):
+    """A Bluetooth dongle's USB serial number IS its adapter address.
+
+    Both TP-Link dongles on this desk report `ACA7F1299FCB` and `3C6AD23CD44E`,
+    which are exactly the two radio addresses in the config with the colons
+    taken out. That is what makes a dongle identifiable from the HOST, with the
+    VM down and the guest unreachable -- the one moment identifying it matters.
+
+    Returns "" for anything that is not twelve hex digits, because this is a
+    convention and not a guarantee; a dongle that does not follow it is still
+    handled, just not named after the device it serves.
+    """
+    text = str(serial or "").replace(":", "").replace("-", "").strip().upper()
+    if len(text) != 12:
+        return ""
+    try:
+        int(text, 16)
+    except ValueError:
+        return ""
+    return ":".join(text[i:i + 2] for i in range(0, 12, 2))
+
+
+def usb_label(device, config=None):
+    """How to name a dongle to someone who has to go and find it.
+
+    "TP-Link Bluetooth USB Adapter" is not something you can pick out of two
+    identical dongles in the back of a machine. "the dongle for Managed Laptop"
+    is. So the device it serves is used when the serial identifies it, and the
+    product string only when nothing better exists.
+    """
     name = (device.get("name") or device.get("maker") or "").strip()
-    return name or f"{device.get('vendor', '?')}:{device.get('product_id', '?')}"
+    name = name or f"{device.get('vendor', '?')}:{device.get('product_id', '?')}"
+    radio = serial_to_radio(device.get("serial"))
+    if radio and config:
+        for target in config.get("devices", []):
+            if str(target.get("radio", "")).upper() == radio:
+                return f"{target.get('name') or target.get('id')}’s dongle"
+    return name
+
+
+def radio_filter_plan(config, usbhost, info):
+    """Which radios need their filter pinned to one specific dongle.
+
+    THE ROOT CAUSE of this whole mess. Both TP-Link filters matched
+    `2357:0604` and nothing else, so two identical dongles arriving together
+    raced two identical filters -- which is why replugging both recovered one and
+    left the other captured-away-from-Windows-but-never-delivered, a state no
+    VBoxManage verb can undo (`usbdetach` answers "not attached to this
+    machine").
+
+    A filter carrying the dongle's serial number matches exactly one device, so
+    there is nothing left to race. `usbfilter modify` accepts it on a RUNNING VM,
+    which makes this a repair the app can simply do.
+
+    Returns [{index, name, serial, label}] -- `index` is 0-based, as the
+    `usbfilter` command wants, while `--machinereadable` numbers from 1.
+    """
+    filters = parse_usb_filters(info, keep_serial=True)
+    ours = [d for d in parse_usb_host(usbhost) if d.get("serial")]
+    # Ambiguity only exists WITHIN a group of filters that match on the same
+    # thing, so group first. This is an assignment, not a match: two filters and
+    # two identical dongles have to be paired off one-to-one, and a per-filter
+    # "which device does this match" question has two answers and no way to
+    # choose -- which is the same ambiguity VirtualBox itself is losing to.
+    groups = {}
+    for slot, spec in enumerate(filters):
+        groups.setdefault((spec["vendor"], spec["product_id"]), []).append(
+            (slot, spec))
+    plan = []
+    for (vendor, product), members in groups.items():
+        if len(members) < 2:
+            continue            # a lone filter has nothing to be confused with
+        spoken_for = {m[1]["serial"].upper()
+                      for m in members if m[1].get("serial")}
+        free = sorted(
+            (d for d in ours
+             if d.get("vendor") == vendor
+             and (not product or d.get("product_id") == product)
+             and d["serial"].upper() not in spoken_for),
+            key=lambda d: d["serial"].upper())
+        for slot, spec in sorted(members, key=lambda m: m[0]):
+            if spec.get("serial") or not free:
+                continue
+            device = free.pop(0)
+            plan.append({"index": slot, "name": spec["name"],
+                         "serial": device["serial"],
+                         "label": usb_label(device, config)})
+    return plan
+
+
+def pin_radio_filters(plan):
+    """Pin each planned filter to its dongle. Returns (pinned, failed)."""
+    pinned, failed = [], []
+    for step in plan:
+        result = vbox("usbfilter", "modify", str(step["index"]),
+                      "--target", VM, "--serialnumber", step["serial"])
+        if result.returncode:
+            failed.append((step["name"],
+                           (result.stderr or result.stdout or "").strip()[-160:]))
+        else:
+            pinned.append(f"{step['name']} → {step['label']}")
+    return pinned, failed
 
 
 def ensure_ssh_key():
@@ -1032,15 +1138,58 @@ def read_radio_state():
 # which means a physical replug or a VM restart.
 _USB_WEDGED = "busy with a previous request"
 WEDGED_ADVICE = (
-    "VirtualBox still has an unfinished request for it. That is what a dongle "
-    "unplugged while the VM held it leaves behind, and no number of retries "
-    "clears it. Unplug it and plug it back in — the VM is running, so its "
-    "filter will catch it as it arrives. If it survives that, restart the VM."
+    "VirtualBox still holds an unfinished request for it — what a dongle "
+    "unplugged while the VM had it leaves behind. No command can clear it: even "
+    "usbdetach refuses, because as far as the VM is concerned the device was "
+    "never attached. "
 )
 ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronously
 
 
-def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None):
+REPLUG_ADVICE = (
+    "Unplug it and plug it back in — the VM is running, so its filter catches "
+    "it as it arrives. If both need it, do them ONE AT A TIME and wait for each "
+    "to appear: two identical dongles arriving together is what wedged this in "
+    "the first place."
+)
+
+
+def repair_radios(config=None, settle=None):
+    """Everything the app can do about a missing radio, cheapest first.
+
+    Written for someone who does not have the person who wrote it sitting next
+    to them. Each rung either fixes it or hands back a sentence naming the one
+    physical thing left to do — never "it failed".
+
+      1. PIN THE FILTERS. Free, no restart, and it is the actual cause: two
+         filters matching the same vendor:product cannot tell two identical
+         dongles apart, so arrival capture races and loses one.
+      2. ATTACH what the VM has lost, and verify the VM took it.
+      3. Anything still missing gets named by the DEVICE it serves, with the
+         replug instruction. A captured-but-not-delivered dongle cannot be
+         rescued by any command — `usbdetach` refuses it as "not attached to
+         this machine" — so at that point hands are the only remaining tool and
+         saying so plainly is the whole job.
+
+    Returns a dict the UI turns into one line and a few log entries.
+    """
+    config = config or {}
+    info = vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout
+    host = vbox("list", "usbhost", quiet=True).stdout
+    plan = radio_filter_plan(config, host, info)
+    pinned, pin_failed = pin_radio_filters(plan) if plan else ([], [])
+    recovered, failed = reclaim_radios(
+        config=config, **({} if settle is None else {"settle": settle}))
+    state = read_radio_state()
+    return {
+        "pinned": pinned, "pin_failed": pin_failed,
+        "recovered": recovered, "failed": failed,
+        "total": len(state["mine"]), "still_lost": [
+            usb_label(d, config) for d in state["lost"]],
+    }
+
+
+def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None, config=None):
     """Hand every lost radio back to the VM. Returns (recovered, failed).
 
     **Success is the VM holding the device, not VBoxManage returning zero.**
@@ -1061,7 +1210,7 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None):
         vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout))
     recovered, failed = [], []
     for device in read_radio_state()["lost"]:
-        label, uuid = usb_label(device), device["uuid"].lower()
+        label, uuid = usb_label(device, config), device["uuid"].lower()
         reason = "not attempted"
         for attempt in range(max(1, attempts)):
             result = vbox("controlvm", VM, "usbattach", device["uuid"],
@@ -1069,7 +1218,7 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None):
             text = ((result.stderr or "") + " "
                     + (result.stdout or "")).strip().lower()
             if _USB_WEDGED in text:
-                reason = WEDGED_ADVICE
+                reason = WEDGED_ADVICE + REPLUG_ADVICE
                 break                      # retrying provably cannot help
             if result.returncode:
                 reason = ((result.stderr or result.stdout or "").strip()[-200:]
@@ -1080,7 +1229,7 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None):
                 reason = ""
                 break
             reason = ("VirtualBox accepted the request but the VM never took "
-                      "the device. " + WEDGED_ADVICE)
+                      "the device. " + REPLUG_ADVICE)
         if reason:
             failed.append((label, reason))
         else:
@@ -3038,7 +3187,7 @@ class BtPanel(tk.Frame):
         button_row = tk.Frame(options, bg=BG)
         button_row.pack(fill="x", pady=(5, 0))
         self.reclaim_btn = ttk.Button(
-            button_row, text="Check radios", command=self._reclaim_radios)
+            button_row, text="Repair radios", command=self._reclaim_radios)
         self.reclaim_btn.pack(side="left")
         self.recommended_btn = ttk.Button(
             button_row, text="Use recommended 3-radio layout",
@@ -3109,9 +3258,9 @@ class BtPanel(tk.Frame):
             self.radio_usb.set(text)
             if lost:
                 self.reclaim_btn.config(
-                    text=f"Reclaim {lost} radio" + ("s" if lost != 1 else ""))
+                    text=f"Repair {lost} radio" + ("s" if lost != 1 else ""))
             else:
-                self.reclaim_btn.config(text="Check radios")
+                self.reclaim_btn.config(text="Repair radios")
         if self.app:
             self.app.ui(apply)      # workers never touch Tk, not even after()
 
@@ -3128,6 +3277,7 @@ class BtPanel(tk.Frame):
                     "the Bridge tab.", 0)
                 return
             state = read_radio_state()
+            config = self.app.canvas.config if self.app else {}
             total, lost = len(state["mine"]), len(state["lost"])
             if not total:
                 self._radio_usb_apply(
@@ -3135,13 +3285,13 @@ class BtPanel(tk.Frame):
                     "VM's USB filters.", 0)
             elif not lost:
                 self._radio_usb_apply(
-                    f"All {total} radio(s) are attached to the VM.", 0)
+                    f"All {total} radios are attached to the VM.", 0)
             else:
-                names = ", ".join(usb_label(d) for d in state["lost"])
+                names = ", ".join(usb_label(d, config) for d in state["lost"])
                 self._radio_usb_apply(
-                    f"{total - lost} of {total} radios are attached. Windows "
-                    f"has taken {names} back — the guest cannot see it, so any "
-                    f"device on that radio cannot connect.", lost)
+                    f"{total - lost} of {total} radios are attached. The VM "
+                    f"does not have {names}, so that machine cannot connect. "
+                    f"Repair explains what to do.", lost)
         threading.Thread(target=work, daemon=True).start()
 
     def _reclaim_radios(self):
@@ -3166,35 +3316,41 @@ class BtPanel(tk.Frame):
                               f"attached to the VM — nothing to reclaim.")
                     self._radio_usb_check()
                     return
+                config = self.app.canvas.config if self.app else {}
                 for device in state["lost"]:
-                    self._log(f"radios: {usb_label(device)} is "
+                    self._log(f"radios: {usb_label(device, config)} is "
                               f"{device.get('state', '?')} on the host "
-                              f"(filter “{device.get('filter', '?')}”) — "
-                              f"handing it to the VM")
+                              f"(filter “{device.get('filter', '?')}”, serial "
+                              f"{device.get('serial') or 'none'}) — repairing")
                 self._radio_usb_apply(
-                    f"Handing {len(state['lost'])} radio(s) to the VM…", 0)
-                recovered, failed = reclaim_radios()
-                for name in recovered:
+                    f"Repairing {len(state['lost'])} radio(s)…", 0)
+                outcome = repair_radios(config)
+                for line in outcome["pinned"]:
+                    self._log(f"radios: pinned filter {line} — that filter now "
+                              f"matches one dongle and nothing else.")
+                for name, why in outcome["pin_failed"]:
+                    self._log(f"radios: could not pin filter {name} — {why}")
+                for name in outcome["recovered"]:
                     self._log(f"radios: {name} attached — the VM has it.")
-                for name, reason in failed:
+                for name, reason in outcome["failed"]:
                     self._log(f"radios: {name} did NOT reach the VM. {reason}")
-                # The status line is the one he is reading. An outcome that only
-                # exists in this log box is an outcome he does not have.
-                if failed and not recovered:
-                    self._radio_usb_apply(
-                        f"{failed[0][0]} did not reach the VM. {failed[0][1]}",
-                        len(failed))
-                elif failed:
-                    self._radio_usb_apply(
-                        f"{len(recovered)} attached, {len(failed)} did not: "
-                        f"{failed[0][1]}", len(failed))
-                if recovered:
+                # The status line is the one being read. An outcome that exists
+                # only in this log box is an outcome the user does not have.
+                if outcome["failed"]:
+                    name, reason = outcome["failed"][0]
+                    self._radio_usb_apply(f"{name}: {reason}",
+                                          len(outcome["failed"]))
+                    self._log("radios: if a replug does not take, restart the "
+                              "VM — that rebuilds its USB state from scratch. "
+                              "Note the iPad needs re-pairing after a VM "
+                              "power-off.")
+                else:
+                    self._radio_usb_check()
+                if outcome["recovered"]:
                     self._log("radios: give BlueZ a few seconds to enumerate, "
                               "then Connect each device.")
                     if self.app:
                         self.app.ui(lambda: self.after(6000, self.refresh))
-                if not failed:
-                    self._radio_usb_check()
             finally:
                 if self.app:
                     self.app.ui(
