@@ -61,12 +61,16 @@ the explanation of why it matters.
 | **Windows' own pointer settings** | speed at 10, Enhance pointer precision ON | established 29 July: with our accel at 0 and the target's inverted out, the chain has NO acceleration unless EPP supplies it, and speed >10 doubles the source quantum. See the DEVLOG. |
 | **tracking-speed slider position** | mirror the actual value | `_APPLE_CURVE` is the curve at the DEFAULT slider position. At any other position every compensated calculation is wrong by whatever that slider does, silently. |
 
-**Doug's is at notch 6 of 10 as of 29 July**, so this is live, not theoretical: if
-that is not the default position the inversion is wrong by whatever the slider
-does. It cannot break the position model (every crossing re-syncs against the
-target's own clamp) but it does degrade within-screen precision, and a scalar
-`sensitivity` can only cancel it at one speed. One number settles it:
-`defaults read -g com.apple.mouse.scaling`.
+**Settled for Doug's Mac, 29 July: notch 6 IS the default and
+`com.apple.mouse.scaling` reads `1`.** So that machine sits exactly at the
+condition `_APPLE_CURVE` was calibrated at, the inversion is inverting the right
+curve, and his `sensitivity 0.747` is a genuine feel preference rather than a
+scalar hiding a shape mismatch. Nothing to fix there.
+
+It stays on this list for two reasons that outlive one desk: another machine may
+default to a different notch, and Apple can change the table between releases
+(Doug is about to update from Tahoe 26.5.1). Neither is knowable without
+measuring, which is the next section.
 
 **Research is the wrong approach; measure instead.** Doug cannot run `defaults` on
 a managed Mac, and neither will anyone he sends this to — a fix that needs a

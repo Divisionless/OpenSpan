@@ -1443,3 +1443,29 @@ that slider does — silently. Two things follow:
 Settling it needs one number off the Mac: `defaults read -g com.apple.mouse.scaling`,
 compared against the default for that device. Until then this is a known,
 bounded unknown rather than a mystery.
+
+### Settled: the Mac is at the calibration point
+
+`defaults read -g com.apple.mouse.scaling` → **1**, and notch 6 turned out to be
+where the slider started. So the Mac sits exactly at the default the shipped curve
+was reconstructed at. The inversion is inverting the correct transform, and
+`sensitivity 0.747` is a preference, not a scalar compensating for a mismatched
+curve shape.
+
+The prediction therefore flips: he should *not* be able to feel mid-range drift on
+that machine. If he ever does, the cause is elsewhere and this is not the place to
+look.
+
+`defaults read` is worth recording as the right tool for a managed machine, for the
+reason that is easy to get backwards: it does not open the plist. It asks
+`cfprefsd` over XPC for a value in the user's **own** domain, so it needs no sudo,
+no admin, and — the part that usually bites Terminal under MDM — no Full Disk
+Access. Reading the file directly has strictly more surface than the command that
+looks heavier.
+
+**Left open, and it is the more interesting half:** `Managed Laptop` also carries
+`compensate_target_accel: true`. If that machine is not macOS, the app is
+pre-distorting every report for a curve it never applies — which would be a
+concrete cause of "not quite as good" rather than an unavoidable one. Its
+`sensitivity` is also still 1.0, i.e. never tuned, where the Mac is at 0.747.
+Both are one question away and neither should be guessed at.
