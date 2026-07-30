@@ -1382,3 +1382,64 @@ app is preventing a restart, and answers Doug's question about it exactly.
 `stop_virtualbox_backend()` waits for a real `poweroff`, then ends `VBoxSVC`
 (a COM server VirtualBox relaunches on demand). `VBoxSDS` is a Windows service and
 is left alone.
+
+## 29 July — the pointer chain had no acceleration in it at all
+
+Doug: *"i put motion select a pointer speed to the middle on windows -- and
+turned on enhance pointer precision, this feels better actually. does it make
+sense or is it placebo"*
+
+It makes sense, and finding it corrected a wrong prior of mine. I had flagged
+"Enhance pointer precision" as a risk on the reasonable-sounding grounds that it
+would stack with the target's acceleration. It cannot, and here is why:
+
+- our `pointer_accel` is **0.0** on both compensated devices
+- `compensate_target_accel` is **on**, so the target's own curve is inverted out
+- EPP was off, so Windows contributed none
+
+The entire pipeline was **strictly linear** — a fixed pixels-per-count ratio from
+hand to screen, at every speed. That is exactly what a pointer should not be: low
+gain is wanted for precision and high gain for travel, and a linear pointer forces
+one compromise to serve both. Turning EPP on did not add a second curve. It added
+the only one.
+
+Two further mechanisms, both real:
+
+**Speed 10 halves the quantum.** At 10 the multiplier is unity, so one mouse count
+becomes one pixel. Above 10 Windows multiplies *before* rounding to integer
+pixels, so at 13 the smallest expressible movement was ~2px. The hook reads
+*pixel* deltas, so the source grid really was twice as coarse as necessary.
+Slower slider, finer control.
+
+**EPP carries sub-pixel remainders, which matters more here than usual.** With it
+off and a >1 multiplier, slow motion arrives clumped (`0,0,2,0,0,2`); with it on,
+evenly (`1,1,1,1`). The Apple inversion is a function of per-report MAGNITUDE and
+is steep at small magnitudes, so a jittery magnitude stream becomes a jittery
+count stream which the Mac then re-expands. Evenly spaced in, evenly spaced out.
+
+### The calibration assumption this exposed
+
+His tuned combination is `sensitivity 0.747` on the Mac, macOS tracking at **notch
+6 of 10**, macOS acceleration ON.
+
+macOS acceleration being ON is *required* — with it off the inversion would be
+pre-distorting for a curve nobody applies. That part is right.
+
+But `_APPLE_CURVE` is Apple's table **at the default slider position**, and notch
+6 of 10 may not be it. If it is not, every compensated report is wrong by whatever
+that slider does — silently. Two things follow:
+
+1. **It cannot break the position model.** Every crossing re-syncs by shoving to
+   the display-union edge and letting the target's window server clamp, which
+   makes the coordinate a fact. Accumulated inversion error is wiped at each
+   boundary. Curve error degrades *within-screen* precision and nothing else —
+   which is measurement-by-clamp doing exactly the job it was designed for.
+2. **A scalar can only match a shape at one speed.** `sensitivity` is absorbing
+   the mismatch, and a single multiplier can cancel a scale difference but not a
+   curve difference. That predicts a specific symptom: correct at the speed it was
+   tuned at, drifting slightly at others — most noticeable mid-range, least at the
+   top, where Doug reports flicks are sloppy by intent anyway.
+
+Settling it needs one number off the Mac: `defaults read -g com.apple.mouse.scaling`,
+compared against the default for that device. Until then this is a known,
+bounded unknown rather than a mystery.

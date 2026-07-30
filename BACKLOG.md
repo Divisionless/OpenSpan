@@ -58,7 +58,15 @@ the explanation of why it matters.
 | keyboard navigation | on (macOS) | Tab will not move between dialog buttons |
 | delay until repeat | not the shortest | accent picker appears during ordinary typing |
 | **pointer acceleration on/off** | know which | with it OFF the curve is linear and compensation must be **disabled**, not adjusted — the app currently assumes it is on and cannot tell |
+| **Windows' own pointer settings** | speed at 10, Enhance pointer precision ON | established 29 July: with our accel at 0 and the target's inverted out, the chain has NO acceleration unless EPP supplies it, and speed >10 doubles the source quantum. See the DEVLOG. |
 | **tracking-speed slider position** | mirror the actual value | `_APPLE_CURVE` is the curve at the DEFAULT slider position. At any other position every compensated calculation is wrong by whatever that slider does, silently. |
+
+**Doug's is at notch 6 of 10 as of 29 July**, so this is live, not theoretical: if
+that is not the default position the inversion is wrong by whatever the slider
+does. It cannot break the position model (every crossing re-syncs against the
+target's own clamp) but it does degrade within-screen precision, and a scalar
+`sensitivity` can only cancel it at one speed. One number settles it:
+`defaults read -g com.apple.mouse.scaling`.
 
 **The slider needs research before it can be mirrored.** It is not enough to
 store the number — we need to know what macOS actually does with it. Whether it
