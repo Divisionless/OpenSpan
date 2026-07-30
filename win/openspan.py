@@ -774,6 +774,7 @@ def vbox(*args, quiet=False):
         _emit("cmd", "VBoxManage " + " ".join(str(a) for a in args))
     try:
         r = subprocess.run([VBOX, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
                            timeout=30, creationflags=NO_WINDOW)
         if not quiet:
             out = (r.stderr or r.stdout or "").strip()
@@ -831,11 +832,79 @@ def parse_usb_host(text):
             current["serial"] = value
         elif key == "port":
             current["port"] = value
+        elif key == "address":
+            current["address"] = value
         elif key == "current state":
             current["state"] = value
     if current.get("uuid"):
         devices.append(current)
-    return devices
+    return _merge_usb_twins(devices)
+
+
+# VirtualBox's own vendor:product. A captured device is listed a SECOND time
+# under these ids, as the proxy stub standing in for it, and the stub's address
+# carries the real device's serial number even when the device's own
+# SerialNumber field is missing.
+_VBOX_PROXY = "vid_80ee&pid_cafe"
+
+
+def _merge_usb_twins(devices):
+    """One entry per physical device.
+
+    `list usbhost` reports a CAPTURED device twice: once as itself and once as
+    VirtualBox's proxy stub, with different UUIDs and the same vendor, product
+    and port. Counting both said "3 of 5 radios are attached, 2 are missing" on a
+    perfectly healthy machine -- a false alarm produced by the very feature meant
+    to explain a real one.
+
+    Port is the key, because it is the one field always reported: serial and
+    product strings vanish whenever VirtualBox cannot open the device, which is
+    most of the time it matters.
+
+    The pair is merged rather than filtered, because each half knows something
+    the other does not -- the stub carries the serial, and the original carries
+    the UUID that `usbattach` accepts.
+    """
+    merged, order = {}, []
+    for device in devices:
+        key = (device.get("vendor"), device.get("product_id"),
+               device.get("port"))
+        if device.get("port") is None:
+            key = (device.get("uuid"),)          # nothing to merge it with
+        proxy = _VBOX_PROXY in (device.get("address") or "").lower()
+        if not device.get("serial") and proxy:
+            # \\?\usb#vid_80ee&pid_cafe#aca7f1299fcb#{...}
+            parts = (device.get("address") or "").split("#")
+            if len(parts) > 2 and len(parts[2]) == 12:
+                device = dict(device, serial=parts[2].upper())
+        if key not in merged:
+            merged[key] = dict(device, proxy=proxy,
+                               uuids={device.get("uuid", "").lower()})
+            order.append(key)
+            continue
+        kept = merged[key]
+        # BOTH uuids are kept. `usbattach` takes the real device's, while
+        # USBAttachActive reports the PROXY's -- so asking "does the VM hold
+        # this?" against a single uuid answers no for a device the VM is
+        # holding perfectly well. That is the whole of the false "2 missing".
+        kept.setdefault("uuids", set()).add(device.get("uuid", "").lower())
+        # the real device's UUID is the one usbattach takes, so a stub never
+        # overwrites it; everything else fills in whatever is missing
+        if kept.get("proxy") and not proxy:
+            seen = kept.get("uuids", set())
+            merged[key] = dict(device, **{
+                field: value for field, value in kept.items()
+                if value and not device.get(field)
+                and field not in ("proxy", "uuids")})
+            merged[key]["proxy"] = False
+            merged[key]["uuids"] = seen
+        else:
+            for field, value in device.items():
+                if value and not kept.get(field) and field != "proxy":
+                    kept[field] = value
+        if "Captured" in (device.get("state", ""), kept.get("state", "")):
+            merged[key]["state"] = "Captured"
+    return [merged[key] for key in order]
 
 
 def parse_usb_filters(info, keep_serial=False):
@@ -911,7 +980,8 @@ def radio_report(usbhost, info):
             continue
         device = dict(device, filter=match["name"])
         mine.append(device)
-        if device["uuid"].lower() not in held:
+        if not (device.get("uuids")
+                or {device["uuid"].lower()}) & held:
             lost.append(device)
     return {"mine": mine, "lost": lost, "held": held, "filters": filters}
 
@@ -946,78 +1016,87 @@ def usb_label(device, config=None):
     is. So the device it serves is used when the serial identifies it, and the
     product string only when nothing better exists.
     """
-    name = (device.get("name") or device.get("maker") or "").strip()
-    name = name or f"{device.get('vendor', '?')}:{device.get('product_id', '?')}"
     radio = serial_to_radio(device.get("serial"))
     if radio and config:
         for target in config.get("devices", []):
             if str(target.get("radio", "")).upper() == radio:
                 return f"{target.get('name') or target.get('id')}’s dongle"
-    return name
+    name = (device.get("name") or device.get("maker") or "").strip()
+    if not name:
+        # Product and Manufacturer are both absent whenever VirtualBox cannot
+        # open the device. The USB port always survives, and "the dongle in USB
+        # port 4" is something a person can actually act on.
+        port = device.get("port")
+        return (f"the dongle in USB port {port}" if port
+                else f"{device.get('vendor', '?')}:"
+                     f"{device.get('product_id', '?')}")
+    port = device.get("port")
+    return f"{name} (USB port {port})" if port else name
 
 
-def radio_filter_plan(config, usbhost, info):
-    """Which radios need their filter pinned to one specific dongle.
+def why_not_ready(config=None):
+    """Why the bridge is not up yet, in one sentence a stranger can use.
 
-    THE ROOT CAUSE of this whole mess. Both TP-Link filters matched
-    `2357:0604` and nothing else, so two identical dongles arriving together
-    raced two identical filters -- which is why replugging both recovered one and
-    left the other captured-away-from-Windows-but-never-delivered, a state no
-    VBoxManage verb can undo (`usbdetach` answers "not attached to this
-    machine").
+    "Booting the bridge… (~90s)" is the worst thing this app can say when
+    something is actually wrong. It spun for as long as it was left running while
+    every fact needed to explain it was one command away, and the honest reading
+    from outside is that the app has no idea -- which was true.
 
-    A filter carrying the dongle's serial number matches exactly one device, so
-    there is nothing left to race. `usbfilter modify` accepts it on a RUNNING VM,
-    which makes this a repair the app can simply do.
+    The states are ordered by what has to be true before the next thing can be:
+    the VM runs, the guest answers, radios exist, BlueZ sees them, the boot
+    helper finishes, the daemons listen. The first unmet one IS the answer.
 
-    Returns [{index, name, serial, label}] -- `index` is 0-based, as the
-    `usbfilter` command wants, while `--machinereadable` numbers from 1.
+    Returns (ready, sentence). Cheap calls first; the guest is only asked once
+    the VM is actually running.
     """
-    filters = parse_usb_filters(info, keep_serial=True)
-    ours = [d for d in parse_usb_host(usbhost) if d.get("serial")]
-    # Ambiguity only exists WITHIN a group of filters that match on the same
-    # thing, so group first. This is an assignment, not a match: two filters and
-    # two identical dongles have to be paired off one-to-one, and a per-filter
-    # "which device does this match" question has two answers and no way to
-    # choose -- which is the same ambiguity VirtualBox itself is losing to.
-    groups = {}
-    for slot, spec in enumerate(filters):
-        groups.setdefault((spec["vendor"], spec["product_id"]), []).append(
-            (slot, spec))
-    plan = []
-    for (vendor, product), members in groups.items():
-        if len(members) < 2:
-            continue            # a lone filter has nothing to be confused with
-        spoken_for = {m[1]["serial"].upper()
-                      for m in members if m[1].get("serial")}
-        free = sorted(
-            (d for d in ours
-             if d.get("vendor") == vendor
-             and (not product or d.get("product_id") == product)
-             and d["serial"].upper() not in spoken_for),
-            key=lambda d: d["serial"].upper())
-        for slot, spec in sorted(members, key=lambda m: m[0]):
-            if spec.get("serial") or not free:
-                continue
-            device = free.pop(0)
-            plan.append({"index": slot, "name": spec["name"],
-                         "serial": device["serial"],
-                         "label": usb_label(device, config)})
-    return plan
+    config = config or {}
+    if not vm_running():
+        return False, ("The VM is not running. Start it on the Bridge tab.")
 
+    state = read_radio_state()
+    if state["lost"]:
+        names = ", ".join(usb_label(d, config) for d in state["lost"])
+        wedged = [d for d in state["lost"]
+                  if d.get("state") == "Captured"]
+        if wedged:
+            return False, (
+                f"VirtualBox has taken {names} from Windows but never handed it "
+                f"to the VM. Nothing can undo that from here — not usbdetach, "
+                f"not restarting the VM, which makes it worse. Restart Windows: "
+                f"on a fresh boot every radio is captured and delivered "
+                f"normally.")
+        return False, (
+            f"The VM does not have {names}. Press Repair radios.")
 
-def pin_radio_filters(plan):
-    """Pin each planned filter to its dongle. Returns (pinned, failed)."""
-    pinned, failed = [], []
-    for step in plan:
-        result = vbox("usbfilter", "modify", str(step["index"]),
-                      "--target", VM, "--serialnumber", step["serial"])
-        if result.returncode:
-            failed.append((step["name"],
-                           (result.stderr or result.stdout or "").strip()[-160:]))
-        else:
-            pinned.append(f"{step['name']} → {step['label']}")
-    return pinned, failed
+    probe = ssh_guest(
+        "ls /sys/class/bluetooth/ 2>/dev/null | wc -l; "
+        "systemctl is-active openspan-btready; "
+        "systemctl --no-pager --plain list-units 'openspanble@*' "
+        "| grep -c 'active running'; "
+        "ss -ltn 2>/dev/null | grep -cE ':995[0-9]'",
+        timeout=12, quiet=True, show_result=False)
+    if probe.returncode:
+        return False, ("The VM is running but not answering yet — it takes "
+                       "about 90 seconds from cold.")
+    rows = (probe.stdout or "").split()
+    adapters, btready, daemons, ports = (rows + ["?"] * 4)[:4]
+    wanted = len([d for d in config.get("devices", [])
+                  if d.get("enabled", True)]) or 1
+
+    if adapters == "0":
+        return False, ("The VM has the radios but BlueZ has not registered any "
+                       "adapter yet. If this does not clear in a minute, "
+                       "restart the VM.")
+    if btready != "active":
+        return False, (f"Waiting on the guest's radio-ready helper "
+                       f"(openspan-btready, up to 200s). {adapters} adapter(s) "
+                       f"are present; the device daemons start behind it.")
+    if ports == "0" or daemons == "0":
+        return False, (f"The radios are ready and the boot helper has "
+                       f"finished, but {daemons} of {wanted} device daemons are "
+                       f"running. Try Restart keyboard.")
+    return True, (f"Ready — {adapters} radio(s), {daemons} daemon(s), "
+                  f"{ports} lane(s) listening.")
 
 
 def ensure_ssh_key():
@@ -1106,10 +1185,16 @@ def ssh_guest(cmd, timeout=20, quiet=False, show_result=True):
     if not quiet:
         _emit("cmd", "ssh: " + " ".join(cmd.split())[:240])
     try:
+        # UTF-8 explicitly. text=True decodes with the ANSI codepage, and
+        # `systemctl status` prints ● and ○ -- one of those bytes raised
+        # UnicodeDecodeError inside subprocess' reader THREAD, where it cannot
+        # be caught here: the exception was printed to a console nobody sees and
+        # the output came back empty. Every status check built on this was
+        # silently blind.
         r = subprocess.run(
             _ssh_argv(cmd),
-            capture_output=True, text=True, timeout=timeout,
-            creationflags=NO_WINDOW)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout, creationflags=NO_WINDOW)
         if not quiet and show_result:
             out = (r.stdout or r.stderr or "").strip()
             if out:
@@ -1147,10 +1232,11 @@ ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronousl
 
 
 REPLUG_ADVICE = (
-    "Unplug it and plug it back in — the VM is running, so its filter catches "
-    "it as it arrives. If both need it, do them ONE AT A TIME and wait for each "
-    "to appear: two identical dongles arriving together is what wedged this in "
-    "the first place."
+    "Unplug it and plug it back in — the VM is running, so its filter catches it "
+    "as it arrives. If that does not take, restart Windows: on a fresh boot "
+    "every radio is captured and delivered normally, which is the one recovery "
+    "that has never failed. Do NOT restart the VM — that spreads the fault to "
+    "radios that are still working."
 )
 
 
@@ -1161,23 +1247,27 @@ def repair_radios(config=None, settle=None):
     to them. Each rung either fixes it or hands back a sentence naming the one
     physical thing left to do — never "it failed".
 
-      1. PIN THE FILTERS. Free, no restart, and it is the actual cause: two
-         filters matching the same vendor:product cannot tell two identical
-         dongles apart, so arrival capture races and loses one.
-      2. ATTACH what the VM has lost, and verify the VM took it.
-      3. Anything still missing gets named by the DEVICE it serves, with the
-         replug instruction. A captured-but-not-delivered dongle cannot be
-         rescued by any command — `usbdetach` refuses it as "not attached to
-         this machine" — so at that point hands are the only remaining tool and
-         saying so plainly is the whole job.
+      1. ATTACH what the VM has lost, and verify the VM took it. This is the
+         whole fix whenever a dongle is merely Busy -- Windows holding a device
+         VirtualBox has not been asked for yet.
+      2. Anything still missing gets named by the machine it serves, with the
+         one action that remains. A dongle VirtualBox has CAPTURED but never
+         delivered cannot be rescued from here by anything: `usbdetach` refuses
+         it ("not attached to this machine"), restarting the VM spreads the
+         fault to radios that were working, and stopping VBoxSVC releases the
+         capture without restoring delivery. Restarting Windows fixes it every
+         time. Saying that plainly is the whole job.
 
     Returns a dict the UI turns into one line and a few log entries.
     """
     config = config or {}
-    info = vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout
-    host = vbox("list", "usbhost", quiet=True).stdout
-    plan = radio_filter_plan(config, host, info)
-    pinned, pin_failed = pin_radio_filters(plan) if plan else ([], [])
+    # Filter pinning USED to be step one here, on the theory that two filters
+    # matching the same vendor:product raced each other. A clean-boot run
+    # disproved it: with plain vendor+product filters, all three radios were
+    # captured AND delivered in 32 seconds, twins and all. Pinning a filter to a
+    # serial VirtualBox often cannot read stopped the filter matching at all,
+    # which cost a working desk. It is gone.
+    pinned, pin_failed = [], []
     recovered, failed = reclaim_radios(
         config=config, **({} if settle is None else {"settle": settle}))
     state = read_radio_state()
@@ -1235,6 +1325,45 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None, config=None):
         else:
             recovered.append(label)
     return recovered, failed
+
+
+def stop_virtualbox_backend(timeout=20.0):
+    """Wait for the VM to actually be off, then close VirtualBox down.
+
+    `_full_stop` used to fire `poweroff` and close 400ms later, which claimed in
+    its own docstring that "nothing lingers". Two things lingered:
+
+    * **The power-off is asynchronous.** The app was gone before the VM was, so
+      whether the machine ended cleanly depended on timing nobody controlled.
+    * **VBoxSVC and VBoxSDS keep running.** They are what Windows names when it
+      says an application is preventing a restart, and VBoxSVC is where the host
+      USB state lives -- so shutting the app down could never clear a stuck
+      capture, however many times it was tried.
+
+    VBoxSVC is a COM server VirtualBox re-launches on demand, so ending it costs
+    nothing and takes the wedged USB state with it. VBoxSDS is a Windows service
+    and is left alone.
+
+    Returns the state it managed to reach, for the log.
+    """
+    deadline = time.monotonic() + timeout
+    state = ""
+    while time.monotonic() < deadline:
+        info = vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout
+        state = next((line.split("=", 1)[1].strip('"')
+                      for line in (info or "").splitlines()
+                      if line.startswith("VMState=")), "")
+        if state in ("poweroff", "aborted", "saved", ""):
+            break
+        time.sleep(0.5)
+    try:
+        subprocess.run(["taskkill", "/IM", "VBoxSVC.exe", "/F"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=15,
+                       creationflags=NO_WINDOW)
+    except Exception:  # noqa: BLE001
+        pass
+    return state or "unknown"
 
 
 def vm_running():
@@ -5276,6 +5405,27 @@ class App:
         self._full_stop()
 
     # ---- close / tray ----
+    def _boot_why_probe(self, force=False):
+        """Refresh the one-sentence reason the bridge is not up. Throttled."""
+        now = time.monotonic()
+        if not force and now - getattr(self, "_boot_why_at", 0.0) < 12.0:
+            return
+        self._boot_why_at = now
+        if getattr(self, "_boot_why_busy", False):
+            return
+        self._boot_why_busy = True
+
+        def work():
+            try:
+                ready, why = why_not_ready(self.canvas.config)
+                self.ui(lambda: setattr(self, "_boot_why",
+                                        "" if ready else why))
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                self._boot_why_busy = False
+        threading.Thread(target=work, daemon=True).start()
+
     def _full_stop(self):
         """The FULL STOP: portal, audio sender, and the VM all go down, then
         the app closes — nothing lingers, next launch is a clean cold boot."""
@@ -5299,6 +5449,7 @@ class App:
                 vbox("controlvm", VM, "poweroff")
         except Exception:  # noqa: BLE001
             pass
+        stop_virtualbox_backend()
         # the single-instance mutex is NOT closed here on purpose: the OS
         # releases it at process exit (even on a crash), and closing the raw
         # handle early would let a second instance start during shutdown
@@ -6665,7 +6816,15 @@ class App:
             if not running:
                 self.status.set("Bridge stopped — click Bridge VM to start.")
             elif st is None:
-                self.status.set("Booting the bridge… (~90s)")
+                # Not a timer. A spinner that never resolves is the app knowing
+                # something is wrong and saying nothing -- it span for as long as
+                # it was left running while every fact needed to explain it was
+                # one command away. The sentence is computed on a worker (it
+                # costs an ssh) and cached; the timer is only the fallback for
+                # the first few seconds.
+                self._boot_why_probe()
+                self.status.set(self._boot_why
+                                or "Booting the bridge… (~90s)")
             elif connected:
                 self.status.set("iPad connected — keyboard & mouse bridging.")
             elif mac_connected:

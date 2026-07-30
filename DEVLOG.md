@@ -1304,3 +1304,81 @@ two are different models; the failing one is not the UB500. Next step if it
 persists: a VM restart, which rebuilds the USB state from scratch — at the cost
 of an iPad re-pair, which the app now says out loud rather than discovering
 afterwards.
+
+## 29 July, clean boot — what the baseline actually proved
+
+Doug rebooted the host and asked for the whole startup sequence to be watched
+from t=0. That single observation overturned the theory the previous three
+commits were built on.
+
+```
+ 0s  VM=poweroff  attached=0  Intel@14=Busy TP-Link@3=Busy TP-Link@4=Busy
+11s  VUSB: Attached '[proxy 8087:0aaa]' to port 1 on RootHub#1 (FullSpeed)
+19s  VUSB: Attached '[proxy 2357:0604]' to port 2 on RootHub#1 (FullSpeed)
+19s  VUSB: Attached '[proxy 2357:0604]' to port 3 on RootHub#1 (FullSpeed)
+31s  guest = hci0 hci1 hci2
+```
+
+**There was never a filter race.** Two identical dongles, two identical
+`2357:0604` filters, nothing pinned — all three radios captured *and* delivered
+in 32 seconds. The serial pinning built to fix that race was a fix for a
+non-problem, and it caused a real outage: a filter pinned to a serial VirtualBox
+often cannot read stops matching altogether. `radio_filter_plan` and
+`pin_radio_filters` are deleted.
+
+What is true is far simpler, and every recovery instruction now follows from it:
+
+> **A clean host works. A host whose VirtualBox USB layer has been wedged stays
+> wedged until it is rebooted.** Nothing else clears it — `usbdetach` refuses a
+> device the VM does not hold, restarting the VM spreads the fault to radios that
+> were working (it took out the internal Intel that had been fine all day), and
+> killing `VBoxSVC` releases the *capture* without restoring *delivery*.
+
+### Three defects the baseline exposed
+
+**A captured device is listed twice.** `list usbhost` reports it as itself and
+again as VirtualBox's proxy stub — different UUIDs, same vendor, product and
+port. Counting both made a perfectly healthy machine read *"3 of 5 radios are
+attached, 2 are missing"*: a false alarm produced by the feature built to explain
+a real one. Merged on `port`, which is the only field always present.
+
+And the pair had to be *merged* rather than filtered, because each half knows
+something the other does not:
+
+- the stub's address carries the serial (`…pid_cafe#aca7f1299fcb#…`) even when
+  the device reports no `SerialNumber` field at all
+- the original carries the UUID `usbattach` accepts
+
+**`USBAttachActive` reports the PROXY's UUID.** So "does the VM hold this?" asked
+against the real device's UUID answers *no* for a device the VM is holding
+perfectly well. Both UUIDs are kept and the question is asked against the set.
+This was the entire remainder of the false "2 missing".
+
+**Every guest command was decoded with the ANSI codepage.** `ssh_guest` used
+`text=True`, and `systemctl status` prints `●`/`○`. The UTF-8 bytes raised
+`UnicodeDecodeError` inside subprocess' reader *thread*, where the surrounding
+`try` cannot see it — the traceback went to a console nobody watches and the
+output came back **empty**. Every status check built on that was silently blind.
+Now `encoding="utf-8", errors="replace"`, here and in `vbox()`.
+
+### The banner tells you why
+
+`"Booting the bridge… (~90s)"` is the worst thing this app can say when something
+is wrong, and it is what it said for as long as it was left running. `why_not_ready()`
+walks the chain in dependency order — VM runs, guest answers, radios exist, BlueZ
+registers them, `openspan-btready` finishes, daemons listen — and the first unmet
+condition *is* the message. Computed on a worker, throttled to 12s.
+
+Worth knowing: tonight's stall was **legitimate**. `openspan-btready.service` has
+`TimeoutStartSec=200` and everything queues behind it; at the 90-second mark it
+was 67 seconds in and working. The app was right to wait and wrong to be silent.
+
+### Shutdown now leaves nothing
+
+`_full_stop` fired `poweroff` and closed 400 ms later, claiming "nothing lingers".
+The power-off is asynchronous, so the app was routinely gone before the VM was;
+and `VBoxSVC`/`VBoxSDS` kept running — which is what Windows names when it says an
+app is preventing a restart, and answers Doug's question about it exactly.
+`stop_virtualbox_backend()` waits for a real `poweroff`, then ends `VBoxSVC`
+(a COM server VirtualBox relaunches on demand). `VBoxSDS` is a Windows service and
+is left alone.

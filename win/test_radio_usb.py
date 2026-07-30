@@ -148,9 +148,11 @@ check("only devices the VM claims are considered ours",
 check("the microphone is left alone even though it is also Busy",
       "Yeti Stereo Microphone" not in
       [A.usb_label(d) for d in report["lost"]])
-check("both dongles the VM has lost are named",
+check("both dongles the VM has lost are named, with the USB port that "
+      "makes one identifiable from the other on a desk",
       sorted(A.usb_label(d) for d in report["lost"])
-      == ["TP-Link Bluetooth USB Adapter", "TP-Link UB500 Adapter"],
+      == ["TP-Link Bluetooth USB Adapter (USB port 3)",
+          "TP-Link UB500 Adapter (USB port 4)"],
       str([A.usb_label(d) for d in report["lost"]]))
 check("the one it already holds is not offered for reclaiming",
       "Intel Corp." not in [A.usb_label(d) for d in report["lost"]])
@@ -208,41 +210,94 @@ check("and falls back to its product string when nothing identifies it",
 check("with no config it still names something",
       A.usb_label(lost[0]) and "dongle" not in A.usb_label(lost[0]))
 
-# ---- the root cause: two filters that cannot tell two dongles apart ---------
-# Replugging both recovered one and left the other captured-away-from-Windows-
-# but-never-delivered. Both filters matched 2357:0604 and nothing else, so two
-# identical dongles arriving together raced two identical filters. A filter
-# carrying the dongle's serial matches exactly one device and there is nothing
-# left to race -- and `usbfilter modify` accepts it on a RUNNING VM, so this is a
-# repair the app can just do.
-plan = A.radio_filter_plan(CONFIG, USBHOST, INFO)
-check("both ambiguous filters are planned for pinning",
-      len(plan) == 2, str(plan))
-check("each is pinned to a different dongle",
-      len({step["serial"] for step in plan}) == 2, str(plan))
-check("and each is described by the machine it will serve",
-      sorted(step["label"] for step in plan)
-      == ["Managed Laptop’s dongle", "Managed Mac’s dongle"],
-      str([step["label"] for step in plan]))
-check("the index is the 0-based one the usbfilter command wants, not the "
-      "1-based one --machinereadable prints",
-      sorted(step["index"] for step in plan) == [1, 2],
-      str([step["index"] for step in plan]))
+# ---- a captured device is listed TWICE ---------------------------------------
+# The clean-boot run settled the question the pinning was built on: with plain
+# vendor+product filters, all three radios were captured AND delivered in 32
+# seconds, twin dongles and all. There was never a filter race. What there WAS is
+# this: `list usbhost` reports a captured device twice, once as itself and once as
+# VirtualBox's proxy stub, and counting both made a healthy machine read
+# "3 of 5 radios are attached, 2 are missing".
+CAPTURED = r"""UUID:               9d1005ae-e739-4f07-9098-b43f5823e6c7
+VendorId:           0x8087 (8087)
+ProductId:          0x0aaa (0AAA)
+Port:               14
+Address:            usb#vid_80ee&pid_cafe#5&3b2d9a0d&0&14#{00873fdf}
+Current State:      Captured
 
-pinned_info = INFO.replace(
-    'USBFilterProductId2="0604"',
-    'USBFilterProductId2="0604"\nUSBFilterSerialNumber2="ACA7F1299FCB"'
-).replace(
-    'USBFilterProductId3="0604"',
-    'USBFilterProductId3="0604"\nUSBFilterSerialNumber3="3C6AD23CD44E"')
-check("an already-pinned filter is left alone",
-      A.radio_filter_plan(CONFIG, USBHOST, pinned_info) == [],
-      str(A.radio_filter_plan(CONFIG, USBHOST, pinned_info)))
-check("the lone Intel filter is not pinned -- there is nothing to confuse it "
-      "with, and pinning it would break the day the adapter changes",
-      not [step for step in plan if step["name"] == "IntelBT"])
+UUID:               177b501b-a716-4159-8f7a-d856e4c188a6
+VendorId:           0x2357 (2357)
+ProductId:          0x0604 (0604)
+Port:               4
+Address:            usb#vid_80ee&pid_cafe#aca7f1299fcb#{00873fdf}
+Current State:      Captured
 
-# ---- an attach that is accepted but never lands -----------------------------
+UUID:               41497304-fea3-41d7-bbeb-000fcb969b62
+VendorId:           0x2357 (2357)
+ProductId:          0x0604 (0604)
+Port:               4
+Address:            {e0cbf06c-cd8b}7
+Current State:      Captured
+
+UUID:               a22b6a7b-339c-4b00-99af-cce5af8dd351
+VendorId:           0x2357 (2357)
+ProductId:          0x0604 (0604)
+Port:               3
+Address:            usb#vid_80ee&pid_cafe#3c6ad23cd44e#{00873fdf}
+Current State:      Captured
+
+UUID:               afde3067-061e-4fdd-b198-4602c11f5490
+VendorId:           0x2357 (2357)
+ProductId:          0x0604 (0604)
+Port:               3
+Address:            {e0cbf06c-cd8b}1
+Current State:      Captured
+"""
+
+twins = A.parse_usb_host(CAPTURED)
+check("five listed entries are three physical devices",
+      len(twins) == 3, f"{len(twins)}: {[d.get('port') for d in twins]}")
+check("each is kept once, keyed on the port they share",
+      sorted(str(d.get("port")) for d in twins) == ["14", "3", "4"],
+      str([d.get("port") for d in twins]))
+check("the serial is recovered from the proxy stub's address, where it "
+      "survives even though the device reports no SerialNumber field",
+      sorted(d.get("serial") or "-" for d in twins)
+      == ["-", "3C6AD23CD44E", "ACA7F1299FCB"],
+      str([d.get("serial") for d in twins]))
+check("the uuid kept is the real device's, which is the one usbattach takes",
+      {d["uuid"] for d in twins}
+      >= {"41497304-fea3-41d7-bbeb-000fcb969b62",
+          "afde3067-061e-4fdd-b198-4602c11f5490"},
+      str([d["uuid"][:8] for d in twins]))
+check("but BOTH uuids are remembered, because USBAttachActive reports the "
+      "PROXY's -- the whole of the false \"2 missing\"",
+      all(len(d.get("uuids", ())) == 2 for d in twins
+          if str(d.get("port")) in ("3", "4")),
+      str([sorted(d.get("uuids", ())) for d in twins]))
+
+# and the report agrees, using the proxy uuids the VM actually names
+PROXY_UUIDS = ("9d1005ae-e739-4f07-9098-b43f5823e6c7",
+               "177b501b-a716-4159-8f7a-d856e4c188a6",
+               "a22b6a7b-339c-4b00-99af-cce5af8dd351")
+attach = "".join(f'USBAttachActive{i}="{u}"\n'
+                 for i, u in enumerate(PROXY_UUIDS, start=1))
+healthy_info = INFO.split("USBAttachActive1")[0] + attach
+report2 = A.radio_report(CAPTURED, healthy_info)
+check("a fully healthy machine reports nothing missing",
+      len(report2["mine"]) == 3 and not report2["lost"],
+      f"mine={len(report2['mine'])} lost="
+      f"{[A.usb_label(d) for d in report2['lost']]}")
+
+check("a dongle with no product string is still named by its USB port",
+      A.usb_label({"vendor": "0x2357", "product_id": "0x0604", "port": "4"})
+      == "the dongle in USB port 4",
+      A.usb_label({"vendor": "0x2357", "product_id": "0x0604", "port": "4"}))
+
+check("the filter pinning is gone entirely",
+      not hasattr(A, "radio_filter_plan")
+      and not hasattr(A, "pin_radio_filters"))
+
+# ---- an attach that is accepted but never lands# ---- an attach that is accepted but never lands -----------------------------
 # Doug: "I clicked reclaim, don't think anything happened, take a look."
 #
 # It had happened. VirtualBox accepted both requests and took both dongles off
@@ -323,7 +378,7 @@ check("and every widget it touches is marshaled to the UI thread",
       "self.app.ui(apply)" in inspect.getsource(A.BtPanel._radio_usb_apply))
 check("repairing is one button, and it says how many radios it covers",
       "self.reclaim_btn" in src and "Repair {lost} radio" in src)
-check("reclaiming does not scan, pair or connect anything",
+check("recovery does not scan, pair or connect anything",
       not [word for word in ("bluetoothctl", "openspan_bt.py", "pair ", "trust")
            if word in inspect.getsource(A.reclaim_radios)])
 check("the VM being down is reported as itself, not as a missing radio",
