@@ -790,6 +790,130 @@ def vbox(*args, quiet=False):
         return R()
 
 
+# ---- the radios the VM is supposed to own -----------------------------------
+# A Bluetooth dongle is a USB device the guest owns by passthrough, and Windows
+# will happily take it back. Unplug one and plug it in again and it lands with a
+# Windows driver bound to it -- "Busy" -- and VirtualBox only auto-captures a
+# filtered device at the moment it ARRIVES. So the dongle is sitting right there,
+# visible, matching an active filter, and the guest cannot see it at all.
+#
+# From inside the app that looked exactly like a device that would not connect.
+# There was no way to tell the difference, because nothing here had ever looked
+# at the host's USB list. These four functions are that look.
+
+
+def parse_usb_host(text):
+    """`VBoxManage list usbhost` -> a record per device on this machine.
+
+    Blank-line separated stanzas of "Key: value". Only the fields that decide
+    whether a device is one of ours and whether the guest can have it.
+    """
+    devices, current = [], {}
+    for line in (text or "").splitlines():
+        if not line.strip():
+            if current.get("uuid"):
+                devices.append(current)
+            current = {}
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key == "uuid":
+            current["uuid"] = value
+        elif key == "vendorid":
+            current["vendor"] = value.split()[0].lower()
+        elif key == "productid":
+            current["product_id"] = value.split()[0].lower()
+        elif key == "product":
+            current["name"] = value
+        elif key == "manufacturer":
+            current["maker"] = value
+        elif key == "current state":
+            current["state"] = value
+    if current.get("uuid"):
+        devices.append(current)
+    return devices
+
+
+def parse_usb_filters(info):
+    """The VM's USB filters, from `showvminfo --machinereadable`.
+
+    A filter is the machine's own statement of "this device belongs to me", which
+    makes it the right definition of a radio to reclaim -- better than a list of
+    vendor ids hardcoded here, because the user edits the filters and never edits
+    this file.
+    """
+    rows = {}
+    for line in (info or "").splitlines():
+        key, _, value = line.partition("=")
+        value = value.strip().strip('"')
+        for field, name in (("USBFilterName", "name"),
+                            ("USBFilterVendorId", "vendor"),
+                            ("USBFilterProductId", "product_id"),
+                            ("USBFilterActive", "active")):
+            if key.startswith(field) and key[len(field):].isdigit():
+                rows.setdefault(key[len(field):], {})[name] = value
+    filters = []
+    for row in rows.values():
+        if row.get("active", "on") == "off":
+            continue
+        vendor = (row.get("vendor") or "").lower()
+        product = (row.get("product_id") or "").lower()
+        if not vendor:
+            continue
+        filters.append({
+            "name": row.get("name", ""),
+            "vendor": vendor if vendor.startswith("0x") else "0x" + vendor,
+            "product_id": (product if product.startswith("0x")
+                           else "0x" + product) if product else "",
+        })
+    return filters
+
+
+def parse_usb_attached(info):
+    """The UUIDs the VM currently holds, from `showvminfo --machinereadable`."""
+    held = set()
+    for line in (info or "").splitlines():
+        key, _, value = line.partition("=")
+        if key.startswith("USBAttachActive") and key[15:].isdigit():
+            uuid = value.strip().strip('"')
+            if uuid:
+                held.add(uuid.lower())
+    return held
+
+
+def radio_report(usbhost, info):
+    """Which of this machine's radios the VM has, and which it has lost.
+
+    "lost" means: a device on the host that matches one of the VM's own active
+    USB filters, and that the VM is not holding. That is precisely the state a
+    replugged dongle lands in, and precisely the state that used to be
+    indistinguishable from a device that just would not connect.
+    """
+    filters = parse_usb_filters(info)
+    held = parse_usb_attached(info)
+    mine, lost = [], []
+    for device in parse_usb_host(usbhost):
+        match = next(
+            (f for f in filters
+             if f["vendor"] == device.get("vendor")
+             and (not f["product_id"]
+                  or f["product_id"] == device.get("product_id"))),
+            None)
+        if not match:
+            continue
+        device = dict(device, filter=match["name"])
+        mine.append(device)
+        if device["uuid"].lower() not in held:
+            lost.append(device)
+    return {"mine": mine, "lost": lost, "held": held, "filters": filters}
+
+
+def usb_label(device):
+    """How to name a dongle to someone who has to go and find it."""
+    name = (device.get("name") or device.get("maker") or "").strip()
+    return name or f"{device.get('vendor', '?')}:{device.get('product_id', '?')}"
+
+
 def ensure_ssh_key():
     """Generate the host<->VM SSH key on first run if it's missing, so a
     fresh clone can reach its own bridge (the private key is gitignored and
@@ -894,6 +1018,32 @@ def ssh_guest(cmd, timeout=20, quiet=False, show_result=True):
             stdout = ""
             stderr = str(e)
         return R()
+
+
+def read_radio_state():
+    """One report on the radios, from two read-only VBoxManage calls."""
+    return radio_report(
+        vbox("list", "usbhost", quiet=True).stdout,
+        vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout)
+
+
+def reclaim_radios():
+    """Hand every lost radio back to the VM. Returns (recovered, failed).
+
+    Attaching a dongle is not the same as touching Bluetooth: nothing here
+    scans, pairs or connects. It puts the USB device back where the guest can
+    see it, which is the step that used to require a command line.
+    """
+    state = read_radio_state()
+    recovered, failed = [], []
+    for device in state["lost"]:
+        result = vbox("controlvm", VM, "usbattach", device["uuid"])
+        if result.returncode:
+            reason = (result.stderr or result.stdout or "").strip()
+            failed.append((usb_label(device), reason[-200:]))
+        else:
+            recovered.append(usb_label(device))
+    return recovered, failed
 
 
 def vm_running():
@@ -2831,10 +2981,27 @@ class BtPanel(tk.Frame):
         tk.Label(options, textvariable=self.radio_note, bg=BG, fg=MUTED,
                  font=("Segoe UI", 8), anchor="w", justify="left",
                  wraplength=470).pack(fill="x", pady=(5, 0))
+        # ---- which radios the VM actually holds -------------------------
+        # A dongle that has been unplugged and plugged back in is claimed by
+        # Windows, and VirtualBox only auto-captures at the moment a device
+        # ARRIVES. From in here that was indistinguishable from a device that
+        # simply would not connect -- nothing in the app had ever looked at the
+        # host's USB list. Now it says so, and offers the one action that fixes
+        # it. Nothing about this scans, pairs or connects anything.
+        self.radio_usb = tk.StringVar(value="Checking which radios the VM "
+                                            "holds…")
+        tk.Label(options, textvariable=self.radio_usb, bg=BG, fg=MUTED,
+                 font=("Segoe UI", 8), anchor="w", justify="left",
+                 wraplength=470).pack(fill="x", pady=(6, 0))
+        button_row = tk.Frame(options, bg=BG)
+        button_row.pack(fill="x", pady=(5, 0))
+        self.reclaim_btn = ttk.Button(
+            button_row, text="Check radios", command=self._reclaim_radios)
+        self.reclaim_btn.pack(side="left")
         self.recommended_btn = ttk.Button(
-            options, text="Use recommended 3-radio layout",
+            button_row, text="Use recommended 3-radio layout",
             command=self._use_recommended_radios)
-        self.recommended_btn.pack(anchor="e", pady=(5, 0))
+        self.recommended_btn.pack(side="right")
 
         self.info = tk.StringVar(value="")
         tk.Label(self, textvariable=self.info, bg=BG, fg=ACCENT,
@@ -2867,6 +3034,9 @@ class BtPanel(tk.Frame):
         self.tree.config(yscrollcommand=sb.set)
         self.tree.bind("<Double-1>", lambda e: self.connect())
         self.tree.bind("<Button-3>", self._popup)
+        # deferred: two VBoxManage calls must not sit in front of the first
+        # paint, and the answer is worth having before anything is clicked
+        self.after(1200, self._radio_usb_check)
 
         self.menu = tk.Menu(self, tearoff=0, bg=CARD, fg=FG,
                             activebackground=ACCENT_DIM,
@@ -2890,6 +3060,91 @@ class BtPanel(tk.Frame):
         self._log("Ready. Right-click a device for its actions.")
         self._set_radio_controls()
         self.refresh()
+
+    # ---- radios the VM has lost ------------------------------------------
+    def _radio_usb_apply(self, text, lost):
+        def apply():
+            self.radio_usb.set(text)
+            if lost:
+                self.reclaim_btn.config(
+                    text=f"Reclaim {lost} radio" + ("s" if lost != 1 else ""))
+            else:
+                self.reclaim_btn.config(text="Check radios")
+        if self.app:
+            self.app.ui(apply)      # workers never touch Tk, not even after()
+
+    def _radio_usb_check(self):
+        """Report how many of this machine's radios the guest can see.
+
+        Two read-only VBoxManage calls, on a worker thread -- the UI must not
+        wait on a subprocess.
+        """
+        def work():
+            if not vm_running():
+                self._radio_usb_apply(
+                    "The VM is not running, so it holds no radios. Start it on "
+                    "the Bridge tab.", 0)
+                return
+            state = read_radio_state()
+            total, lost = len(state["mine"]), len(state["lost"])
+            if not total:
+                self._radio_usb_apply(
+                    "No Bluetooth adapter on this machine matches one of the "
+                    "VM's USB filters.", 0)
+            elif not lost:
+                self._radio_usb_apply(
+                    f"All {total} radio(s) are attached to the VM.", 0)
+            else:
+                names = ", ".join(usb_label(d) for d in state["lost"])
+                self._radio_usb_apply(
+                    f"{total - lost} of {total} radios are attached. Windows "
+                    f"has taken {names} back — the guest cannot see it, so any "
+                    f"device on that radio cannot connect.", lost)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _reclaim_radios(self):
+        """Hand every radio the VM has lost back to it, and say what happened."""
+        self.reclaim_btn.config(state="disabled")
+
+        def work():
+            try:
+                if not vm_running():
+                    self._log("radios: the VM is not running — start it first.")
+                    return
+                state = read_radio_state()
+                if not state["mine"]:
+                    self._log("radios: nothing on this machine matches the "
+                              "VM's USB filters. Check the filters in "
+                              "VirtualBox.")
+                    return
+                if not state["lost"]:
+                    self._log(f"radios: all {len(state['mine'])} are already "
+                              f"attached to the VM — nothing to reclaim.")
+                    return
+                for device in state["lost"]:
+                    self._log(f"radios: {usb_label(device)} is "
+                              f"{device.get('state', '?')} on the host "
+                              f"(filter “{device.get('filter', '?')}”) — "
+                              f"handing it to the VM")
+                recovered, failed = reclaim_radios()
+                for name in recovered:
+                    self._log(f"radios: {name} attached.")
+                for name, reason in failed:
+                    self._log(f"radios: {name} would NOT attach — {reason}")
+                if failed:
+                    self._log("radios: unplug that dongle and plug it back in "
+                              "with the VM running; VirtualBox captures a "
+                              "filtered device as it arrives.")
+                if recovered:
+                    self._log("radios: give BlueZ a few seconds to enumerate, "
+                              "then Connect each device.")
+                    self.after(6000, self.refresh)
+            finally:
+                self._radio_usb_check()
+                if self.app:
+                    self.app.ui(
+                        lambda: self.reclaim_btn.config(state="normal"))
+        threading.Thread(target=work, daemon=True).start()
 
     def _log(self, msg):
         # callable from worker threads: queue the Text mutation to the UI

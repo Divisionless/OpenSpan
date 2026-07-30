@@ -1147,3 +1147,61 @@ shortcuts runs them, anything else has the clipboard typed into it.
 
 Doug's own words are the rule this should have been written to in the first
 place: *"the keyboard should be dumb as a rock and simply do what i do."*
+
+## 29 July — a radio the VM had lost, and no way to see it
+
+Doug: *"I had to unplug my external bluetooth devices - how can i get openspan to
+recognize them again and get back to functioning state"*.
+
+The answer turned out to be two `VBoxManage` commands and knowing to run them,
+which is not an answer.
+
+**What actually happens.** A Bluetooth dongle reaches the guest by USB
+passthrough. VirtualBox auto-captures a filtered device **at the moment it
+arrives** — so when a dongle is replugged and Windows' own driver binds it first,
+it sits on the host marked `Busy` and the VM never gets it. The dongle is
+plugged in, its filter matches, the VM is running, and the guest cannot see it at
+all. His machine, when he asked:
+
+| radio | filter | host state | in the VM |
+|---|---|---|---|
+| Intel internal — iPad | `IntelBT` | Captured | yes |
+| TP-Link UB500 — Mac | `TPLinkBT-Port1` | **Busy** | **no** |
+| TP-Link — laptop | `TPLinkBT-Port2` | **Busy** | **no** |
+
+**Why the app could not say so.** It had never looked at the host's USB list —
+`grep` for `usbattach`, `usbhost`, `usbfilter` across the whole tree returned
+nothing. So a device whose radio was gone and a device that simply would not
+connect produced exactly the same thing on screen: a lane that never went green.
+That is the actual defect. The dongle being claimed by Windows is VirtualBox's
+behaviour and is not going to change.
+
+**What decides it.** A radio is *lost* when a device on the host matches one of
+the VM's own active USB filters and the VM is not holding it. The filters are the
+right definition because they are the machine's own statement of what belongs to
+it — better than a list of vendor ids compiled into this file, which the user
+never edits and which would be wrong the day a different dongle is bought.
+
+Four pure functions parse it (`parse_usb_host`, `parse_usb_filters`,
+`parse_usb_attached`, `radio_report`), two thin ones call VirtualBox
+(`read_radio_state`, `reclaim_radios`). The Bluetooth tab reports the count and
+offers one button that names how many it will take back.
+
+Three things the fixtures pin down, all of them real on this desk:
+
+- **Both TP-Link dongles are `2357:0604`.** Two devices, one vendor:product pair
+  — anything keyed on the pair rather than the UUID would see one dongle.
+- **A Blue Yeti microphone is also `Busy`.** Half the devices on a desk are
+  Busy; only the ones a filter claims are ours.
+- **The Intel adapter reports no `Product:` line at all**, so it is named from
+  `Manufacturer`. A parser that assumed the field exists would drop the one
+  radio that was working.
+
+`test_radio_usb.py` runs against the real output captured from this machine in
+exactly the broken state, with the dongle addresses removed. It contacts no VM
+and attaches nothing.
+
+**Deliberately not done here:** nothing in this scans, pairs, or connects. It
+puts the USB device back where the guest can see it, and then says to press
+Connect. Bonds live on the guest under the adapter's own MAC and a dongle carries
+its MAC with it, so the same dongle returns to the same bonds — no re-pair.

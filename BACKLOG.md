@@ -105,6 +105,25 @@ Still open, deliberately:
   radio and a freshly allocated port. It appears in the list, greyed, and cannot
   connect. That is honest, but there is no way to say "drop it from here".
 
+## A radio the VM has lost  ·  ~~done 29 July~~
+
+Shipped. The Bluetooth tab now says how many of this machine's radios the guest
+actually holds, and offers one button to hand back any it has lost. See the
+DEVLOG entry for 29 July.
+
+Still open:
+
+- **Nothing notices on its own.** The check runs when the panel is built and
+  after a reclaim. A dongle pulled mid-session shows as a device that will not
+  connect until something asks again. `_status_watcher` already polls every lane
+  at 0.8s and would be the place, throttled hard -- two VBoxManage calls are not
+  free.
+- **A filter per port cannot tell two identical dongles apart.** Both TP-Links
+  are `2357:0604`, so which physical socket becomes which `hci` is up to arrival
+  order. It does not matter today because the app resolves each device's
+  controller by MAC, but a filter with a serial number or port path would make
+  the mapping stated rather than incidental.
+
 ## Automatic reconnect while the portal is on
 
 Definite, per Doug. If the portal is running, a device that drops should come
