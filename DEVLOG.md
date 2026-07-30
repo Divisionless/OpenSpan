@@ -1205,3 +1205,48 @@ and attaches nothing.
 puts the USB device back where the guest can see it, and then says to press
 Connect. Bonds live on the guest under the adapter's own MAC and a dongle carries
 its MAC with it, so the same dongle returns to the same bonds — no re-pair.
+
+### "I clicked reclaim, don't think anything happened"
+
+It had happened. That was the problem.
+
+`usbattach` returned zero, so the app said "attached" — and VirtualBox had taken
+both dongles off Windows and never handed either to the guest. The evidence, from
+three places that all agreed:
+
+- `list usbhost` said **Captured** — VirtualBox had them
+- `showvminfo` listed only the Intel as attached — the VM did not
+- in the guest, `lsusb` showed one adapter and `dmesg` showed **no USB event
+  since boot** — nothing had arrived
+
+So the dongles belonged to nobody: taken from Windows, never delivered. A worse
+state than the `Busy` one they started in, produced by the button meant to fix
+it. Every further attach returned:
+
+> `USB device 'TP-Link UB500 Adapter' ... is busy with a previous request.`
+
+That is a VirtualBox host-side device object with an unfinished request against
+it — the residue of a dongle unplugged while the VM held it. No number of
+retries clears it; the device object has to be re-created, which means a physical
+replug or a VM restart. The replug recovered two of the three.
+
+**The defect was believing the exit code.** An exit code says whether the
+*request* was accepted. The transfer is asynchronous and can fail after it. So
+success is now defined as *the VM holding the device*: attach, wait, then check
+the VM's own attached list, and treat "accepted but never landed" as the failure
+it is. `"busy with a previous request"` is matched by name and reported with the
+one thing that actually clears it — and is not retried, because retrying provably
+cannot work.
+
+**And the outcome was going somewhere he was not looking.** It went to the
+Bluetooth panel's log box, while the line he was reading still said "1 of 3". A
+success message next to a stale count is indistinguishable from nothing
+happening, which is exactly how he described it. The status line now carries the
+outcome, and a wedged radio's explanation is not overwritten by the bare count it
+already explains.
+
+One more thing this turned up, unresolved and worth an eye: the adapter at
+`AC:A7:…` — which `openspan_config.json` assigns to the **Managed Mac** — carries
+the guest-side alias `OpenSpan Managed Laptop`. The app resolves controllers by
+MAC so nothing misroutes today, but the alias and the assignment disagree, and one
+of them is stale.

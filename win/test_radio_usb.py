@@ -171,6 +171,76 @@ vendor_only = 'USBFilterActive1="on"\nUSBFilterName1="AnyTPLink"\n' \
 check("a vendor-only filter claims every device of that vendor",
       len(A.radio_report(USBHOST, vendor_only)["mine"]) == 2)
 
+# ---- an attach that is accepted but never lands -----------------------------
+# Doug: "I clicked reclaim, don't think anything happened, take a look."
+#
+# It had happened. VirtualBox accepted both requests and took both dongles off
+# Windows -- and never handed them to the guest. `lsusb` in the guest showed one
+# adapter, its dmesg showed no USB event since boot, and every further attach
+# returned "is busy with a previous request". The app reported success, because it
+# believed the exit code, and an exit code is about whether the REQUEST was
+# accepted. From outside, a success message next to a line still reading "1 of 3"
+# is indistinguishable from nothing happening.
+calls = []
+
+
+def fake_vbox(*args, **kwargs):
+    calls.append(args)
+
+    class R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    return R()
+
+
+def wedged_vbox(*args, **kwargs):
+    calls.append(args)
+
+    class R:
+        returncode = 1
+        stdout = ""
+        stderr = ("VBoxManage.exe: error: USB device '  TP-Link UB500 Adapter' "
+                  "with UUID {ff68} is busy with a previous request. Please try "
+                  "again later")
+    return R()
+
+
+real_vbox, real_state = A.vbox, A.read_radio_state
+LOST = [{"uuid": "ff68aac3", "name": "TP-Link UB500 Adapter", "state": "Busy",
+         "filter": "TPLinkBT-Port1"}]
+try:
+    A.read_radio_state = lambda: {"mine": LOST, "lost": list(LOST),
+                                  "held": set(), "filters": []}
+
+    A.vbox = fake_vbox
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0, attempts=2, verify=lambda: set())
+    check("an attach VirtualBox accepts but the VM never takes is a FAILURE",
+          not got and len(failed) == 1, f"recovered={got} failed={failed}")
+    check("and it says what actually clears it",
+          "plug it back in" in failed[0][1], failed[0][1][:90])
+
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0, attempts=2,
+                                   verify=lambda: {"ff68aac3"})
+    check("an attach the VM really took is a success",
+          got == ["TP-Link UB500 Adapter"] and not failed, str(failed))
+    check("and it stops as soon as it has landed, rather than attaching twice",
+          len([c for c in calls if "usbattach" in c]) == 1,
+          str([c for c in calls if "usbattach" in c]))
+
+    A.vbox = wedged_vbox
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0, attempts=3, verify=lambda: set())
+    check("“busy with a previous request” is reported as itself",
+          not got and A.WEDGED_ADVICE == failed[0][1], str(failed)[:120])
+    check("and it is not retried, because retrying provably cannot clear it",
+          len([c for c in calls if "usbattach" in c]) == 1,
+          f"tried {len([c for c in calls if 'usbattach' in c])} times")
+finally:
+    A.vbox, A.read_radio_state = real_vbox, real_state
+
 # ---- the wiring ------------------------------------------------------------
 import inspect  # noqa: E402
 src = inspect.getsource(A.BtPanel)
@@ -186,6 +256,15 @@ check("reclaiming does not scan, pair or connect anything",
            if word in inspect.getsource(A.reclaim_radios)])
 check("the VM being down is reported as itself, not as a missing radio",
       "The VM is not running" in inspect.getsource(A.BtPanel._radio_usb_check))
+
+reclaim_src = inspect.getsource(A.BtPanel._reclaim_radios)
+check("the outcome reaches the status line, not only the log box",
+      reclaim_src.count("_radio_usb_apply") >= 2, reclaim_src.count(
+          "_radio_usb_apply"))
+check("a wedged radio's explanation is not overwritten by a bare count",
+      "if not failed:" in reclaim_src)
+check("every Tk call in the worker goes through app.ui, including after()",
+      "self.app.ui(lambda: self.after(" in reclaim_src)
 
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

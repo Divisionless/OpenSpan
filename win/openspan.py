@@ -1027,22 +1027,64 @@ def read_radio_state():
         vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout)
 
 
-def reclaim_radios():
+# What VirtualBox says when its host-side device object still has an unfinished
+# request against it. Retrying cannot clear it -- the device has to be re-created,
+# which means a physical replug or a VM restart.
+_USB_WEDGED = "busy with a previous request"
+WEDGED_ADVICE = (
+    "VirtualBox still has an unfinished request for it. That is what a dongle "
+    "unplugged while the VM held it leaves behind, and no number of retries "
+    "clears it. Unplug it and plug it back in — the VM is running, so its "
+    "filter will catch it as it arrives. If it survives that, restart the VM."
+)
+ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronously
+
+
+def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None):
     """Hand every lost radio back to the VM. Returns (recovered, failed).
 
-    Attaching a dongle is not the same as touching Bluetooth: nothing here
-    scans, pairs or connects. It puts the USB device back where the guest can
-    see it, which is the step that used to require a command line.
+    **Success is the VM holding the device, not VBoxManage returning zero.**
+    The first version of this believed the exit code, and the exit code is about
+    whether the *request* was accepted. On Doug's desk the request was accepted,
+    the dongles were taken off Windows, the handoff to the guest never completed,
+    and the app reported that it had attached them -- so the panel went on saying
+    "1 of 3" while claiming success, and the honest reading of that from outside
+    is "nothing happened". Which is what he said.
+
+    The transfer is asynchronous, so it is given time and then checked, and what
+    is checked is the VM's own list of attached devices.
+
+    Nothing here scans, pairs or connects. It puts the USB device where the guest
+    can see it, and then says to press Connect.
     """
-    state = read_radio_state()
+    verify = verify or (lambda: parse_usb_attached(
+        vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout))
     recovered, failed = [], []
-    for device in state["lost"]:
-        result = vbox("controlvm", VM, "usbattach", device["uuid"])
-        if result.returncode:
-            reason = (result.stderr or result.stdout or "").strip()
-            failed.append((usb_label(device), reason[-200:]))
+    for device in read_radio_state()["lost"]:
+        label, uuid = usb_label(device), device["uuid"].lower()
+        reason = "not attempted"
+        for attempt in range(max(1, attempts)):
+            result = vbox("controlvm", VM, "usbattach", device["uuid"],
+                          quiet=attempt > 0)
+            text = ((result.stderr or "") + " "
+                    + (result.stdout or "")).strip().lower()
+            if _USB_WEDGED in text:
+                reason = WEDGED_ADVICE
+                break                      # retrying provably cannot help
+            if result.returncode:
+                reason = ((result.stderr or result.stdout or "").strip()[-200:]
+                          or "VBoxManage would not attach it")
+                continue
+            time.sleep(settle)
+            if uuid in verify():
+                reason = ""
+                break
+            reason = ("VirtualBox accepted the request but the VM never took "
+                      "the device. " + WEDGED_ADVICE)
+        if reason:
+            failed.append((label, reason))
         else:
-            recovered.append(usb_label(device))
+            recovered.append(label)
     return recovered, failed
 
 
@@ -3110,37 +3152,50 @@ class BtPanel(tk.Frame):
             try:
                 if not vm_running():
                     self._log("radios: the VM is not running — start it first.")
+                    self._radio_usb_check()
                     return
                 state = read_radio_state()
                 if not state["mine"]:
                     self._log("radios: nothing on this machine matches the "
                               "VM's USB filters. Check the filters in "
                               "VirtualBox.")
+                    self._radio_usb_check()
                     return
                 if not state["lost"]:
                     self._log(f"radios: all {len(state['mine'])} are already "
                               f"attached to the VM — nothing to reclaim.")
+                    self._radio_usb_check()
                     return
                 for device in state["lost"]:
                     self._log(f"radios: {usb_label(device)} is "
                               f"{device.get('state', '?')} on the host "
                               f"(filter “{device.get('filter', '?')}”) — "
                               f"handing it to the VM")
+                self._radio_usb_apply(
+                    f"Handing {len(state['lost'])} radio(s) to the VM…", 0)
                 recovered, failed = reclaim_radios()
                 for name in recovered:
-                    self._log(f"radios: {name} attached.")
+                    self._log(f"radios: {name} attached — the VM has it.")
                 for name, reason in failed:
-                    self._log(f"radios: {name} would NOT attach — {reason}")
-                if failed:
-                    self._log("radios: unplug that dongle and plug it back in "
-                              "with the VM running; VirtualBox captures a "
-                              "filtered device as it arrives.")
+                    self._log(f"radios: {name} did NOT reach the VM. {reason}")
+                # The status line is the one he is reading. An outcome that only
+                # exists in this log box is an outcome he does not have.
+                if failed and not recovered:
+                    self._radio_usb_apply(
+                        f"{failed[0][0]} did not reach the VM. {failed[0][1]}",
+                        len(failed))
+                elif failed:
+                    self._radio_usb_apply(
+                        f"{len(recovered)} attached, {len(failed)} did not: "
+                        f"{failed[0][1]}", len(failed))
                 if recovered:
                     self._log("radios: give BlueZ a few seconds to enumerate, "
                               "then Connect each device.")
-                    self.after(6000, self.refresh)
+                    if self.app:
+                        self.app.ui(lambda: self.after(6000, self.refresh))
+                if not failed:
+                    self._radio_usb_check()
             finally:
-                self._radio_usb_check()
                 if self.app:
                     self.app.ui(
                         lambda: self.reclaim_btn.config(state="normal"))
