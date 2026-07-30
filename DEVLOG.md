@@ -1469,3 +1469,24 @@ pre-distorting every report for a curve it never applies — which would be a
 concrete cause of "not quite as good" rather than an unavoidable one. Its
 `sensitivity` is also still 1.0, i.e. never tuned, where the Mac is at 0.747.
 Both are one question away and neither should be guessed at.
+
+### Both Macs are at the calibration point; resolution is not a feel knob
+
+The Managed Laptop is a Mac too, with duplicated settings, and its
+`com.apple.mouse.scaling` also reads **1** at the default slider notch. So both
+compensated devices sit exactly where `_APPLE_CURVE` was reconstructed, and
+`compensate_target_accel: true` is correct on both. That closes the calibration
+question for this desk entirely.
+
+Worth recording because it was on the suspect list and should come off it:
+**display resolution cannot affect how the pointer feels.** `res_w/res_h` appear in
+one expression — `scale_x = gain * display["w"] / res_w` — and that is the MODEL,
+converting wire motion into where the virtual cursor believes it is. It never
+touches what goes on the wire. A mis-entered resolution costs crossing accuracy,
+not smoothness. `pointer_gain` is model-side only for the same reason.
+
+So the entire feel difference between the two Macs is one number: `sensitivity`,
+0.747 on one and the untuned 1.0 on the other. Identical curve, identical
+compensation, identical everything else — which makes it a clean prediction rather
+than a suggestion. If matching the number does not match the feel, something
+outside this table is involved and that is worth knowing.
