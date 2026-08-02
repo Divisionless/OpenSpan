@@ -48,6 +48,83 @@ class MONITORINFOEXW(ctypes.Structure):
                 ("szDevice", ctypes.c_wchar * 32)]
 
 
+CCHDEVICENAME = 32
+CCHFORMNAME = 32
+ENUM_CURRENT_SETTINGS = -1
+
+
+class DEVMODEW(ctypes.Structure):
+    """The display mode Windows is running an adapter at.
+
+    Only dmDisplayFrequency is read here, but the WHOLE structure has to be
+    declared: EnumDisplaySettingsW is handed dmSize and fills the buffer to that
+    length, and the frequency sits two thirds of the way down. A short struct
+    would be written past.
+
+    The printer half of DEVMODE is a union with the display half; this is the
+    display arm, which is the documented layout for EnumDisplaySettingsW.
+    """
+
+    _fields_ = [
+        ("dmDeviceName", ctypes.c_wchar * CCHDEVICENAME),
+        ("dmSpecVersion", wt.WORD),
+        ("dmDriverVersion", wt.WORD),
+        ("dmSize", wt.WORD),
+        ("dmDriverExtra", wt.WORD),
+        ("dmFields", wt.DWORD),
+        ("dmPositionX", ctypes.c_long),
+        ("dmPositionY", ctypes.c_long),
+        ("dmDisplayOrientation", wt.DWORD),
+        ("dmDisplayFixedOutput", wt.DWORD),
+        ("dmColor", ctypes.c_short),
+        ("dmDuplex", ctypes.c_short),
+        ("dmYResolution", ctypes.c_short),
+        ("dmTTOption", ctypes.c_short),
+        ("dmCollate", ctypes.c_short),
+        ("dmFormName", ctypes.c_wchar * CCHFORMNAME),
+        ("dmLogPixels", wt.WORD),
+        ("dmBitsPerPel", wt.DWORD),
+        ("dmPelsWidth", wt.DWORD),
+        ("dmPelsHeight", wt.DWORD),
+        ("dmDisplayFlags", wt.DWORD),
+        ("dmDisplayFrequency", wt.DWORD),
+        ("dmICMMethod", wt.DWORD),
+        ("dmICMIntent", wt.DWORD),
+        ("dmMediaType", wt.DWORD),
+        ("dmDitherType", wt.DWORD),
+        ("dmReserved1", wt.DWORD),
+        ("dmReserved2", wt.DWORD),
+        ("dmPanningWidth", wt.DWORD),
+        ("dmPanningHeight", wt.DWORD),
+    ]
+
+
+def display_refresh_hz(device_name):
+    """The refresh rate Windows is CURRENTLY driving this adapter at, or None.
+
+    Windows knows this number exactly, so nothing on the Windows side should
+    ever guess it. It was guessed: every local monitor was stamped 60 Hz by
+    _normalize_monitor and nothing ever wrote a real value, so the arrangement
+    asserted "@ 60 Hz" about a 144 Hz panel with total confidence.
+
+    0 and 1 are the documented "adapter default" sentinels, not rates. They come
+    back as None -- an unknown refresh is reported as unknown rather than
+    printed as "@ 1 Hz".
+    """
+    try:
+        mode = DEVMODEW()
+        mode.dmSize = ctypes.sizeof(DEVMODEW)
+        ok = ctypes.windll.user32.EnumDisplaySettingsW(
+            ctypes.c_wchar_p(str(device_name)), ENUM_CURRENT_SETTINGS,
+            ctypes.byref(mode))
+        if not ok:
+            return None
+        hz = int(mode.dmDisplayFrequency)
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(hz) if hz > 1 else None
+
+
 def enum_monitors():
     user32 = ctypes.windll.user32
     monitors = []
@@ -60,12 +137,18 @@ def enum_monitors():
         info.cbSize = ctypes.sizeof(MONITORINFOEXW)
         user32.GetMonitorInfoW(hmon, ctypes.byref(info))
         r = info.rcMonitor
-        monitors.append({
+        row = {
             "name": info.szDevice,
             "x": r.left, "y": r.top,
             "w": r.right - r.left, "h": r.bottom - r.top,
             "primary": bool(info.dwFlags & 1),
-        })
+        }
+        # Present ONLY when it is really known. An absent key is what tells
+        # every reader downstream to say nothing about refresh rate.
+        hz = display_refresh_hz(info.szDevice)
+        if hz:
+            row["refresh_hz"] = hz
+        monitors.append(row)
         return 1
 
     user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_cb), 0)

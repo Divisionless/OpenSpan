@@ -193,7 +193,20 @@ def _normalize_monitor(live, saved):
         MIN_LAYOUT_SIZE, int(saved.get("layout_w", live["w"])))
     row["layout_h"] = max(
         MIN_LAYOUT_SIZE, int(saved.get("layout_h", live["h"])))
-    row["refresh_hz"] = float(saved.get("refresh_hz", 60))
+    # Refresh is WINDOWS' fact about a local monitor, not ours to remember, so
+    # the LIVE reading wins whenever there is one. The saved value survives only
+    # as a fallback for a monitor whose mode could not be read this run.
+    #
+    # Nothing invents 60 any more. This line used to be
+    # `float(saved.get("refresh_hz", 60))` while no code path anywhere ever
+    # wrote a real number into it, so the hover card asserted "@ 60 Hz" for
+    # every local screen -- a number the app had simply made up. An absent key
+    # now means "not known", and the UI says nothing rather than lying.
+    hz = live.get("refresh_hz") or saved.get("refresh_hz")
+    if hz:
+        row["refresh_hz"] = float(hz)
+    else:
+        row.pop("refresh_hz", None)
     diagonal = saved.get("diagonal_in")
     if diagonal:
         # A local monitor's desk size was its PIXEL count, which made a 17"
@@ -203,6 +216,85 @@ def _normalize_monitor(live, saved):
         row["layout_w"], row["layout_h"] = physical_size(
             diagonal, live["w"], live["h"], 0)
     return row
+
+
+def merge_live_monitors(saved_monitors, live_monitors):
+    """Re-read Windows WITHOUT discarding what only the user can know.
+
+    Windows owns a local monitor's position, resolution, refresh rate and which
+    one is primary, and it can be asked for all four at any moment. It does NOT
+    know any monitor's physical size -- that is why `diagonal_in` is typed in by
+    hand -- and it has no opinion about where the user has decided a screen sits
+    in the desk arrangement.
+
+    So a refresh REPLACES the machine's facts and PRESERVES the human's:
+    diagonal_in and the hand-placed layout_x/layout_y survive for every monitor
+    that is still attached. A refresh that reset diagonal_in would destroy the
+    only field the user can supply, which would make the button worse than not
+    having one at all.
+
+    layout_w/layout_h are derived, not typed: a rectangle's size comes from the
+    diagonal and the aspect the live resolution implies, so for a monitor that
+    HAS a diagonal they are deliberately dropped and re-derived -- that is how a
+    resolution change reaches the drawing.
+
+    A monitor with NO diagonal is the opposite case: nothing can re-derive them,
+    so dropping them silently reset that monitor's desk rectangle to its raw
+    pixel count (measured on this desk: 900x506 -> 1920x1080). That moves every
+    crossing band on the screen and changes portal_signature -- an eight-second
+    input restart -- while the report below still said "nothing changed". So
+    they are preserved in exactly that case and only that case.
+
+    Returns (monitors, report). The report names what actually changed, so the
+    caller can say so instead of silently rewriting the desk.
+    """
+    saved_by_name = {
+        str(row.get("name", "")): row
+        for row in (saved_monitors or []) if isinstance(row, dict)
+    }
+    live_names = [str(row.get("name", "")) for row in (live_monitors or [])]
+    report = {"added": [], "removed": [], "resolution": [], "refresh": [],
+              "primary": []}
+    merged = []
+    for live in (live_monitors or []):
+        name = str(live.get("name", ""))
+        saved = saved_by_name.get(name)
+        if saved is None:
+            report["added"].append(name)
+            merged.append(_normalize_monitor(live, None))
+            continue
+        old_res = (int(saved.get("w", 0)), int(saved.get("h", 0)))
+        new_res = (int(live.get("w", 0)), int(live.get("h", 0)))
+        if old_res != new_res:
+            report["resolution"].append(
+                (name, f"{old_res[0]}x{old_res[1]}",
+                 f"{new_res[0]}x{new_res[1]}"))
+        old_hz = saved.get("refresh_hz")
+        new_hz = live.get("refresh_hz")
+        if new_hz and float(new_hz) != float(old_hz or 0):
+            report["refresh"].append((name, old_hz, float(new_hz)))
+        if bool(saved.get("primary")) != bool(live.get("primary")):
+            report["primary"].append(name)
+        # Only the human's fields are carried over. Everything else in `saved`
+        # is Windows' and is now stale by definition.
+        keep = {}
+        for field in ("layout_x", "layout_y", "diagonal_in", "refresh_hz"):
+            if saved.get(field) is not None:
+                keep[field] = saved[field]
+        # The derived rectangle survives ONLY when there is no diagonal to
+        # re-derive it from. See the docstring: with a diagonal these are
+        # recomputed by _normalize_monitor and preserving them here would
+        # freeze the drawing at the old resolution; without one, letting them
+        # fall back to live w/h is a silent geometry loss.
+        if not keep.get("diagonal_in"):
+            for field in ("layout_w", "layout_h"):
+                if saved.get(field) is not None:
+                    keep[field] = saved[field]
+        merged.append(_normalize_monitor(live, keep))
+    for name in saved_by_name:
+        if name not in live_names:
+            report["removed"].append(name)
+    return merged, report
 
 
 def _normalize_display(display, fallback_id, fallback_name):

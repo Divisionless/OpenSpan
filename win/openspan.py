@@ -29,7 +29,8 @@ from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
 from openspan_targets import (  # noqa: E402
     BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
     compute_portals, device_by_id, physical_size,
-    dedupe_display_ids, normalize_config, oriented_resolution,
+    dedupe_display_ids, merge_live_monitors, normalize_config,
+    oriented_resolution,
     portal_signature, refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
@@ -164,6 +165,92 @@ HOVER_LINE = "#3a4358"
 DANGER = "#e06c68"
 SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
 BORDER = "#39435a"  # card edge for the in-frame modal
+
+# One look for every popup menu in the app. disabledforeground is not decoration
+# here: a menu's title line and its read-only Windows facts are disabled ENTRIES,
+# and Tk's default disabled grey is very nearly invisible on this background.
+MENU_STYLE = {
+    "bg": CARD, "fg": FG, "activebackground": ACCENT_DIM,
+    "activeforeground": "#eafff3", "disabledforeground": MUTED, "bd": 0,
+}
+
+# ---- what a screen may be offered, per KIND of screen ----------------------
+# The iPad's res_w/res_h hold POINTS, not pixels: the live config's ipad-main is
+# 1080x810, byte-identical to IPAD_PRESETS["iPad 10.2\""], and every pointer
+# distance on that HID lane is computed from those numbers. Offering a generic
+# 3840x2160 on that rectangle would not change any screen -- it would silently
+# rescale the whole iPad lane. So the resolution menu is built per display KIND
+# and an iPad is offered iPad geometries by name, which is also where the
+# deleted "iPad model" combobox's one job now lives.
+DESKTOP_PRESETS = (
+    ("1280 × 720", (1280, 720)),
+    ("1366 × 768", (1366, 768)),
+    ("1440 × 900", (1440, 900)),
+    ("1600 × 900", (1600, 900)),
+    ("1680 × 1050", (1680, 1050)),
+    ("1920 × 1080", (1920, 1080)),
+    ("1920 × 1200", (1920, 1200)),
+    ("2560 × 1440", (2560, 1440)),
+    ("2560 × 1600", (2560, 1600)),
+    ("3440 × 1440", (3440, 1440)),
+    ("3840 × 2160", (3840, 2160)),
+)
+REFRESH_PRESETS = (30, 60, 75, 90, 100, 120, 144, 165, 240)
+
+
+def display_kind(device, display):
+    """"ipad" or "desktop" -- which resolution family this screen belongs to.
+
+    Read from three independent tells, because any one of them can be edited by
+    the user: the device id, the device name, and whether the stored geometry is
+    already one of the known iPad point sizes.
+    """
+    device = device or {}
+    display = display or {}
+    if str(device.get("id", "")).lower() == "ipad":
+        return "ipad"
+    if "ipad" in str(device.get("name", "")).lower():
+        return "ipad"
+    size = (int(display.get("res_w", 0)), int(display.get("res_h", 0)))
+    if size in {tuple(v) for v in IPAD_PRESETS.values()}:
+        return "ipad"
+    return "desktop"
+
+
+def hz_label(value):
+    """"144 Hz" for a real reading, "" for a number nobody has."""
+    if not value:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{int(number) if number.is_integer() else number} Hz"
+
+
+def short_monitor_name(name):
+    """\\\\.\\DISPLAY4 -> DISPLAY4."""
+    return str(name).replace("\\\\.\\", "").replace("\\", "")
+
+
+def describe_monitor_refresh(report):
+    """What a Windows re-read actually changed, in one line.
+
+    Merging without saying what moved is how a desk gets rewritten under
+    someone -- the point of the button is that Windows is the authority on four
+    fields and on nothing else."""
+    parts = []
+    for name in report.get("added", []):
+        parts.append(f"added {short_monitor_name(name)}")
+    for name in report.get("removed", []):
+        parts.append(f"removed {short_monitor_name(name)}")
+    for name, old, new in report.get("resolution", []):
+        parts.append(f"{short_monitor_name(name)} {old} → {new}")
+    for name, _old, new in report.get("refresh", []):
+        parts.append(f"{short_monitor_name(name)} {hz_label(new)}")
+    for name in report.get("primary", []):
+        parts.append(f"{short_monitor_name(name)} is now primary")
+    return ", ".join(parts) if parts else "nothing changed"
 
 # ---- vertical rhythm --------------------------------------------------------
 # Every vertical pad in the left column was chosen locally, one widget at a
@@ -2619,8 +2706,14 @@ class MultiArrangeCanvas(tk.Canvas):
         self.bind("<ButtonRelease-1>", self._release)
         self._hover = None
         self._hover_item = None
+        # Where the pointer is, and where the card was last drawn. The card
+        # follows the pointer now, and _draw_hover has two callers that carry no
+        # event at all (redraw and <Leave>), so both live on the instance.
+        self._hover_xy = None
+        self._hover_drawn_xy = None
         self.bind("<Motion>", self._on_hover)
         self.bind("<Leave>", lambda _e: (setattr(self, "_hover", None),
+                                         setattr(self, "_hover_item", None),
                                          self.delete("hovercard")))
         self.redraw()
         # Persist the v1->v2 migration immediately. A Mac can be paired before
@@ -2674,6 +2767,14 @@ class MultiArrangeCanvas(tk.Canvas):
         self.target_states = {device["id"]: known.get(device["id"], "off")
                               for device in self.targets}
         self.ipad_state = "off"  # compatibility for existing tests/callers
+        # The hover card is a derived handle too, and the same hazard applies to
+        # it as to `selected` and `ipad`: it holds a KEY and the display dict it
+        # was drawn from. _fit_height below can configure(height=), which raises
+        # <Configure> -> redraw() -> _draw_hover(), and _detail_lines on a key
+        # whose device no longer exists does target["name"] on None -- a
+        # TypeError raised inside a Tk callback, where there is nothing to catch
+        # it.
+        self._hover = self._hover_item = None
         # A different arrangement is a different world aspect, and switching one
         # in fires no <Configure> at all. Fit here or the canvas keeps the
         # previous desk's height until something else happens to resize it.
@@ -2708,15 +2809,12 @@ class MultiArrangeCanvas(tk.Canvas):
         self.save()
         return removed
 
-    def set_ipad_size(self, width, height):
-        if self.ipad is None:
-            return
-        self.ipad["res_w"] = int(width)
-        self.ipad["res_h"] = int(height)
-        self.ipad["rotation"] = 0
-        set_layout_width(self.ipad, self.ipad["w"])
-        self.redraw()
-        self.save()
+    # set_ipad_size() is GONE, with the "iPad model" combobox that was its only
+    # caller. It wrote through `self.ipad` -- "the first display of the first
+    # device" -- so picking a model resized whatever screen happened to be
+    # first, which on this desk is not necessarily an iPad at all. The named
+    # iPad geometries are now offered on the right-click menu OF the screen
+    # being pointed at, which is the same feature aimed at the right rectangle.
 
     def set_target_state(self, target_id, live, paired):
         state = "live" if live else ("idle" if paired else "off")
@@ -2729,12 +2827,10 @@ class MultiArrangeCanvas(tk.Canvas):
     def set_ipad_state(self, live, paired):
         self.set_target_state("ipad", live, paired)
 
-    def rotate(self):
-        if self.ipad is None:
-            return
-        rotate_display(self.ipad)
-        self.redraw()
-        self.save()
+    # rotate() is GONE for the same reason as set_ipad_size(): it turned
+    # targets[0]["displays"][0] and nothing else, so the global "Rotate" button
+    # could not rotate the screen you had just clicked on. Rotation is now a
+    # per-screen entry on that screen's own right-click menu.
 
     def mac_displays(self, device_id=None):
         target = self.target(device_id) if device_id else (
@@ -2947,17 +3043,6 @@ class MultiArrangeCanvas(tk.Canvas):
                 x0, y0, x1, y1, fill=fill,
                 outline="#ffffff" if chosen else line,
                 width=3 if chosen or key[0] == "target" else 2)
-            if key[0] == "local":
-                name = "This PC" + (" · PRIMARY" if item["primary"] else "")
-                res_w, res_h = item["w"], item["h"]
-                refresh = item.get("refresh_hz", 60)
-                rotation = 0
-            else:
-                target = self.target(key[1])
-                name = f"{target['name']} · {item['name']}"
-                res_w, res_h = oriented_resolution(item)
-                refresh = item.get("refresh_hz", 60)
-                rotation = item.get("rotation", 0)
             # ONE SHORT LINE. Resolution, refresh, rotation and size used to
             # be stamped on every rectangle, which on a desk of portrait panels
             # meant four lines of text in a box narrower than the text. The
@@ -2972,6 +3057,7 @@ class MultiArrangeCanvas(tk.Canvas):
                     x1 - 10, y1 - 10, x1 + 2, y1 + 2,
                     fill=PORTAL, outline=PORTAL)
         self._draw_portals()
+        self._draw_hint()
         self._draw_hover()
 
     def _short_label(self, key, item):
@@ -2998,9 +3084,13 @@ class MultiArrangeCanvas(tk.Canvas):
                      else f"{target['name']}  ·  {screen}")
             res_w, res_h = oriented_resolution(item)
             rotation = int(item.get("rotation", 0))
-        refresh = item.get("refresh_hz", 60)
-        hz = int(refresh) if float(refresh).is_integer() else refresh
-        lines = [f"{res_w} × {res_h} @ {hz} Hz"]
+        # No "@ 60 Hz" unless a real 60 was read. For a local monitor the value
+        # comes from Windows (EnumDisplaySettingsW) and is simply absent when
+        # the adapter reports a default sentinel; for a managed device it is
+        # what the user typed. An app that does not know a number says nothing
+        # about it.
+        hz = hz_label(item.get("refresh_hz"))
+        lines = [f"{res_w} × {res_h}" + (f" @ {hz}" if hz else "")]
         if rotation:
             lines.append(f"rotated {rotation}°")
         diagonal = item.get("diagonal_in")
@@ -3021,29 +3111,76 @@ class MultiArrangeCanvas(tk.Canvas):
     def _on_hover(self, event):
         if self.action:                       # mid-drag: stay out of the way
             return
+        # _draw_hover is ALSO called from redraw() and from <Leave>, neither of
+        # which has an event, so the pointer position is remembered here rather
+        # than passed down.
+        drawn_at = self._hover_drawn_xy
+        self._hover_xy = (event.x, event.y)
         key, item = self._hit_key(event)
         if key == self._hover:
-            return
+            # Same surface: redraw only once the card is meaningfully behind the
+            # pointer. Measured against where it was DRAWN, not against the last
+            # motion event -- otherwise a slow drift of 2px at a time never
+            # accumulates and the card never follows at all.
+            if key is None or (drawn_at
+                               and abs(event.x - drawn_at[0]) <= 24
+                               and abs(event.y - drawn_at[1]) <= 24):
+                return
         self._hover = key
         self._hover_item = item
         self._draw_hover()
+
+    # How far off the pointer the card sits. It used to be pinned to the
+    # canvas's bottom-left corner, which on this desk is 350-600px from the
+    # rectangle being pointed at: you read the numbers in one corner about a
+    # screen in another.
+    HOVER_OFFSET = 16
 
     def _draw_hover(self):
         self.delete("hovercard")
         if not self._hover or not self._hover_item:
             return
         title, lines = self._detail_lines(self._hover, self._hover_item)
-        pad, lead = 9, 15
-        left, bottom = 10, int(self.winfo_height()) - 10
+        pad = 9
+        px, py = self._hover_xy or (10, int(self.winfo_height()) - 10)
+        self._hover_drawn_xy = (px, py)
         text_id = self.create_text(
-            left + pad, bottom - pad, anchor="sw", justify="left",
+            0, 0, anchor="nw", justify="left",
             text=title + "\n" + "\n".join(lines),
             fill=FG, font=("Segoe UI", 8), tags="hovercard")
         bx0, by0, bx1, by1 = self.bbox(text_id)
+        card_w = (bx1 - bx0) + 2 * pad
+        card_h = (by1 - by0) + 2 * pad
+        width = max(int(self.winfo_width()), 1)
+        height = max(int(self.winfo_height()), 1)
+        # Flip to the other side of the pointer at an edge rather than being
+        # clipped by it, then clamp so a card wider than the canvas still starts
+        # on screen.
+        left = px + self.HOVER_OFFSET
+        top = py + self.HOVER_OFFSET
+        if left + card_w > width - 4:
+            left = px - self.HOVER_OFFSET - card_w
+        if top + card_h > height - 4:
+            top = py - self.HOVER_OFFSET - card_h
+        left = max(4, min(left, max(4, width - card_w - 4)))
+        top = max(4, min(top, max(4, height - card_h - 4)))
+        self.move(text_id, left + pad - bx0, top + pad - by0)
         self.create_rectangle(
-            bx0 - pad, by0 - pad, bx1 + pad, by1 + pad,
+            left, top, left + card_w, top + card_h,
             fill=HOVER_FILL, outline=HOVER_LINE, width=1, tags="hovercard")
         self.tag_raise(text_id)
+
+    def _draw_hint(self):
+        """The tell that this canvas answers a right-click.
+
+        Drawn INSIDE the canvas, which is why it is here and not a Label: the
+        left column is what sets this window's height, and a packed widget costs
+        it real pixels. A canvas item costs none. BtPanel gives itself the same
+        kind of tell."""
+        self.create_text(
+            8, max(12, int(self.winfo_height()) - 6), anchor="sw",
+            text="drag to arrange  ·  right-click a screen to edit it",
+            fill=MUTED, font=("Segoe UI", 8), tags="hint")
 
     def _draw_portals(self):
         for portal in compute_portals(self.config):
@@ -4595,13 +4732,35 @@ class App:
         # both flags come off together or the change delivers nothing.
         arr_wrap = tk.Frame(bridge, bg=CARD, bd=0)
         arr_wrap.pack(fill="both", expand=False, padx=8, pady=PAD_MD)
-        tk.Label(arr_wrap, text="Drag any screen to match your desk. Sizes "
-                                "come from each screen's real diagonal — set "
-                                "them in “Screen sizes…”.",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(
-            anchor="w", padx=8, pady=(PAD_MD, 0))
+        # The Label that used to sit here is gone. Its whole content was a
+        # pointer to a button ("set them in Screen sizes...") -- a packed widget
+        # in the column that sets this window's height, spending real pixels to
+        # name another widget. The canvas now draws its own one-line tell,
+        # inside itself, for free.
         self.canvas = MultiArrangeCanvas(
             arr_wrap, on_change=self._portal_changed, height=270)
+        # Right-click is bound HERE, not inside MultiArrangeCanvas: the handler
+        # opens MacDisplayEditor, dark_prompt and the Windows re-read, none of
+        # which the canvas knows about. The canvas keeps only its on_change
+        # contract.
+        self.canvas.bind("<Button-3>", self._canvas_menu)
+        # Built ONCE and kept -- these two, and every cascade hung off them (see
+        # _fill_surface_menu). Tk garbage-collects an unreferenced cascade out
+        # from under a posted menu; BtPanel keeps `self.assign_menu` for exactly
+        # this reason.
+        self._surface_menu = tk.Menu(self.root, tearoff=0,
+                                     font=("Segoe UI", 10), **MENU_STYLE)
+        self._desk_menu = tk.Menu(self.root, tearoff=0,
+                                  font=("Segoe UI", 10), **MENU_STYLE)
+        # The three cascades are built ONCE here too, and repopulated in place.
+        # tkinter's Menu.delete deletes the entries' Tcl command objects but
+        # NOT a cascaded submenu widget, and the submenu stays in its master's
+        # children dict forever -- so building a fresh tk.Menu per popup
+        # stranded about two Menu widgets and twenty Tcl commands on every
+        # right-click, for the life of the process.
+        self._res_menu = tk.Menu(self._surface_menu, tearoff=0, **MENU_STYLE)
+        self._hz_menu = tk.Menu(self._surface_menu, tearoff=0, **MENU_STYLE)
+        self._device_menu = tk.Menu(self._desk_menu, tearoff=0, **MENU_STYLE)
 
         # ---- arrangements -------------------------------------------------
         # A screen's resolution really does change -- the managed Mac's
@@ -4633,23 +4792,22 @@ class App:
         # exactly the drawing it can actually render there.
         self.canvas.pack(fill="both", expand=False, padx=8, pady=PAD_MD)
 
-        row = tk.Frame(arr_wrap, bg=CARD)
-        row.pack(fill="x", padx=8, pady=(0, PAD_MD))
-        tk.Label(row, text="iPad:", bg=CARD, fg=MUTED).pack(side="left")
-        self.model = tk.StringVar(value=list(IPAD_PRESETS)[0])
-        cb = ttk.Combobox(row, textvariable=self.model, width=22,
-                          values=list(IPAD_PRESETS), state="readonly")
-        cb.pack(side="left", padx=6)
-        cb.bind("<<ComboboxSelected>>", self._pick_model)
-        ttk.Button(row, text="Screen sizes…",
-                   command=self._screen_sizes_dialog).pack(
-            side="right", padx=(6, 0))
-        ttk.Button(row, text="Rotate",
-                   command=self.canvas.rotate).pack(side="left")
-        ttk.Button(
-            row, text="Configure Mac displays…",
-            command=lambda: MacDisplayEditor(self.root, self.canvas)).pack(
-                side="right")
+        # The global row that stood here -- "iPad: [model]  Rotate  Configure
+        # Mac displays...  Screen sizes..." -- is DELETED, and two standing bugs
+        # went with it rather than moving somewhere else:
+        #
+        #   * Rotate called canvas.rotate(), which only ever turned
+        #     targets[0]["displays"][0]. The button could not rotate the screen
+        #     you had just clicked on.
+        #   * "Configure Mac displays..." passed no device_id, so it resolved to
+        #     the FIRST device whichever one you meant.
+        #
+        # Both are now per-screen entries on that screen's own right-click menu,
+        # which cannot address the wrong rectangle because it is opened ON the
+        # right one. "Screen sizes..." survives on the empty-canvas menu: the
+        # hit test returns only the TOPMOST rect, so a device display parked
+        # over a monitor makes that monitor unreachable by right-click, and the
+        # all-surfaces table is the escape hatch.
 
         # Bridge controls. The four connection verbs live ONLY on each device's
         # own row in the Devices panel below -- there is deliberately no second
@@ -5797,10 +5955,6 @@ class App:
         except Exception:  # noqa: BLE001
             pass
 
-    def _pick_model(self, *_):
-        w, h = IPAD_PRESETS[self.model.get()]
-        self.canvas.set_ipad_size(w, h)
-
     def _portal_changed(self, ok):
         if not ok:
             self.status.set(
@@ -6496,6 +6650,382 @@ class App:
             f"+{self.root.winfo_rootx() + 110}+{self.root.winfo_rooty() + 60}")
         win.deiconify()
         win.grab_set()
+
+    # ===================================================================
+    # The arrangement's right-click menus
+    #
+    # "why can't i right click a screen to change its res, size, hz?" -- every
+    # ingredient already existed (_hit_key, _lookup, _detail_lines, physical_
+    # size, MacDisplayEditor); nothing was wired to a Button-3. It is wired
+    # here, in App, because the handler reaches things the canvas deliberately
+    # knows nothing about.
+    #
+    # The two menus are deliberately NOT the same menu:
+    #
+    #   * a managed device's screen is described by THIS app -- its resolution,
+    #     rotation, refresh and diagonal are our numbers, and editing them is
+    #     the point.
+    #   * a Windows monitor is described by WINDOWS. It owns the position, the
+    #     resolution, the refresh rate and the primary flag, and it can be asked
+    #     for all four. So those are shown and re-readable, never editable: an
+    #     entry that looked like it could set a Windows display mode would be a
+    #     lie. The diagonal is the single field Windows does not know, and it is
+    #     the single field this menu lets you type.
+    # ===================================================================
+
+    def _deferred(self, fn, *args):
+        """A menu command that runs AFTER the menu has finished unposting.
+
+        EVERY command in these menus goes through this. FrameModal.grab_set
+        records grab_current() as _prev_grab and hands the grab back when the
+        modal closes; opened inline from a posted menu it captures the MENU and
+        then returns the grab to an unposted widget, leaving the whole window
+        mouse-dead. The tray menu already defers for exactly this reason.
+
+        Uniform rather than case-by-case on purpose: "Resolution" looks like it
+        opens nothing at all, right up until the screen it is aimed at has no
+        diagonal yet and has to ask for one.
+        """
+        return lambda: self.root.after(0, lambda: fn(*args))
+
+    def _canvas_menu(self, event):
+        """Right-click anything -- or nothing -- on the arrangement."""
+        if self.canvas.action:      # mid-drag: the guard _on_hover uses
+            return
+        key, item = self.canvas._hit_key(event)
+        # Select FIRST, and redraw, so the white outline and the menu's subject
+        # are the same rectangle. A menu about a screen the user is not looking
+        # at is how you edit the wrong one.
+        self.canvas.selected = key
+        self.canvas.redraw()
+        if key is None:
+            menu = self._desk_menu
+            self._fill_desk_menu(menu)
+        else:
+            menu = self._surface_menu
+            self._fill_surface_menu(menu, key, item)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _resolution_presets(self, key, item):
+        """The resolutions it is HONEST to offer this particular screen."""
+        device = self.canvas.target(key[1]) or {}
+        if display_kind(device, item) == "ipad":
+            options = [(label, tuple(size))
+                       for label, size in IPAD_PRESETS.items()]
+        else:
+            options = [(label, tuple(size)) for label, size in DESKTOP_PRESETS]
+        current = (int(item.get("res_w", 0)), int(item.get("res_h", 0)))
+        if current not in [size for _label, size in options]:
+            options.append(
+                (f"{current[0]} × {current[1]}  (current)", current))
+        return options
+
+    @staticmethod
+    def _refresh_presets(item):
+        values = [float(v) for v in REFRESH_PRESETS]
+        current = item.get("refresh_hz")
+        if current:
+            values.append(float(current))
+        return sorted(set(values))
+
+    def _fill_surface_menu(self, menu, key, item):
+        menu.delete(0, "end")
+        title, lines = self.canvas._detail_lines(key, item)
+        menu.add_command(label=title, state="disabled")
+        for line in lines[:2]:
+            menu.add_command(label="   " + line, state="disabled")
+        menu.add_separator()
+        if key[0] == "local":
+            self._fill_local_entries(menu, key, item)
+            return
+        current = (int(item.get("res_w", 0)), int(item.get("res_h", 0)))
+        # Repopulated, never rebuilt -- see App.__init__. delete(0, "end") is
+        # what releases the previous popup's Tcl command objects.
+        res = self._res_menu
+        res.delete(0, "end")
+        for label, (width, height) in self._resolution_presets(key, item):
+            res.add_command(
+                label=("✓ " if (width, height) == current else "    ") + label,
+                command=self._deferred(
+                    self._menu_set_resolution, key, width, height))
+        # Every label that costs a portal restart says so. portal_signature
+        # includes each display's x/y/w/h/res_w/res_h/rotation, so resolution,
+        # rotation and diagonal each taskkill and respawn the portal on the Tk
+        # thread across all three lanes -- about eight seconds of dead input.
+        # Refresh rate and renames are genuinely free; the signature's own
+        # docstring says so.
+        menu.add_cascade(label="Resolution   (restarts input ~8s)", menu=res)
+        hz_menu = self._hz_menu
+        hz_menu.delete(0, "end")
+        now_hz = item.get("refresh_hz")
+        for value in self._refresh_presets(item):
+            same = now_hz and abs(float(now_hz) - value) < 0.01
+            hz_menu.add_command(
+                label=("✓ " if same else "    ") + hz_label(value),
+                command=self._deferred(self._menu_set_refresh, key, value))
+        menu.add_cascade(label="Refresh rate   (free)", menu=hz_menu)
+        menu.add_separator()
+        menu.add_command(label="Rotate 90°   (restarts input ~8s)",
+                         command=self._deferred(self._menu_rotate, key))
+        menu.add_command(label="Diagonal…   (restarts input ~8s)",
+                         command=self._deferred(self._menu_diagonal, key))
+        menu.add_separator()
+        device = self.canvas.target(key[1]) or {}
+        menu.add_command(
+            label=f"Edit all screens on {device.get('name', key[1])}…",
+            command=self._deferred(self._menu_device_editor, key[1]))
+
+    def _fill_local_entries(self, menu, key, _item):
+        """A Windows monitor's menu. Honest about who owns what.
+
+        The user's own instruction: "Shouldn't we just accept the state of
+        windows, maybe just like a refresh now button tho. I think the only
+        thing that we'd want to change on the windows manually is the monitor
+        size." That is exactly the ownership boundary, so it is exactly what
+        this menu offers."""
+        item = self.canvas._lookup(key) or {}
+        menu.add_command(
+            label=f"Resolution   {item.get('w')} × {item.get('h')}"
+                  "   — Windows owns this",
+            state="disabled")
+        hz = hz_label(item.get("refresh_hz"))
+        menu.add_command(
+            label=(f"Refresh   {hz}   — Windows owns this" if hz
+                   else "Refresh   not reported by Windows"),
+            state="disabled")
+        menu.add_separator()
+        # BOTH facts, because both are true of this one entry. It is the only
+        # field Windows cannot supply -- AND it costs the same eight seconds as
+        # its managed-display twin: _menu_diagonal writes layout_w/layout_h for
+        # a local key, and portal_signature lists layout_w/layout_h per
+        # monitor, so the portal is taskkilled and respawned across all three
+        # lanes. The twin in _fill_surface_menu says so; this one used to not.
+        menu.add_command(
+            label="Diagonal…   (the one Windows cannot tell us — "
+                  "restarts input ~8s)",
+            command=self._deferred(self._menu_diagonal, key))
+        menu.add_command(label="Refresh now   (re-read Windows)",
+                         command=self._deferred(self._menu_refresh_monitors))
+        menu.add_command(label="Open Windows display settings…",
+                         command=self._deferred(self._menu_display_settings))
+
+    def _fill_desk_menu(self, menu):
+        """Right-click on empty canvas: the arrangement itself.
+
+        "Screen sizes..." lives here and nowhere else now. _hit_key returns only
+        the TOPMOST rectangle, so a device display parked over a monitor makes
+        that monitor unreachable by right-click; the all-surfaces table is the
+        escape hatch and must not die with the button that used to open it."""
+        menu.delete(0, "end")
+        menu.add_command(label="Arrangement", state="disabled")
+        menu.add_separator()
+        menu.add_command(label="Screen sizes…   (every surface at once)",
+                         command=self._deferred(self._screen_sizes_dialog))
+        devices = self.canvas.devices()
+        # Cleared unconditionally, cascaded only when there is something to
+        # cascade: the submenu is persistent now, so leaving last popup's
+        # devices in it would outlive the device that was removed.
+        sub = self._device_menu
+        sub.delete(0, "end")
+        if devices:
+            for device in devices:
+                sub.add_command(
+                    label=f"{device.get('name', device['id'])}…",
+                    command=self._deferred(
+                        self._menu_device_editor, device["id"]))
+            menu.add_cascade(label="Edit a device's screens", menu=sub)
+        menu.add_separator()
+        menu.add_command(label="Refresh Windows screens now",
+                         command=self._deferred(self._menu_refresh_monitors))
+        menu.add_command(label="Open Windows display settings…",
+                         command=self._deferred(self._menu_display_settings))
+
+    # ---- the write path -------------------------------------------------
+    # ONE sequence, no exceptions: re-resolve, set the field, recompute the
+    # rectangle from the diagonal, redraw, save ONCE.
+
+    def _ask_diagonal(self, key, item):
+        """Ask for the one number nobody but the user can supply.
+
+        NEVER defaulted and never silently assumed. physical_size clamps a
+        missing diagonal to max(1.0, ...), which collapses the rectangle to
+        MIN_LAYOUT_SIZE and moves every crossing band on that screen --
+        _normalize_display only sets diagonal_in when it is truthy and
+        new_device never writes it at all, so absent is a real case."""
+        title, _lines = self.canvas._detail_lines(key, item)
+        current = item.get("diagonal_in")
+        text = dark_prompt(
+            self.root, "Screen diagonal",
+            f"{title}\n\nDiagonal in inches, corner to corner. Every surface "
+            "is drawn to the same physical scale, so a 32\" really is about "
+            "twice the width of a 17\".",
+            default=(f"{float(current):g}" if current else ""))
+        if text is None or not str(text).strip():
+            return None
+        try:
+            return max(1.0, min(120.0, float(str(text).strip())))
+        except ValueError:
+            dark_alert(self.root, "Not a number",
+                       f"“{text}” is not a screen size in inches.")
+            return None
+
+    def _edit_display(self, key, mutate):
+        """Apply one complete change to one managed display, and save once.
+
+        The display dict is re-resolved HERE, at invoke time, and not captured
+        when the menu was built: adopt()'s own docstring warns that a stale
+        display dict "survives every redraw looking perfectly valid", and every
+        command is deferred, so an arrangement can have been switched between
+        the click and this call."""
+        item = self.canvas._lookup(key)
+        if item is None or key[0] != "target":
+            return False
+        if not item.get("diagonal_in"):
+            inches = self._ask_diagonal(key, item)
+            if inches is None:
+                return False
+            # The prompt ran a nested event loop. Re-resolve again.
+            item = self.canvas._lookup(key)
+            if item is None:
+                return False
+            item["diagonal_in"] = inches
+        mutate(item)
+        # ALWAYS recomputed, from the RAW resolution -- physical_size does the
+        # rotation swap itself, so pre-swapping it here would square the turn.
+        item["w"], item["h"] = physical_size(
+            float(item["diagonal_in"]), int(item["res_w"]), int(item["res_h"]),
+            int(item.get("rotation", 0)))
+        self.canvas.redraw()
+        self.canvas.save()
+        return True
+
+    def _menu_set_resolution(self, key, res_w, res_h):
+        def mutate(item):
+            item["res_w"], item["res_h"] = int(res_w), int(res_h)
+        # Re-selecting the resolution a screen is ALREADY set to writes the
+        # same numbers back: save() sees an identical portal_signature and
+        # restarts nothing. Announcing a reload that did not happen teaches the
+        # console cannot be trusted about the eight seconds it DOES cost.
+        before = portal_signature(self.canvas.config)
+        if self._edit_display(key, mutate):
+            if portal_signature(self.canvas.config) != before:
+                _emit("event", f"screen resolution set to {res_w}×{res_h} — "
+                               "portal reloading.")
+            else:
+                _emit("event", f"screen resolution already {res_w}×{res_h} — "
+                               "nothing changed.")
+
+    def _menu_rotate(self, key):
+        # rotate_display sets the rotation and swaps the rectangle; _edit_
+        # display then re-derives that same rectangle from the diagonal, so the
+        # two can never disagree about a screen's real size.
+        if self._edit_display(key, rotate_display):
+            _emit("event", "screen rotated — portal reloading.")
+
+    def _menu_set_refresh(self, key, hz):
+        """Refresh rate is the one edit that is genuinely free: portal_signature
+        does not include it, so save() writes the file and restarts nothing.
+
+        Guarded on key[0] exactly like _edit_display. Nothing reaches here with
+        a local key today -- _fill_local_entries offers no refresh entry, on
+        purpose, because Windows owns that number -- but a future "refresh now"
+        variant that did would stamp an app-invented refresh_hz onto a Windows
+        monitor row, which is precisely the invented number this menu exists to
+        have killed."""
+        item = self.canvas._lookup(key)
+        if item is None or key[0] != "target":
+            return
+        item["refresh_hz"] = float(hz)
+        self.canvas.redraw()
+        self.canvas.save()
+
+    def _menu_diagonal(self, key):
+        item = self.canvas._lookup(key)
+        if item is None:
+            return
+        inches = self._ask_diagonal(key, item)
+        if inches is None:
+            return
+        item = self.canvas._lookup(key)      # the prompt ran an event loop
+        if item is None:
+            return
+        # Re-typing the diagonal a screen already carries re-derives the same
+        # rectangle, leaves portal_signature identical and restarts nothing.
+        before = portal_signature(self.canvas.config)
+        item["diagonal_in"] = inches
+        if key[0] == "local":
+            # A local monitor's w/h ARE its pixels; its desk rectangle is
+            # layout_w/layout_h. Same derivation as "Screen sizes...".
+            item["layout_w"], item["layout_h"] = physical_size(
+                inches, item["w"], item["h"], 0)
+        else:
+            item["w"], item["h"] = physical_size(
+                inches, int(item["res_w"]), int(item["res_h"]),
+                int(item.get("rotation", 0)))
+        self.canvas.redraw()
+        self.canvas.save()
+        if portal_signature(self.canvas.config) != before:
+            _emit("event", f"screen diagonal set to {inches:g}\" — "
+                           "portal reloading.")
+        else:
+            _emit("event", f"screen diagonal already {inches:g}\" — "
+                           "nothing changed.")
+
+    def _menu_device_editor(self, device_id):
+        # Delegated, not duplicated. The Devices panel's own button already
+        # opens this editor with a device_id and rebuilds the rows afterwards;
+        # a second call site that did nine tenths of that is precisely how the
+        # deleted global button came to resolve to the first device.
+        self._edit_device_displays(device_id)
+
+    def _menu_refresh_monitors(self):
+        """Re-read Windows, MERGING rather than replacing.
+
+        Matched by monitor name. diagonal_in and the hand-placed layout
+        position survive for every monitor that is still attached -- a refresh
+        that reset diagonal_in would destroy the only field the user can supply,
+        which is the whole point of the merge."""
+        live = enum_monitors()
+        if not live:
+            dark_alert(self.root, "No monitors reported",
+                       "Windows returned no monitors. Nothing was changed.")
+            return
+        merged, report = merge_live_monitors(self.canvas.monitors, live)
+        # portal_signature serialises monitors as an ORDERED list, and this is
+        # the one place that adopts EnumDisplayMonitors' order wholesale. Sorted
+        # by name, the order is a function of WHICH monitors are attached and of
+        # nothing else, so the same panels enumerated in a different sequence
+        # cannot restart the portal behind a "nothing changed" report.
+        merged.sort(key=lambda row: str(row.get("name", "")))
+        summary = describe_monitor_refresh(report)
+        before = portal_signature(self.canvas.config)
+        # One list object, referenced from both places the canvas reads it.
+        self.canvas.config["monitors"] = merged
+        self.canvas.monitors = merged
+        # The button carries no cost label because most re-reads cost nothing.
+        # A real Windows change -- a resolution, a panel added or removed --
+        # moves the merged rectangles, and save() below taskkills and respawns
+        # the portal across all three lanes. So the OUTCOME says so, which is
+        # the honest place for a cost that is conditional.
+        if portal_signature(self.canvas.config) != before:
+            summary += " — portal reloading, input back in ~8s"
+        self.canvas.redraw()
+        self.canvas.save()
+        _emit("event", f"Windows screens re-read — {summary}.")
+        try:
+            self.status.set(f"Windows screens re-read — {summary}")
+        except tk.TclError:
+            pass
+
+    def _menu_display_settings(self):
+        try:
+            os.startfile("ms-settings:display")
+        except OSError:
+            dark_alert(self.root, "Could not open display settings",
+                       "Windows would not open the display settings page.")
 
     def _device_input_dialog(self, device_id):
         """Per-device input settings with real sliders. Everything here is

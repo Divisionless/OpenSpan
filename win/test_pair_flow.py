@@ -692,3 +692,12 @@ check("moving a screen reloads the portal", _canvas.reloads == 3)
 _canvas.config["devices"][0]["displays"][0]["name"] = "Renamed"
 _canvas.save()
 check("but a rename still does not", _canvas.reloads == 3)
+
+
+# ---- the verdict -----------------------------------------------------------
+# This tail is not decoration. Without it the file collected every failure into
+# `fails` and then fell off the end, exiting 0 -- so every check in it was
+# advisory and the runner could never see one fail. Same two lines as every
+# other test file in this directory.
+print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
+sys.exit(1 if fails else 0)

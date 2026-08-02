@@ -1592,3 +1592,63 @@ height cap is delivered entirely by `body`, which no longer expands.
 stacked row, and this column stacks 13 of them.
 
 Suite 352 → 399 checks, all green.
+
+### W2 — the screen owns its settings
+
+Right-click any screen on the arrangement canvas. Resolution, refresh, rotation
+and diagonal now live on the object they describe instead of behind three global
+buttons, two of which acted on the wrong object entirely: `canvas.rotate()` only
+ever touched `targets[0]["displays"][0]`, and "Configure Mac displays…" passed no
+`device_id`, so it resolved to the first device regardless of which one you meant.
+Both are deleted, not relocated.
+
+Nothing had to be invented to do it. `_hit_key` already resolved a pointer to a
+display, `_detail_lines` already formatted res/Hz/rotation/diagonal for the hover
+card, and `BtPanel._popup` was already a working, reentrancy-safe menu on the same
+window. The feature was one binding and one handler wide.
+
+**Windows monitors are read-only, and that is the honest design.** Doug: *"we just
+accept the state of windows, maybe just like a refresh now button tho. I think the
+only thing that we'd want to change on the windows manually is the monitor size."*
+Windows owns position, resolution, refresh and the primary flag — the app can
+query all of them, and letting a user hand-edit them only authors a lie the app
+then draws. Windows does NOT reliably know physical size; that is why "Screen
+sizes…" existed at all. So the local menu shows res and Hz as disabled info, makes
+only the diagonal editable, and adds **Refresh now**, which MERGES by monitor name
+rather than replacing — a refresh that reset `diagonal_in` would destroy the one
+field only he can supply.
+
+**The app had been asserting a number it did not know.** `_normalize_monitor`
+hard-defaulted `refresh_hz = 60` and nothing ever wrote it. Reading the real values
+through `EnumDisplaySettingsW`/`DEVMODEW`:
+
+    \.\DISPLAY5  ->  60 Hz
+    \.\DISPLAY1  -> 144 Hz      <- the app has been calling this 60
+    \.\DISPLAY4  ->  60 Hz
+
+Not a structural nit: DISPLAY1 is a 144 Hz panel and every surface in the app said
+otherwise. `refresh_hz` is not in `portal_signature`, so the correction restarts
+nothing.
+
+**What the adversarial pass caught after the suite was green.** The local
+"Diagonal…" entry was labelled `(the one Windows cannot tell us)` while its
+managed-display twin said `(restarts input ~8s)` — same handler, and a local
+diagonal edit writes `layout_w/h`, which IS in `portal_signature`. So the one
+entry with no cost warning was the one that killed input across three live lanes.
+It shipped green because the cost-label test inspected only the target menu.
+
+Also fixed from that pass: `merge_live_monitors` dropped `layout_w/h` for monitors
+with no diagonal, silently resetting a 900x506 rectangle to 1920x1080 while
+reporting "nothing changed"; `adopt()` left `_hover_item` stale and could TypeError
+inside a Tk callback; the reload message fired even when the signature was
+identical; and each right-click stranded two cascade Menu widgets forever.
+
+**`test_pair_flow.py` had no `sys.exit`.** 59 checks that could never fail the
+suite — so "all green" had never covered that file. Fixed; all 59 genuinely pass.
+
+Suite 399 -> 505 checks across 12 files.
+
+**Known, deliberately deferred:** `MacDisplayEditor` takes free-text `res_w`/`res_h`
+with no per-kind validation, so a desktop resolution can still be typed onto an
+iPad display through "Edit all screens…" — the exact hazard `_resolution_presets`
+prevents on the right-click path. Pre-existing; belongs to a later wave.
