@@ -165,6 +165,44 @@ DANGER = "#e06c68"
 SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
 BORDER = "#39435a"  # card edge for the in-frame modal
 
+# ---- vertical rhythm --------------------------------------------------------
+# Every vertical pad in the left column was chosen locally, one widget at a
+# time, over many sessions. Each choice was reasonable on its own; together they
+# are how a window ends up two monitors tall. These four are the only vertical
+# steps the column is allowed to spend.
+PAD_XS = 2
+PAD_SM = 4
+PAD_MD = 6
+PAD_LG = 12
+
+# Height budget for the whole window's content.
+#
+# NOTHING in this file used to set a window height. geometry() declared one at
+# import and minsize() permitted a window far SHORTER than the left column
+# actually needs -- so at the app's own default size "System control" and
+# "Bluetooth radio" packed silently off the bottom. There is no scrolling
+# anywhere by design, so there was no scrollbar, no clipping indicator and no
+# way to learn those panels existed. App.__init__ now measures the built content
+# and derives both the opening height and the minimum from it.
+#
+# This ceiling is a TRIPWIRE, not a clamp: content above it is reported, never
+# trimmed. Clamping would re-create the exact starvation described above.
+LAYOUT_MAX_CONTENT_H = 1600
+
+
+def window_height_plan(content_h, ceiling=LAYOUT_MAX_CONTENT_H):
+    """Turn a MEASURED content height into the window's geometry and minsize.
+
+    Returns (geometry_h, minsize_h, over_budget).
+
+    minsize_h is never clamped below content_h. That clamp is precisely the
+    silent packer-starvation this exists to close -- a minsize shorter than the
+    content lets the window be sized so the last panels have nowhere to go, and
+    Tk's packer drops them without a word.
+    """
+    content_h = max(1, int(content_h))
+    return content_h, content_h, content_h > ceiling
+
 
 # ---- themed dialogs ---------------------------------------------------------
 # The native tk messagebox renders in the OS (light) theme, which clashes badly
@@ -2554,6 +2592,10 @@ class MultiArrangeCanvas(tk.Canvas):
     def __init__(self, master, on_change=None, **kw):
         super().__init__(master, bg=PANEL, highlightthickness=0, **kw)
         self.on_change = on_change
+        # Re-entry guard for _fit_height. configure(height=) raises <Configure>,
+        # whose handler calls _fit_height again; without this the two chase each
+        # other. Set BEFORE adopt(), which fits on its way out.
+        self._fitting = False
         live = enum_monitors()
         raw = {}
         try:
@@ -2571,7 +2613,7 @@ class MultiArrangeCanvas(tk.Canvas):
         self.action = None
         self.drag_off = (0, 0)
         self._resize_anchor = None
-        self.bind("<Configure>", lambda _event: self.redraw())
+        self.bind("<Configure>", self._on_configure)
         self.bind("<ButtonPress-1>", self._press)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<ButtonRelease-1>", self._release)
@@ -2632,6 +2674,10 @@ class MultiArrangeCanvas(tk.Canvas):
         self.target_states = {device["id"]: known.get(device["id"], "off")
                               for device in self.targets}
         self.ipad_state = "off"  # compatibility for existing tests/callers
+        # A different arrangement is a different world aspect, and switching one
+        # in fires no <Configure> at all. Fit here or the canvas keeps the
+        # previous desk's height until something else happens to resize it.
+        self._fit_height()
 
     def target(self, target_id):
         return device_by_id(self.config, target_id)
@@ -2813,6 +2859,46 @@ class MultiArrangeCanvas(tk.Canvas):
         pad = max(180, int(max(max_x - min_x, max_y - min_y) * 0.12))
         self.wx0, self.wy0 = min_x - pad, min_y - pad
         self.wx1, self.wy1 = max_x + pad, max_y + pad
+
+    # The drawing is an aspect-fit of the desk, and at every width this window
+    # has ever had it is WIDTH-bound: the scale comes from width / world-width,
+    # and extra canvas height buys nothing but dead PANEL above and below the
+    # picture. This canvas was nonetheless the only expanding thing in the left
+    # column, so it collected 100% of the window's surplus height and could not
+    # use a pixel of it. _fit_height asks for exactly the height the drawing
+    # occupies, so the surplus never forms.
+    FIT_MIN_H = 240
+    FIT_MAX_H = 560
+
+    def _fit_height(self):
+        """Request the height that exactly fits the drawing at this width.
+
+        No 0.94 here. _scale already applies that inset to the DRAWING; taking
+        it a second time on the container would shrink the picture 6% while this
+        change claims to leave it pixel-identical.
+        """
+        if getattr(self, "_fitting", False):
+            return
+        if getattr(self, "tk", None) is None:
+            return  # config-only instance: adopt() is driven that way by tests
+        self._world_bounds()
+        avail = max(self.winfo_width(), 100)
+        height = round(avail * (self.wy1 - self.wy0) /
+                       max(1, self.wx1 - self.wx0))
+        height = max(self.FIT_MIN_H, min(self.FIT_MAX_H, height))
+        # 2px tolerance: rounding alone must not be able to start a
+        # configure -> <Configure> -> configure loop.
+        if abs(height - self.winfo_reqheight()) <= 2:
+            return
+        self._fitting = True
+        try:
+            self.configure(height=height)
+        finally:
+            self._fitting = False
+
+    def _on_configure(self, _event):
+        self._fit_height()
+        self.redraw()
 
     def _scale(self):
         self._world_bounds()
@@ -3093,10 +3179,18 @@ class MultiArrangeCanvas(tk.Canvas):
             self._snap_selected()
         self.action = None
         self._resize_anchor = None
+        # Dragging a screen moves the world bbox, so the aspect the canvas is
+        # sized for is now stale -- and a drag fires no <Configure>. Fit HERE
+        # and not in redraw(): _drag calls redraw() on every motion tick, and
+        # changing the height mid-drag changes `oy` in _scale, so c2w maps the
+        # cursor to a different world point and the rectangle jumps under it.
+        self._fit_height()
         self.redraw()
         self.save()
 
     def save(self):
+        # Every caller of save() has just changed the desk's shape.
+        self._fit_height()
         self.config["portals"] = compute_portals(self.config)
         self.config["links"] = compute_adjacencies(self.config)
         self._persist()
@@ -3403,7 +3497,13 @@ class BtPanel(tk.Frame):
                                                         pady=(4, 0))
 
         body = tk.Frame(self, bg=BG)
-        body.pack(fill="both", expand=True, padx=12, pady=6)
+        # expand=False on BOTH the body and the tree, so the height=8 declared
+        # just below is the height actually taken (189px measured). Expanding
+        # made that number decorative and let the tree eat the right column's
+        # whole surplus. 8 rows is more than the devices present, so nothing is
+        # hidden by capping it. Deliberately NOT dynamic per refresh -- a tree
+        # that resizes while a scan lands moves the row under the cursor.
+        body.pack(fill="both", expand=False, padx=12, pady=PAD_MD)
         self.tree = ttk.Treeview(body, columns=("name", "status", "type",
                                                 "radio", "addr"),
                                  show="headings", selectmode="browse",
@@ -3422,6 +3522,12 @@ class BtPanel(tk.Frame):
         self.tree.tag_configure("paired", foreground=FG)
         self.tree.tag_configure("available", foreground=MUTED)
         self.tree.tag_configure("blacklisted", foreground=DANGER)
+        # expand stays TRUE here, and only here. pack's expand is not
+        # axis-specific: with side="left" it is what gives the tree the leftover
+        # WIDTH beside the scrollbar. Measured with a 800px-wide column,
+        # expand=False opens a 216px hole between the tree and the scrollbar.
+        # The height cap is already fully delivered by body above, which no
+        # longer expands -- so this parcel is exactly reqheight either way.
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(body, command=self.tree.yview)
         sb.pack(side="right", fill="y")
@@ -4304,6 +4410,9 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(APP_LABEL)
+        # Provisional, so the window does not flash at a silly size while it is
+        # being built. BOTH heights are replaced at the end of __init__ with the
+        # measured content height -- see the layout-budget block down there.
         root.geometry("1120x930")   # multi-target canvas; console still collapsed
         root.minsize(940, 680)
         root.configure(bg=BG)
@@ -4392,7 +4501,9 @@ class App:
         head = tk.Frame(full, bg=BG)
         # flush to the very top (frameless) + extra height = a full title-bar
         # drag band, not a thin strip. Whole band is bound to _drag_* below.
-        head.pack(fill="x", padx=16, pady=(0, 4), ipady=7)
+        # ipady=7 stays a literal on purpose: it is the frameless window's drag
+        # band, deliberately oversized, and not part of the vertical rhythm.
+        head.pack(fill="x", padx=16, pady=(0, PAD_SM), ipady=7)
         self._cons_anchor = head   # the console packs before this when opened
         _t1 = tk.Label(head, text=APP_LABEL, bg=BG, fg=FG,
                        font=("Segoe UI Semibold", 18))
@@ -4445,17 +4556,22 @@ class App:
         self.status = tk.StringVar(value="Checking…")
         tk.Label(full, textvariable=self.status, bg=BG, fg=ACCENT,
                  font=("Consolas", 10), anchor="w").pack(
-            fill="x", padx=16, pady=(0, 6))
+            fill="x", padx=16, pady=(0, PAD_MD))
 
         # both panels side by side in one window (no tabs): iPad Bridge on
         # the left, Bluetooth & Headphones on the right, console far right
         main = tk.Frame(full, bg=BG)
-        main.pack(fill="both", expand=True, padx=10, pady=4)
+        main.pack(fill="both", expand=True, padx=10, pady=PAD_SM)
+        # main / bridge_col / bridge keep expand=True. They are the cavity, not
+        # the sponge: the surplus has to reach the designated spacer at the
+        # bottom of `bridge`, and taking expand off any of them would strand it
+        # in `full` instead and collapse the two-column split.
         bridge_col = tk.Frame(main, bg=BG)
         bridge_col.pack(side="left", fill="both", expand=True)
         tk.Label(bridge_col, text="Device Bridge", bg=BG, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(anchor="w",
-                                                      padx=16, pady=(0, 2))
+                                                      padx=16,
+                                                      pady=(0, PAD_XS))
         bridge = tk.Frame(bridge_col, bg=BG)
         bridge.pack(fill="both", expand=True)
         tk.Frame(main, bg="#2d3444", width=1).pack(side="left", fill="y",
@@ -4470,13 +4586,20 @@ class App:
         self.bt_panel.pack(fill="both", expand=True)
 
         # arrangement — always visible (Bridge tab)
+        #
+        # arr_wrap and the canvas inside it were the ONLY expanding chain in the
+        # left column, so 100% of the window's surplus height landed in a canvas
+        # whose aspect-fit drawing is width-bound and cannot grow into it. That
+        # is the mechanical reason this window was 2120px tall. Capping only the
+        # canvas would just move the void from PANEL-coloured to CARD-coloured;
+        # both flags come off together or the change delivers nothing.
         arr_wrap = tk.Frame(bridge, bg=CARD, bd=0)
-        arr_wrap.pack(fill="both", expand=True, padx=8, pady=6)
+        arr_wrap.pack(fill="both", expand=False, padx=8, pady=PAD_MD)
         tk.Label(arr_wrap, text="Drag any screen to match your desk. Sizes "
                                 "come from each screen's real diagonal — set "
                                 "them in “Screen sizes…”.",
                  bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(
-            anchor="w", padx=8, pady=(6, 0))
+            anchor="w", padx=8, pady=(PAD_MD, 0))
         self.canvas = MultiArrangeCanvas(
             arr_wrap, on_change=self._portal_changed, height=270)
 
@@ -4490,7 +4613,7 @@ class App:
         # window lands on whichever monitor Windows picks, which on this desk is
         # rarely the one being looked at.
         prow = tk.Frame(arr_wrap, bg=CARD)
-        prow.pack(fill="x", padx=8, pady=(6, 0))
+        prow.pack(fill="x", padx=8, pady=(PAD_MD, 0))
         tk.Label(prow, text="Arrangement:", bg=CARD, fg=MUTED).pack(side="left")
         self.profile_name = tk.StringVar(
             value=str(self.canvas.config.get("profile", "") or "Current"))
@@ -4505,10 +4628,13 @@ class App:
                    command=self._duplicate_profile).pack(side="left", padx=4)
         ttk.Button(prow, text="Delete", width=7,
                    command=self._delete_profile).pack(side="left")
-        self.canvas.pack(fill="both", expand=True, padx=8, pady=8)
+        # Vertical stack, so expand=False costs no width: fill="both" still
+        # gives the canvas the whole card width, and _fit_height sizes it to
+        # exactly the drawing it can actually render there.
+        self.canvas.pack(fill="both", expand=False, padx=8, pady=PAD_MD)
 
         row = tk.Frame(arr_wrap, bg=CARD)
-        row.pack(fill="x", padx=8, pady=(0, 8))
+        row.pack(fill="x", padx=8, pady=(0, PAD_MD))
         tk.Label(row, text="iPad:", bg=CARD, fg=MUTED).pack(side="left")
         self.model = tk.StringVar(value=list(IPAD_PRESETS)[0])
         cb = ttk.Combobox(row, textvariable=self.model, width=22,
@@ -4531,21 +4657,22 @@ class App:
         # paired-state, so unpairing via one left the other still showing the
         # device as paired.
         ctl = tk.Frame(bridge, bg=BG)
-        ctl.pack(fill="x", padx=16, pady=(2, 4))
+        ctl.pack(fill="x", padx=16, pady=(PAD_XS, PAD_SM))
         self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
-        self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=PAD_XS)
         self.portal_btn = ttk.Button(ctl, text="Start portal",
                                      command=self.toggle_portal)
-        self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=3)
+        self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=PAD_XS)
         ttk.Button(ctl, text="Edit keymap",
                    command=lambda: os.startfile(KEYMAP)).grid(
-            row=0, column=2, sticky="ew", padx=3, pady=3)
+            row=0, column=2, sticky="ew", padx=3, pady=PAD_XS)
         self.invert_scroll = tk.BooleanVar(
             value=bool(load_setting("scroll_invert", False)))
         ttk.Checkbutton(ctl, text="⇅  Invert scroll wheel",
                         variable=self.invert_scroll,
                         command=self._on_invert_scroll).grid(
-            row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(2, 3))
+            row=1, column=0, columnspan=3, sticky="w", padx=5,
+            pady=(PAD_XS, PAD_XS))
         self.cross_button = tk.BooleanVar(
             value=bool(self.canvas.config.get(
                 "cross_requires_side_button", False)))
@@ -4553,7 +4680,8 @@ class App:
             ctl, text="🖱  Hold a mouse side button to move between machines",
             variable=self.cross_button,
             command=self._on_cross_button).grid(
-            row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 3))
+            row=2, column=0, columnspan=3, sticky="w", padx=5,
+            pady=(0, PAD_XS))
         self.button_jumps = tk.BooleanVar(
             value=bool(self.canvas.config.get(
                 "side_button_jumps_nearest", False)))
@@ -4563,7 +4691,7 @@ class App:
             variable=self.button_jumps,
             command=self._on_button_jumps).grid(
             row=3, column=0, columnspan=3, sticky="w", padx=(26, 5),
-            pady=(0, 3))
+            pady=(0, PAD_XS))
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
@@ -4572,12 +4700,12 @@ class App:
         # the identical four verbs against its own radio, port and bonds.
         self._dev_frame = ttk.LabelFrame(
             bridge, text="Devices", padding=7)
-        self._dev_frame.pack(fill="x", padx=16, pady=(3, 2))
+        self._dev_frame.pack(fill="x", padx=16, pady=(PAD_XS, PAD_XS))
         self._dev_rows = {}
         self._dev_body = tk.Frame(self._dev_frame, bg=BG)
         self._dev_body.pack(fill="x")
         addrow = tk.Frame(self._dev_frame, bg=BG)
-        addrow.pack(fill="x", pady=(6, 0))
+        addrow.pack(fill="x", pady=(PAD_MD, 0))
         ttk.Button(addrow, text="＋  Add device",
                    command=self._add_device_dialog).pack(side="left")
         tk.Label(addrow,
@@ -4589,11 +4717,11 @@ class App:
 
         # ---- System control: every backend action, nothing hidden ----
         sysf = ttk.LabelFrame(bridge, text="System control", padding=8)
-        sysf.pack(fill="x", padx=16, pady=(6, 2))
+        sysf.pack(fill="x", padx=16, pady=(PAD_MD, PAD_XS))
         self.sys_status = tk.StringVar(value="…")
         tk.Label(sysf, textvariable=self.sys_status, bg=BG, fg=MUTED,
                  font=("Consolas", 8), anchor="w", justify="left").pack(
-            fill="x", pady=(0, 4))
+            fill="x", pady=(0, PAD_SM))
         sg = tk.Frame(sysf, bg=BG)
         sg.pack(fill="x")
         sysbtns = [("Stop VM", self.stop_vm),
@@ -4603,13 +4731,13 @@ class App:
                    ("⏻ Shut down everything", self.shutdown_all)]
         for i, (label, fn) in enumerate(sysbtns):
             ttk.Button(sg, text=label, command=fn).grid(
-                row=i // 3, column=i % 3, sticky="ew", padx=3, pady=3)
+                row=i // 3, column=i % 3, sticky="ew", padx=3, pady=PAD_XS)
         for c in range(3):
             sg.columnconfigure(c, weight=1)
 
         # ---- Radio ownership mode (switched via a clean reboot) ----
         mode = ttk.LabelFrame(bridge, text="Bluetooth radio", padding=8)
-        mode.pack(fill="x", padx=16, pady=(6, 2))
+        mode.pack(fill="x", padx=16, pady=(PAD_MD, PAD_XS))
         self.mode_lbl = tk.Label(mode, bg=BG, fg=FG, font=("Segoe UI", 10),
                                  anchor="w")
         self.mode_lbl.pack(fill="x")
@@ -4618,7 +4746,7 @@ class App:
                  text="Station = the app owns the radio (iPad bridge + "
                       "command station, near-bare-metal). Windows = native "
                       "Bluetooth + audio. Switching cleanly reboots the PC."
-                 ).pack(fill="x", pady=(2, 6))
+                 ).pack(fill="x", pady=(PAD_XS, PAD_MD))
         mrow = tk.Frame(mode, bg=BG)
         mrow.pack(fill="x")
         self.to_station = ttk.Button(
@@ -4631,9 +4759,18 @@ class App:
         self.to_windows.pack(side="left", expand=True, fill="x", padx=2)
         self._refresh_mode_buttons()
 
+        # THE designated spacer, and the only expanding child of `bridge`.
+        # Nothing is drawn in it. It exists so the window can still be dragged
+        # taller without any panel distorting to absorb the extra height, and so
+        # `bridge` never has zero expanding children -- a packer cavity with no
+        # expanding slave hands its surplus back up the tree, which is how the
+        # sponge moved around the last time this was tuned.
+        self._bridge_spacer = tk.Frame(bridge, bg=BG, height=0)
+        self._bridge_spacer.pack(fill="both", expand=True)
+
         tk.Label(full, text="open source · MIT · nothing phones home",
                  bg=BG, fg="#5b6172", font=("Segoe UI", 8)).pack(
-            side="bottom", pady=6)
+            side="bottom", pady=PAD_MD)
 
         # clipboard relay for the iPad shortcuts (CLIPBOARD_DESIGN.md);
         # fail-soft: without it everything else works, and Ctrl+Alt+V
@@ -4670,6 +4807,28 @@ class App:
         # Runtime tray creation is deliberately disabled. Its pure-ctypes
         # WNDPROC also access-violated during a live soak despite passing short
         # self-tests. Native taskbar minimize needs no Python Windows callback.
+        # ---- layout budget: the window's height follows MEASURED content ----
+        # Nothing in this file used to set a height. The 1120x930 at the top was
+        # a number chosen once; _set_win_width parses the height back out of
+        # geometry() and puts it straight back, so it never changed again. And
+        # minsize(940, 680) permitted a window far SHORTER than the left column
+        # actually needs -- at which size "System control" and "Bluetooth radio"
+        # simply do not get packed. There is no scrolling anywhere by design, so
+        # there is no scrollbar, no clipped edge, and no way to find out they
+        # exist. Deriving both numbers from the built content is what closes
+        # that. Width behaviour is untouched.
+        self.root.update_idletasks()      # let the packer place everything
+        self.canvas._fit_height()         # canvas now knows its real width
+        self.root.update_idletasks()      # ...and its height propagates upward
+        content_h = full.winfo_reqheight()
+        geom_h, min_h, over_budget = window_height_plan(content_h)
+        self._content_h = content_h
+        self.root.geometry(f"1120x{geom_h}")
+        self.root.minsize(940, min_h)
+        _emit("info", f"layout: content height {content_h}px, canvas "
+                      f"{self.canvas.winfo_reqheight()}px" +
+                      (f" — OVER the {LAYOUT_MAX_CONTENT_H}px budget"
+                       if over_budget else ""))
         # re-sync the window width to the console state when un-maximized (a
         # width change requested while zoomed is deferred, not lost)
         self.root.bind("<Configure>", self._on_configure)
@@ -4872,9 +5031,14 @@ class App:
             st.theme_use("clam")
         except tk.TclError:
             pass
+        # padding=(10, 3), not 8. Symmetric 8 spends the same generous pad
+        # vertically as horizontally, and this column stacks button ROWS:
+        # measured at 96 DPI with Segoe UI 10, "Restart keyboard" is 39px tall
+        # at padding=8 and 29px at padding=(10, 3) -- 10px back per stacked row,
+        # with the horizontal pad slightly widened so the labels do not tighten.
         st.configure("TButton", background=CARD, foreground=FG,
                      bordercolor=CARD, focuscolor=CARD, relief="flat",
-                     padding=8, font=("Segoe UI", 10))
+                     padding=(10, 3), font=("Segoe UI", 10))
         st.map("TButton", background=[("active", "#2d3444")])
         st.configure("Accent.TButton", background=ACCENT_DIM,
                      foreground="#eafff3", font=("Segoe UI Semibold", 10))
@@ -6189,7 +6353,7 @@ class App:
     def _build_device_row(self, device):
         device_id = device["id"]
         row = tk.Frame(self._dev_body, bg=BG)
-        row.pack(fill="x", pady=(2, 4))
+        row.pack(fill="x", pady=(PAD_XS, PAD_SM))
         head = tk.Frame(row, bg=BG)
         head.pack(fill="x")
         dot = tk.Label(head, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 11))
@@ -6218,7 +6382,7 @@ class App:
                    command=lambda d=device_id: self._remove_device(d)).pack(
             side="right", padx=(4, 0))
         verbs = tk.Frame(row, bg=BG)
-        verbs.pack(fill="x", pady=(3, 0))
+        verbs.pack(fill="x", pady=(PAD_XS, 0))
         buttons = {}
         for column, (key, text, command) in enumerate((
                 ("pair", "Pair",

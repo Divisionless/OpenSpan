@@ -10,9 +10,12 @@ The fix is notches. Two decisions shape what is checked here:
 
     * the ceiling stays at 3.0, not 2.0 — the top of the old range stays
       reachable, so no config that already exists becomes unrepresentable
-    * notches snap ON DRAG ONLY, never on load — `0.747` and `0.686` are real
-      tunings on his Mac and iPad. Opening the dialog to look at something
-      else, then pressing Apply, must not quietly move either one
+    * notches snap ON DRAG ONLY, never on load — when this was written, `0.747`
+      and `0.686` were the live values on his Mac and iPad. Opening the dialog
+      to look at something else, then pressing Apply, must not quietly move a
+      value like that. (Both have since gone to the 0.75 notch by his own
+      instruction, so the load path is now proven against a synthetic 0.747
+      rather than against the config file.)
 
 The second is the whole point of the split between `nearest_notch_index` (which
 only positions the handle) and `snap_sensitivity` (which changes the value).
@@ -199,11 +202,19 @@ if os.path.exists(cfg_path):
     with open(cfg_path, encoding="utf-8") as handle:
         cfg = json.load(handle)
     devices = {d.get("id"): d for d in cfg.get("devices", [])}
-    check("his tuned values are still in the file, unsnapped",
-          devices.get("mac", {}).get("sensitivity") == 0.747
-          and devices.get("ipad", {}).get("sensitivity") == 0.686,
-          f"mac={devices.get('mac', {}).get('sensitivity')}, "
-          f"ipad={devices.get('ipad', {}).get('sensitivity')}")
+    # Doug, 1 August, after the notches landed: "no custom numbers
+    # unreproducible by the settings themselves please." Every device then went
+    # to the 0.75 notch — 0.747 and 0.686 were artefacts of the old
+    # two-places-shown / three-places-stored slider, not choices anyone made.
+    # So the rule this file used to check (the load path must not touch a tuned
+    # value) is now checked against the WIDGET above, where a synthetic 0.747
+    # proves it directly. What the live file must satisfy is his rule: nothing
+    # stored that the dialog cannot produce.
+    off_notch = {k: v.get("sensitivity") for k, v in devices.items()
+                 if v.get("sensitivity") not in NOTCHES}
+    check("every stored sensitivity is a value the slider can actually reach",
+          not off_notch,
+          f"unreachable from the dialog: {off_notch}")
     check("every stored sensitivity is inside the slider's range",
           all(NOTCHES[0] <= float(d.get("sensitivity", 1.0)) <= NOTCHES[-1]
               for d in cfg.get("devices", [])),

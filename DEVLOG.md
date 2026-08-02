@@ -1546,3 +1546,49 @@ table — which was the point of closing the gap.
 
 The iPad moved 0.686 → 0.75 (+9%), the largest single change here, so that is
 the one to watch for feel.
+
+### W1 — the window was two monitors tall because of two `expand=True` flags
+
+A five-pass read-only survey plus four adversarially-attacked design proposals
+converged on one mechanical cause. `arr_wrap` and the arrangement canvas inside
+it were the ONLY expanding chain in the left column, so 100% of the window's
+surplus height landed in a canvas whose aspect-fit drawing is width-bound and
+cannot grow into it. The Bluetooth Treeview had the same disease on the right.
+Measured on the machine: the live window was **1921 x 2120** at 96 DPI (1.00x),
+spanning two monitors.
+
+Both flags come off together — capping only the canvas moves the void from
+PANEL-coloured to CARD-coloured and delivers nothing.
+
+`MultiArrangeCanvas._fit_height()` now requests exactly the height the drawing
+occupies at the current width. **No 0.94 factor**: `_scale` already applies that
+inset to the drawing, and taking it again on the container would shrink the
+picture 6% while the change claims to leave it pixel-identical. That mistake was
+in the plan and was caught before it shipped.
+
+It is hooked to `<Configure>`, `adopt()`, `_release()` and `save()` — the world
+aspect changes on a DRAG and on an arrangement switch, and **neither fires
+`<Configure>`**, so a Configure-only hook goes stale on the app's primary
+gesture. It is deliberately NOT hooked to `redraw()`: `_drag` calls that every
+motion tick, and changing height mid-drag changes `oy` in `_scale`, so `c2w`
+maps the cursor to a different world point and the rectangle jumps under it.
+
+**The correctness fix hiding inside the cosmetic one.** Nothing in this file ever
+set a window height — `geometry()` declared one at import and `_set_win_width`
+parses it back out and puts it straight back. Meanwhile `minsize(940, 680)`
+permitted a window far shorter than the left column needs, at which size
+"System control" and "Bluetooth radio" simply do not get packed. There is no
+scrolling anywhere by design, so there was no scrollbar, no clipped edge and no
+way to learn those panels existed. `App.__init__` now measures the built content
+and derives both the opening height and the minimum from it, and
+`test_layout_budget.py` asserts `minsize >= content` so the mode cannot return.
+
+One instruction in the plan was wrong and was overruled during implementation:
+BtPanel's Treeview keeps `expand=True`. With `side="left"`, `expand` governs the
+leftover WIDTH beside the scrollbar — setting it False opens a 216px hole. The
+height cap is delivered entirely by `body`, which no longer expands.
+
+`TButton padding=8` → `(10, 3)`: measured 39px → 29px per button, 10px back per
+stacked row, and this column stacks 13 of them.
+
+Suite 352 → 399 checks, all green.

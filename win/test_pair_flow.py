@@ -640,6 +640,14 @@ class _FakeCanvas:
     def _persist(self):
         pass
 
+    def _fit_height(self):
+        """Same reason as _persist: this fake borrows the real save() and has to
+        stub whatever save() reaches for. save() re-fits the canvas height
+        because every one of its callers has just changed the shape of the desk
+        -- adding a device, deleting one, rotating a screen -- and none of those
+        fire a <Configure>. There is no widget here, so there is nothing to
+        fit; what is under test on this object is the portal-reload signature."""
+
 
 def _screen(ident, x, y):
     return {"id": ident, "name": ident, "x": x, "y": y, "w": 1600, "h": 900,
