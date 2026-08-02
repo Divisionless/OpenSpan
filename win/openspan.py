@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from tkinter import ttk
 
@@ -179,6 +180,310 @@ BORDER = "#39435a"  # card edge for the in-frame modal
 PRESS = "#3d4860"         # TButton        : CARD -> #2d3444 hover -> this
 PRESS_ACCENT = "#35ad70"  # Accent.TButton : #1f6f43 -> #2a8f5c hover -> this
 PRESS_DANGER = "#8b4043"  # Danger.TButton : #53292a -> #6e3335 hover -> this
+PRESS_WARN = "#fbe09b"    # Warn.TButton   : #f5c451 -> #f8d276 hover -> this
+
+# ---- suppressed register: a global CAUSE vs a local STATE -------------------
+# "portal off" and "paired but not connected" were rendered in the SAME amber,
+# in the device cards and in the indicator row alike -- the distinction was
+# never drawn anywhere in this file. They are not the same kind of fact. A
+# stopped portal is a GLOBAL CAUSE: one process is down and every device is
+# consequently idle. "Paired, not connected" is a LOCAL STATE of one lane. In
+# full-strength amber, three cards shouted about a single stopped process while
+# the one control that fixes it looked like every other button in the column.
+#
+# So the register splits. While the portal is down, nothing in the device area
+# uses a full-strength alarm colour -- everything drops to these two suppressed
+# tones -- and the only full-strength amber left in the window is the Start
+# portal button itself. One alarm, at the cause.
+#
+# Both stay CHROMATIC on purpose. Rendering a suppressed device in MUTED
+# (#8b93a7, a blue-grey) would read as "dead", and a bonded, connected device
+# with the portal stopped is not dead: it is waiting for one button.
+ACCENT_SUPPRESSED = "#6f9e83"  # green, drained -- connected, portal not running
+WARN_SUPPRESSED = "#a8925f"    # amber, drained -- paired/idle, portal not running
+
+
+def suppressed(colour, portal_on):
+    """THE register rule as ONE function: while the portal is down, a
+    full-strength alarm colour becomes its drained twin.
+
+    Every writer of a device-area colour goes through here, or through
+    device_state_colour which is itself written in terms of it. That matters
+    because the register first shipped as a HABIT applied at each call site,
+    and two call sites missed it -- the arrangement canvas kept a private
+    fill/outline table and painted full amber on the largest element in the
+    window, and the indicator row's broadcast token kept a raw `fg=WARN`. A
+    habit at N sites is not a rule; a function is.
+
+    Anything that is not an alarm colour -- MUTED, DANGER, PORTAL -- passes
+    through unchanged. DANGER in particular is a real FAULT rather than a
+    consequence of the stopped portal, and outranks this rule exactly as it
+    outranks device_state_colour.
+    """
+    if portal_on:
+        return colour
+    return {ACCENT: ACCENT_SUPPRESSED, WARN: WARN_SUPPRESSED}.get(colour, colour)
+
+
+# The one suffix that says "…and the reason is global". Kept as a constant
+# because the indicator row strips it back off: that row already carries its own
+# `portal ● ON / ○ off` token, so repeating the cause in the neighbouring token
+# is noise -- there the colour alone carries the register.
+PORTAL_OFF_SUFFIX = " — portal off"
+
+
+def device_state_colour(portal_on, connected, paired):
+    """(colour, text) for ONE device's status dot. The whole truth table.
+
+        portal ON  + connected              -> ACCENT             "connected"
+        portal ON  + paired, not connected  -> WARN               "paired"
+        portal OFF + connected              -> ACCENT_SUPPRESSED  "connected — …"
+        portal OFF + paired, not connected  -> WARN_SUPPRESSED    "paired — …"
+        not paired                          -> MUTED              "not paired"
+
+    A pure function of three booleans, deliberately: this is the one claim in
+    the file that has to be identical in the device cards, in the arrangement
+    canvas and in the indicator row, and a truth table that cannot be evaluated
+    without building a window is a truth table nobody checks.
+
+    It does NOT cover the two RADIO faults (missing dongle, no radio assigned).
+    Those outrank every row here because in both the device's state is
+    unknowable rather than merely idle -- see _apply_device_rows.
+    """
+    if connected:
+        return (suppressed(ACCENT, portal_on),
+                "connected" + ("" if portal_on else PORTAL_OFF_SUFFIX))
+    if paired:
+        return (suppressed(WARN, portal_on),
+                "paired" + ("" if portal_on else PORTAL_OFF_SUFFIX))
+    return (MUTED, "not paired")
+
+
+def _dim(colour, factor):
+    """Scale a #rrggbb toward black.
+
+    The canvas box fills are their own outline at a fixed fraction --
+    IPAD_FILL is IPAD_LINE at ~0.50, IPAD_IDLE_FILL is IPAD_IDLE_LINE at ~0.27
+    -- so the suppressed boxes are DERIVED from ACCENT_SUPPRESSED /
+    WARN_SUPPRESSED by the same ratios rather than eyeballed a second time.
+    Two hand-picked palettes for one truth table is how the canvas came to
+    disagree with the card below it.
+    """
+    return "#" + "".join(
+        f"{max(0, min(255, int(int(colour[i:i + 2], 16) * factor))):02x}"
+        for i in (1, 3, 5))
+
+
+# ---- the same truth table, at the size of the arrangement canvas ------------
+# The canvas rectangle for a device is the card's status dot at 400x300px. It
+# used to fold portal_on INTO "live" before the canvas ever saw it -- the caller
+# passed `live and portal_on` -- so the canvas could not tell "portal off" from
+# "paired but not connected" and rendered BOTH in full-strength WARN, on the
+# largest element in the window, directly above a card that said the opposite.
+#
+# So the canvas does not decide any more. Its state token is looked up FROM the
+# colour device_state_colour returns, and its outline IS that colour
+# (IPAD_LINE == ACCENT and IPAD_IDLE_LINE == WARN, exactly). There is one truth
+# table and the canvas is a rendering of it.
+TARGET_STATE_BY_COLOUR = {
+    ACCENT: "live",
+    WARN: "idle",
+    ACCENT_SUPPRESSED: "live-suppressed",
+    WARN_SUPPRESSED: "idle-suppressed",
+    MUTED: "off",
+}
+TARGET_BOX_COLOURS = {
+    # state             (fill, outline, label)
+    "live": (IPAD_FILL, IPAD_LINE, "#d6ffe9"),
+    "idle": (IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"),
+    "live-suppressed": (_dim(ACCENT_SUPPRESSED, 0.50), ACCENT_SUPPRESSED,
+                        _dim("#d6ffe9", 0.72)),
+    "idle-suppressed": (_dim(WARN_SUPPRESSED, 0.27), WARN_SUPPRESSED,
+                        _dim("#ffe9b0", 0.72)),
+    "off": (IPAD_OFF_FILL, IPAD_OFF_LINE, MUTED),
+}
+
+
+def target_state_name(portal_on, connected, paired):
+    """The arrangement canvas's state token for ONE device.
+
+    Derived from device_state_colour rather than restated, so the box and the
+    dot cannot disagree: a fifth row in that truth table is a KeyError here at
+    the moment it is added, not a colour that quietly diverges.
+    """
+    return TARGET_STATE_BY_COLOUR[
+        device_state_colour(portal_on, connected, paired)[0]]
+
+
+def broadcast_token(adv_state, adv_error, portal_on):
+    """(text, colour) for the indicator row's broadcast token while the daemon
+    is NOT confirmed advertising -- or None when it has nothing to say.
+
+    Pure, and out here beside device_state_colour, for the same reason: this
+    token was the last raw full-strength `fg=WARN` in the file, and a claim
+    buried in a 250-line _apply_poll is a claim no test can reach without
+    building the whole window.
+
+    A transitional state is a consequence of the portal like every other idle
+    thing in the window, so it takes the suppressed register. An advertising
+    ERROR is a fault of its own and stays DANGER.
+    """
+    if adv_state in ("starting", "stopping"):
+        return f"broadcast {adv_state}...", suppressed(WARN, portal_on)
+    if adv_error:
+        return "broadcast error", DANGER
+    return None
+
+
+# ---- the device card, declared once -----------------------------------------
+# _build_device_row writes this dict and _apply_device_rows indexes it, three
+# thousand lines apart. When they drift the failure is SILENT: _poll marshals
+# through ui(), _drain_ui swallows every exception, so a KeyError aborts
+# _apply_poll mid-function and the status dots, the readiness banner and the
+# headphones line simply freeze with nothing in the console. Both sides are
+# driven off these two constants so they cannot drift.
+DEVICE_ROW_KEYS = ("dot", "name", "radio", "buttons")
+
+# (key, resting label, in-flight label). The four CONNECTION verbs -- never
+# collapsed into one relabelling button: two of them are live at once in both
+# the paired-idle and the live state, so there is no single correct verb, and a
+# button that re-aims under the cursor every three seconds with Unpair in the
+# rotation is a trap rather than a saving.
+DEVICE_VERB_SPEC = (
+    ("pair", "Pair", "Pairing…"),
+    ("connect", "Connect", "Connecting…"),
+    ("disconnect", "Disconnect", "Disconnecting…"),
+    ("unpair", "Unpair", "Unpairing…"),
+)
+DEVICE_VERBS = tuple(key for key, _label, _busy in DEVICE_VERB_SPEC)
+
+
+def _require_verb_coverage(mapping, what):
+    """Prove a verb-keyed table covers exactly DEVICE_VERBS. Returns it.
+
+    Two tables in this file are keyed by verb and then indexed by the
+    DEVICE_VERB_SPEC loop variable -- the gate below and the card's command
+    table. A fifth entry in the spec with no fifth entry in one of them is a
+    KeyError raised INSIDE _apply_device_rows, and _drain_ui swallows every
+    exception: the status dots, the readiness banner and the headphones line
+    simply freeze with nothing in the console and no traceback anywhere.
+
+    So both tables are module-level and checked HERE, at import. A gap is a
+    startup error that names the missing verb, in the file that declared it,
+    before any window exists to freeze.
+    """
+    missing = [key for key in DEVICE_VERBS if key not in mapping]
+    extra = [key for key in mapping if key not in DEVICE_VERBS]
+    if missing or extra:
+        raise KeyError(
+            f"{what} does not cover DEVICE_VERBS: missing {missing}, "
+            f"unexpected {extra}")
+    return mapping
+
+
+# Which App method each verb clicks through to, by NAME so the table can sit
+# beside the spec instead of three thousand lines away inside _build_device_row.
+DEVICE_VERB_HANDLERS = _require_verb_coverage({
+    "pair": "_pair_device",
+    "connect": "_connect_device",
+    "disconnect": "_disconnect_device",
+    "unpair": "_unpair_device",
+}, "DEVICE_VERB_HANDLERS")
+
+# Which verbs are OFFERED, as pure predicates over one device's facts. Out here
+# rather than inline in _apply_device_rows so the coverage check above runs at
+# import; the facts themselves are still gathered per device, per tick.
+#
+#   usable  the device has a radio and that radio is actually present
+#   vm      the VM answers (self._vm_reachable)
+#   up      this device's own HID daemon answered its status probe
+#   busy    inflight or broadcasting
+DEVICE_VERB_GATES = _require_verb_coverage({
+    # NOT gated on `up`: pairing is what brings the lane into existence, so
+    # requiring its daemon first is a deadlock.
+    "pair": lambda f: (f["usable"] and f["vm"] and not f["busy"]
+                       and not f["live"]),
+    "connect": lambda f: (f["usable"] and f["up"] and not f["busy"]
+                          and f["paired"] and not f["live"]),
+    # Disconnect doubles as CANCEL for an in-flight attempt.
+    "disconnect": lambda f: f["live"] or f["busy"],
+    "unpair": lambda f: (f["usable"] and f["up"] and not f["busy"]
+                         and f["paired"]),
+}, "DEVICE_VERB_GATES")
+
+
+# ---- pending: the OTHER half of "a button must react" -----------------------
+# The pressed state above covers the instant of the click. This covers the wait
+# after it: 26 actions in this file run on a worker thread and take seconds, and
+# until now exactly two of them (the VM button) said so, ad-hoc, by writing
+# config(text="Starting VM..."). Everything else looked identical to a click
+# that had missed.
+#
+# The parked label lives in a module-level registry keyed by the widget's Tk
+# path rather than on the widget, because every OTHER writer of that button's
+# text has to be able to ask "is this button mid-flight?" without holding a
+# reference to whoever started the work -- _apply_poll rewrites the VM button's
+# label on every 3-second tick, and would otherwise paint straight over the wait.
+_BUSY_IDLE = {}   # Tk widget path -> the label to restore when the work ends
+
+
+def paint_button_busy(button, label):
+    """The busy LOOK, and nothing else: present participle, disabled.
+
+    Separate from the parking below because the four per-device verbs are
+    destroyed and rebuilt by _rebuild_device_rows and re-derived from
+    _dev_state on every tick. Parking a label for a widget that will not
+    survive the wait is how a rebuilt button inherits a stale "Pairing…".
+    """
+    button.config(text=label)
+    button.state(["disabled"])
+
+
+def set_button_busy(button, label):
+    """Park the resting label, then paint the busy one. UI THREAD ONLY --
+    App.busy() is the entry point that is safe from a worker."""
+    key = str(button)
+    if key not in _BUSY_IDLE:
+        _BUSY_IDLE[key] = button.cget("text")
+    paint_button_busy(button, label)
+
+
+def clear_button_busy(button):
+    """Restore the parked label and re-enable. Idempotent.
+
+    Both halves are conditional on this helper having actually PARKED
+    something. The re-enable used to be unconditional, so calling it on a
+    button nothing had parked -- a doubled `done()` out of two nested
+    finallys, or a device verb the gate deliberately holds disabled -- silently
+    handed that button back to the user. A helper that restores state it never
+    took is not idempotent, it is a second writer.
+    """
+    text = _BUSY_IDLE.pop(str(button), None)
+    if text is None:
+        return
+    button.config(text=text)
+    button.state(["!disabled"])
+
+
+def button_is_busy(button):
+    """True while a resting label is parked for this button."""
+    return str(button) in _BUSY_IDLE
+
+
+def rebase_button_busy(button, label):
+    """Change what a busy button will be restored TO, without disturbing the
+    busy label it is showing now. Returns False when it is not busy, which is
+    the caller's cue to write the label directly.
+
+    This exists because a background job can learn a better resting label WHILE
+    the button is waiting -- "Repair radios" becomes "Repair 2 radios" halfway
+    through a repair -- and the alternative is either clobbering the busy label
+    or restoring a stale one.
+    """
+    if str(button) in _BUSY_IDLE:
+        _BUSY_IDLE[str(button)] = label
+        return True
+    return False
 
 # One look for every popup menu in the app. disabledforeground is not decoration
 # here: a menu's title line and its read-only Windows facts are disabled ENTRIES,
@@ -2866,16 +3171,30 @@ class MultiArrangeCanvas(tk.Canvas):
     # iPad geometries are now offered on the right-click menu OF the screen
     # being pointed at, which is the same feature aimed at the right rectangle.
 
-    def set_target_state(self, target_id, live, paired):
-        state = "live" if live else ("idle" if paired else "off")
+    def set_target_state(self, target_id, live, paired, portal_on=True):
+        """This device's box colour, from the SAME truth table as its card.
+
+        `live` is CONNECTED, not connected-and-routing. The caller used to
+        collapse the portal into it -- `set_target_state(id, live and portal_on,
+        paired)` -- which threw away the distinction the whole suppressed
+        register exists to draw: with the portal down, a connected device and a
+        merely-paired one both arrived here as `live=False, paired=True` and
+        both came out full-strength amber, on the largest element in the window
+        and directly contradicting the card underneath.
+
+        portal_on defaults True so the three-argument form still means what it
+        always meant (live -> green, paired -> amber, else grey) for any caller
+        that has no portal opinion to offer.
+        """
+        state = target_state_name(portal_on, live, paired)
         if self.target_states.get(target_id) != state:
             self.target_states[target_id] = state
             if target_id == "ipad":
                 self.ipad_state = state
             self.redraw()
 
-    def set_ipad_state(self, live, paired):
-        self.set_target_state("ipad", live, paired)
+    def set_ipad_state(self, live, paired, portal_on=True):
+        self.set_target_state("ipad", live, paired, portal_on)
 
     # rotate() is GONE for the same reason as set_ipad_size(): it turned
     # targets[0]["displays"][0] and nothing else, so the global "Rotate" button
@@ -3070,16 +3389,23 @@ class MultiArrangeCanvas(tk.Canvas):
             (y - oy) / scale + self.wy0)
 
     def _colors(self, key):
+        """(fill, outline, label) for one rectangle.
+
+        No second truth table: the state token was derived from
+        device_state_colour on the way in, and TARGET_BOX_COLOURS is the only
+        place a box colour is chosen. The outline IS the colour that device's
+        dot wears on its card, so the canvas and the card cannot disagree in
+        any state.
+        """
         if key[0] == "local":
             return MON_FILL, MON_LINE, "#c9d4ec"
         state = self.target_states.get(key[1], "off")
-        if state == "live":
-            return IPAD_FILL, IPAD_LINE, "#d6ffe9"
-        if state == "idle":
-            return IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"
+        box = TARGET_BOX_COLOURS.get(state)
+        if box is not None and state != "off":
+            return box
         if key[1] == "mac":
             return "#2b2940", "#756bb1", "#c8c1ef"
-        return IPAD_OFF_FILL, IPAD_OFF_LINE, MUTED
+        return TARGET_BOX_COLOURS["off"]
 
     def redraw(self):
         self.delete("all")
@@ -3737,8 +4063,11 @@ class BtPanel(tk.Frame):
             side="left", padx=6)
         ttk.Checkbutton(bar, text="Show blacklisted", variable=self.show_blk,
                         command=self.refresh).pack(side="left", padx=8)
-        ttk.Button(bar, text="⟳ Restart audio",
-                   command=self._restart_all).pack(side="right")
+        # kept by name: restart_everything paints the wait on whichever button
+        # was actually pressed, and this is the second of the two
+        self.btn_restart_audio = ttk.Button(bar, text="⟳ Restart audio",
+                                            command=self._restart_all)
+        self.btn_restart_audio.pack(side="right")
 
         self.out = tk.Text(self, bg="#0e1015", fg="#b7c0d4", height=5, bd=0,
                            font=("Consolas", 9), wrap="word",
@@ -3752,11 +4081,14 @@ class BtPanel(tk.Frame):
     def _radio_usb_apply(self, text, lost):
         def apply():
             self.radio_usb.set(text)
-            if lost:
-                self.reclaim_btn.config(
-                    text=f"Repair {lost} radio" + ("s" if lost != 1 else ""))
-            else:
-                self.reclaim_btn.config(text="Repair radios")
+            want = (f"Repair {lost} radio" + ("s" if lost != 1 else "")
+                    if lost else "Repair radios")
+            # A repair in flight owns this button's label. Writing the new
+            # count STRAIGHT onto it would clobber "Repairing radios…" from
+            # inside the very job that is doing the repairing; parking it
+            # instead means the button comes back with the fresh count.
+            if not rebase_button_busy(self.reclaim_btn, want):
+                self.reclaim_btn.config(text=want)
         if self.app:
             self.app.ui(apply)      # workers never touch Tk, not even after()
 
@@ -3792,7 +4124,11 @@ class BtPanel(tk.Frame):
 
     def _reclaim_radios(self):
         """Hand every radio the VM has lost back to it, and say what happened."""
-        self.reclaim_btn.config(state="disabled")
+        # Was a bare state="disabled": the button went flat and stayed flat for
+        # however long the repair took, with nothing to say the app was working
+        # rather than that the button had simply gone dead.
+        done = (self.app.busy(self.reclaim_btn, "Repairing radios…")
+                if self.app else None)
 
         def work():
             try:
@@ -3848,9 +4184,8 @@ class BtPanel(tk.Frame):
                     if self.app:
                         self.app.ui(lambda: self.after(6000, self.refresh))
             finally:
-                if self.app:
-                    self.app.ui(
-                        lambda: self.reclaim_btn.config(state="normal"))
+                if done:
+                    done()
         threading.Thread(target=work, daemon=True).start()
 
     def _log(self, msg):
@@ -4182,7 +4517,8 @@ class BtPanel(tk.Frame):
             return
         self._log("restarting the audio pipeline (keyboard untouched)…")
         if self.app:
-            self.app.restart_everything(log=self._log)
+            self.app.restart_everything(log=self._log,
+                                        button=self.btn_restart_audio)
 
     def refresh(self, quiet=False):
         if self._refreshing:
@@ -4617,6 +4953,11 @@ class App:
         # ui() queue + its UI-thread pump MUST exist before any worker thread
         # can be spawned (console sink, BtPanel refresh, boot thread, _tick)
         self._uiq = queue.Queue()
+        # Which thread IS the Tk thread. busy() and the row repaints are called
+        # from both sides -- a click handler is already on it, a worker never is
+        # -- and queueing a repaint that could just happen now costs up to a
+        # 50ms _drain_ui tick on the one path the user is watching.
+        self._ui_thread = threading.get_ident()
         self._closing = False
         self._auto_conn_busy = False   # one auto-reconnect worker at a time
         self._auto_conn_last = 0.0     # last firing (cooldown anchor)
@@ -4811,6 +5152,14 @@ class App:
         self._res_menu = tk.Menu(self._surface_menu, tearoff=0, **MENU_STYLE)
         self._hz_menu = tk.Menu(self._surface_menu, tearoff=0, **MENU_STYLE)
         self._device_menu = tk.Menu(self._desk_menu, tearoff=0, **MENU_STYLE)
+        # The device CARDS' menu, and it is mastered on ROOT for a reason that
+        # is not stylistic: _rebuild_device_rows destroys and recreates every
+        # card frame, and it is reached from _apply_device_rows on the 3-second
+        # poll tick -- which can fire inside tk_popup's own nested event loop.
+        # A menu whose master is destroyed underneath a posted menu is a crash,
+        # not a cosmetic glitch. Built once and kept, like the two above.
+        self._card_menu = tk.Menu(self.root, tearoff=0,
+                                  font=("Segoe UI", 10), **MENU_STYLE)
 
         # ---- arrangements -------------------------------------------------
         # A screen's resolution really does change -- the managed Mac's
@@ -4937,9 +5286,13 @@ class App:
                    ("Restart keyboard", self.restart_keyboard),
                    ("Restart audio", self.restart_audio_btn),
                    ("⏻ Shut down everything", self.shutdown_all)]
+        # Kept by label, not built anonymously: every one of these spawns a
+        # worker that takes seconds, and busy() needs the widget to say so on.
+        self._sysbtn = {}
         for i, (label, fn) in enumerate(sysbtns):
-            ttk.Button(sg, text=label, command=fn).grid(
-                row=i // 3, column=i % 3, sticky="ew", padx=3, pady=PAD_XS)
+            _b = ttk.Button(sg, text=label, command=fn)
+            _b.grid(row=i // 3, column=i % 3, sticky="ew", padx=3, pady=PAD_XS)
+            self._sysbtn[label] = _b
         for c in range(3):
             sg.columnconfigure(c, weight=1)
 
@@ -5270,6 +5623,20 @@ class App:
                      foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
         st.map("Danger.TButton",
                background=[("pressed", PRESS_DANGER), ("active", "#6e3335")])
+        # THE ALARM, and the only place full-strength amber is allowed while the
+        # portal is down. A stopped portal is the CAUSE of every idle device in
+        # this window, so the alarm sits on the control that fixes it and the
+        # device area drops to ACCENT_SUPPRESSED / WARN_SUPPRESSED. Foreground is
+        # near-black because #dfe4ee on #f5c451 is unreadable.
+        # Same state order as every other button map here: disabled first (a
+        # disabled button must never look pressed), then pressed, then hover --
+        # ttk takes the FIRST match and a held button is pressed AND active.
+        st.configure("Warn.TButton", background=WARN, foreground="#2a2205",
+                     font=("Segoe UI Semibold", 10))
+        st.map("Warn.TButton",
+               foreground=[("disabled", "#5b6172")],
+               background=[("disabled", PANEL), ("pressed", PRESS_WARN),
+                           ("active", "#f8d276")])
         # sliders (compact mode's volume/balance)
         st.configure("Horizontal.TScale", background=BG, troughcolor=CARD,
                      bordercolor=CARD, lightcolor=ACCENT_DIM,
@@ -5622,6 +5989,49 @@ class App:
         the UI thread drains every 50ms; queue.put is unconditionally safe."""
         self._uiq.put(fn)
 
+    def _on_ui(self, fn):
+        """Run fn on the Tk thread -- NOW if we are already on it, queued if
+        not. Never lets a worker touch Tk directly: a background after()
+        racing the UI thread hard-crashes the interpreter, and a reentrant Tk
+        call from a foreign context is the ucrtbase 0xC0000409 fail-fast this
+        codebase has hit before."""
+        if threading.get_ident() == getattr(self, "_ui_thread", None):
+            fn()
+        else:
+            self.ui(fn)
+
+    def busy(self, button, label):
+        """Say, ON THE BUTTON, that its work is in flight. Returns the restore.
+
+        Doug: *"when i click a button i need visual indication it has been
+        clicked on the button itself. it needs to react in some way, even in a
+        pending state while the action runs."*
+
+        Usage is deliberately one line at each end, because the actions this
+        wraps all have a failure path and a success path and only a `finally`
+        catches both:
+
+            done = self.busy(self.some_btn, "Restarting…")
+            def work():
+                try:
+                    ...
+                finally:
+                    done()
+
+        Safe from any thread at BOTH ends -- the restore is normally called
+        from the worker.
+
+        NOT used for the four per-device verbs. Those are re-derived from
+        _dev_state by _apply_device_rows every three seconds, so a busy state
+        parked on them here would be stomped by the next tick; there the busy
+        presentation is part of the state model instead. Both paths paint
+        through paint_button_busy, so they look the same.
+        """
+        if button is None:
+            return lambda: None
+        self._on_ui(lambda: set_button_busy(button, label))
+        return lambda: self._on_ui(lambda: clear_button_busy(button))
+
     def _drain_ui(self):
         """UI-thread pump for ui(): run queued closures, reschedule."""
         try:
@@ -5669,11 +6079,17 @@ class App:
             pass
 
     # ---- actions ----
-    def restart_everything(self, log=None):
+    def restart_everything(self, log=None, button=None):
         """Restart ONLY the audio pipeline: the PipeWire/WirePlumber services in
         the VM plus the Windows sender. Deliberately does NOT touch the VM or the
         keyboard daemon (openspanble) -- audio and the iPad keyboard are
-        independent, so restarting audio must never drop the keyboard."""
+        independent, so restarting audio must never drop the keyboard.
+
+        `button` is whichever control the user actually pressed: there are two
+        (System control's "Restart audio" and the Bluetooth panel's "⟳ Restart
+        audio"), and the one that waits should be the one that was clicked."""
+        done = self.busy(button, "Restarting audio…")
+
         def say(m):
             try:
                 if log:
@@ -5683,19 +6099,23 @@ class App:
             self.ui(lambda: self.status.set(m))
 
         def work():
-            say("restarting the audio pipeline (keyboard untouched)…")
-            # audio-only: these never touch bluetoothd/the radio/openspanble
-            ssh_guest("systemctl restart openspan-wireplumber "
-                      "openspan-pipewire-pulse openspan-udprecv", timeout=45)
             try:
-                if self.audio_proc and self.audio_proc.poll() is None:
-                    _terminate_role_process(self.audio_proc)
-            except Exception:  # noqa: BLE001
-                pass
-            self.audio_proc = None
-            self._ensure_audio()
-            say("audio restarted — wake your headphones to reconnect. "
-                "Keyboard was not touched.")
+                say("restarting the audio pipeline (keyboard untouched)…")
+                # audio-only: these never touch bluetoothd/the radio/openspanble
+                ssh_guest("systemctl restart openspan-wireplumber "
+                          "openspan-pipewire-pulse openspan-udprecv",
+                          timeout=45)
+                try:
+                    if self.audio_proc and self.audio_proc.poll() is None:
+                        _terminate_role_process(self.audio_proc)
+                except Exception:  # noqa: BLE001
+                    pass
+                self.audio_proc = None
+                self._ensure_audio()
+                say("audio restarted — wake your headphones to reconnect. "
+                    "Keyboard was not touched.")
+            finally:
+                done()
         threading.Thread(target=work, daemon=True).start()
 
     def _auto_reconnect_audio(self, reason):
@@ -5827,10 +6247,14 @@ class App:
                 "stop until you start it again.\n\nStop now?"):
             return
         self.status.set("Stopping VM…")
+        done = self.busy(self._sysbtn["Stop VM"], "Stopping VM…")
 
         def work():
-            ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
-            vbox("controlvm", VM, "poweroff")
+            try:
+                ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+                vbox("controlvm", VM, "poweroff")
+            finally:
+                done()
         threading.Thread(target=work, daemon=True).start()
 
     def cold_restart_vm(self):
@@ -5840,27 +6264,37 @@ class App:
                 "fresh; you re-pair the keyboard on the iPad.\n\nRestart now?"):
             return
         self.status.set("Cold-restarting VM…")
+        done = self.busy(self._sysbtn["Cold-restart VM"], "Restarting VM…")
+
         def work():
-            if vm_running():
-                ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
-                vbox("controlvm", VM, "poweroff")
-                for _ in range(30):
-                    if not vm_running():
-                        break
-                    threading.Event().wait(1)
-            start_vm_clean()
+            try:
+                if vm_running():
+                    ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+                    vbox("controlvm", VM, "poweroff")
+                    for _ in range(30):
+                        if not vm_running():
+                            break
+                        threading.Event().wait(1)
+                start_vm_clean()
+            finally:
+                done()
         threading.Thread(target=work, daemon=True).start()
 
     def restart_keyboard(self):
         self.status.set("Restarting keyboard daemon…")
+        done = self.busy(self._sysbtn["Restart keyboard"], "Restarting…")
+
         def work():
-            ssh_guest("systemctl restart openspanble", timeout=25)
-            self.ui(lambda: self.status.set(
-                "Keyboard restarted — forget + re-pair on the iPad."))
+            try:
+                ssh_guest("systemctl restart openspanble", timeout=25)
+                self.ui(lambda: self.status.set(
+                    "Keyboard restarted — forget + re-pair on the iPad."))
+            finally:
+                done()
         threading.Thread(target=work, daemon=True).start()
 
     def restart_audio_btn(self):
-        self.restart_everything()
+        self.restart_everything(button=self._sysbtn["Restart audio"])
 
     def shutdown_all(self):
         if not dark_confirm(
@@ -6030,7 +6464,7 @@ class App:
         if not ok:
             self.status.set(
                 "⚠ No managed device touches a PC monitor — no portal")
-        if self.portal_proc and self.portal_proc.poll() is None:
+        if self._portal_live():
             # The portal reads geometry and input settings once at process
             # start. Apply a drag, resize, rotation, resolution, sensitivity or
             # acceleration edit immediately.
@@ -6040,21 +6474,79 @@ class App:
             self.log("event", "portal geometry reloaded from the arrangement.")
 
     def toggle_vm(self):
+        # Both branches go through busy() and both run on a worker. The stop
+        # branch used to call vbox() straight from the click, on the UI thread,
+        # after writing "Stopping VM…" -- so Tk could not repaint until the
+        # VBoxManage call it was reporting had already finished. A pending label
+        # the UI thread is too blocked to draw is not feedback.
         if vm_running():
             if dark_confirm(self.root, "Stop VM?",
                             "Stop the bridge VM? The iPad will disconnect "
                             "until you start it again."):
-                self.vm_btn.config(text="Stopping VM…")
-                vbox("controlvm", VM, "acpipowerbutton")
+                done = self.busy(self.vm_btn, "Stopping VM…")
+
+                def stop():
+                    try:
+                        vbox("controlvm", VM, "acpipowerbutton")
+                    finally:
+                        done()
+                threading.Thread(target=stop, daemon=True).start()
         else:
-            self.vm_btn.config(text="Starting VM…")  # immediate feedback
-            threading.Thread(target=start_vm_clean, daemon=True).start()
+            done = self.busy(self.vm_btn, "Starting VM…")
+
+            def start():
+                try:
+                    start_vm_clean()
+                finally:
+                    done()
+            threading.Thread(target=start, daemon=True).start()
+
+    def _render_portal_button(self, on):
+        """Text AND register for the portal button. The ONE writer.
+
+        Doug: *"when the portal is not going, all that orange color let's just
+        put it around the Start Portal button and make that thing prominent
+        that that is why nothing is happening."*
+
+        So while the portal is down this button carries the full-strength amber
+        that the device area has given up (see ACCENT_SUPPRESSED /
+        WARN_SUPPRESSED), and while it is running it is an ordinary button
+        again. Every caller passes the boolean from _portal_live(); nothing here
+        forms a second opinion about whether the portal is up.
+
+        The busy guard is live, not decoration: toggle_portal's stop branch
+        parks "Stopping portal…" on this button while _terminate_role_process
+        runs taskkill /T /F and then waits on the handle -- two 4-second
+        timeouts, so up to ~8s -- and the 3-second poll tick calls this method
+        the whole time.
+        """
+        if button_is_busy(self.portal_btn):
+            return   # a wait is showing; the tick must not paint over it
+        self.portal_btn.config(text="Stop portal" if on else "Start portal")
+        self.portal_btn.configure(style="TButton" if on else "Warn.TButton")
 
     def toggle_portal(self):
-        if self.portal_proc and self.portal_proc.poll() is None:
-            _terminate_role_process(self.portal_proc)
-            self.portal_proc = None
-            self.portal_btn.config(text="Start portal")  # immediate feedback
+        if self._portal_live():
+            # Stopping is a REAL wait and it used to run on the UI thread
+            # straight off the click: taskkill /T /F plus a wait on the handle,
+            # two 4-second timeouts, during which Tk could not repaint. So it
+            # goes to a worker and says so on the button, like every other
+            # threaded action in this file.
+            #
+            # The handle is taken and cleared HERE, before the thread starts,
+            # so _portal_live() reports the portal down from this instant --
+            # the poll tick must not spend eight seconds insisting it is up.
+            proc, self.portal_proc = self.portal_proc, None
+            done = self.busy(self.portal_btn, "Stopping portal…")
+
+            def stop():
+                try:
+                    _terminate_role_process(proc)
+                finally:
+                    done()
+                    self.ui(lambda: self._render_portal_button(
+                        self._portal_live()))
+            threading.Thread(target=stop, daemon=True).start()
             self.log("event", "portal STOPPED — keyboard/mouse no longer "
                               "bridging to managed devices.")
         else:
@@ -6073,7 +6565,7 @@ class App:
             PORTAL_CMD,
             stdout=self._portal_logf, stderr=self._portal_logf,
             creationflags=NO_WINDOW, env=_independent_frozen_env())
-        self.portal_btn.config(text="Stop portal")
+        self._render_portal_button(self._portal_live())
 
     def _ensure_audio(self):
         """(Re)start the Windows->VM audio sender if it isn't running. Captures
@@ -6271,13 +6763,39 @@ class App:
                 f"OpenSpan {record.get('name', device_id)}")
 
     def _dev_state(self, device_id):
-        """Mutable per-device pairing state, created on demand."""
+        """Mutable per-device pairing state, created on demand.
+
+        "verb" is which of the four connection verbs owns this lane right now
+        ("" for none). It lives HERE rather than on the button because
+        _apply_device_rows re-derives all four verbs from this dict every three
+        seconds -- anything painted on the widget instead is stomped by the next
+        tick. It is deliberately NOT folded into inflight/broadcasting: those
+        two gate which verbs are OFFERED and that predicate is unchanged, while
+        this one only decides which button says it is working.
+        """
         return self._dev_states.setdefault(device_id, {
             "inflight": False, "broadcasting": False, "paired": False,
-            "gen": 0, "started": 0.0, "lock": threading.Lock(),
+            "gen": 0, "started": 0.0, "verb": "", "lock": threading.Lock(),
         })
 
-    def _pair_device(self, device_id, reset=False, confirm=True):
+    def _portal_live(self):
+        """Is the input portal running? The single source of truth, read
+        straight off the process handle. Every renderer of portal state calls
+        THIS -- a second opinion is how the button and the device area end up
+        disagreeing about why nothing is happening."""
+        return bool(self.portal_proc and self.portal_proc.poll() is None)
+
+    def _refresh_device_rows_now(self):
+        """Repaint the device rows immediately, from the same portal liveness
+        _apply_poll reads.
+
+        Called the instant a verb is clicked. This is the SAME writer invoked
+        EARLY, not a second one: without it the busy label would not appear
+        until the next 3-second tick, which is most of the way through some of
+        these actions."""
+        self._apply_device_rows(self._portal_live())
+
+    def _pair_device(self, device_id, reset=False, confirm=True, verb="pair"):
         record, controller, _port, _name = self.device_lane(device_id)
         if not record:
             return
@@ -6314,11 +6832,53 @@ class App:
             return
         state["inflight"] = True
         state["started"] = time.time()
+        # Which button is waiting. Recorded BEFORE the thread starts and painted
+        # in the same breath, so the wait is visible on the click rather than at
+        # the next poll tick up to three seconds later. Cleared by
+        # _apply_device_rows the moment inflight/broadcasting both fall.
+        state["verb"] = verb
         self.status.set(f"Working — preparing the Bluetooth radio for {label}…")
+        self._refresh_device_rows_now()
         threading.Thread(target=self._pair_device_worker,
                          args=(device_id, reset), daemon=True).start()
 
     def _pair_device_worker(self, device_id, reset=False):
+        """Run one pair/connect attempt, and NEVER leave the lane claiming to
+        be in flight if it dies.
+
+        Every failure the attempt itself anticipates clears inflight on its own
+        way out. This wrapper is for the ones it does not: an unexpected
+        exception used to escape the thread with inflight still True, so
+        _apply_device_rows kept re-deriving "Pairing…" from _dev_state and the
+        button lied for the full 300 seconds until the advertising-window sweep
+        cleared it. Pre-W3 the same crash produced a merely-disabled button;
+        the busy label made a silent failure into a confident false statement,
+        which is worse.
+
+        The exception is LOGGED, not swallowed. A crash nobody can see is how
+        this shipped.
+        """
+        try:
+            self._pair_device_attempt(device_id, reset)
+        except Exception:  # noqa: BLE001
+            # Captured FIRST: everything below can raise on its own, and the
+            # crash worth reporting is this one.
+            detail = traceback.format_exc().strip()[-400:]
+            state = self._dev_state(device_id)
+            with state["lock"]:
+                state["broadcasting"] = False
+                state["inflight"] = False
+            state["verb"] = ""
+            try:
+                set_target_advertising(device_id, False)
+            except Exception:  # noqa: BLE001
+                pass          # the radio may be exactly what just failed
+            _emit("err", f"{device_id} pair worker CRASHED — {detail}")
+            self.ui(lambda: self.status.set(
+                f"{device_id} pair failed unexpectedly — see console."))
+            self.ui(self._refresh_device_rows_now)
+
+    def _pair_device_attempt(self, device_id, reset=False):
         record, controller, port, adv_name = self.device_lane(device_id)
         label = record.get("name", device_id)
         state = self._dev_state(device_id)
@@ -6394,26 +6954,37 @@ class App:
             f"📡 {label} — connect “{adv_name}” from that device."))
 
     def _connect_device(self, device_id):
-        self._pair_device(device_id, reset=False, confirm=False)
+        self._pair_device(device_id, reset=False, confirm=False, verb="connect")
 
     def _disconnect_device(self, device_id):
         record, _controller, _port, _name = self.device_lane(device_id)
         label = record.get("name", device_id)
         state = self._dev_state(device_id)
+        # Disconnect and unpair CLEAR inflight rather than setting it -- they
+        # are also the cancel for a pair attempt -- so their wait cannot be read
+        # off those flags and has to say so itself. The try/finally is the
+        # point: an ssh that times out must still hand the button back.
+        state["verb"] = "disconnect"
+        self._refresh_device_rows_now()
 
         def work():
-            with state["lock"]:
-                state["broadcasting"] = False
-                state["inflight"] = False
-            set_target_advertising(device_id, False)
-            reply = target_daemon_cmd(device_id, {"cmd": "disconnect"})
-            if reply and reply.get("ok"):
-                _emit("event", f"{label} DISCONNECTED "
-                               f"({reply.get('disconnected', 0)} link) — "
-                               "advertising off, its on-screen keyboard returns.")
-            else:
-                _emit("err", f"couldn't disconnect {label}.")
-            self._refresh_device_paired(device_id)
+            try:
+                with state["lock"]:
+                    state["broadcasting"] = False
+                    state["inflight"] = False
+                set_target_advertising(device_id, False)
+                reply = target_daemon_cmd(device_id, {"cmd": "disconnect"})
+                if reply and reply.get("ok"):
+                    _emit("event", f"{label} DISCONNECTED "
+                                   f"({reply.get('disconnected', 0)} link) — "
+                                   "advertising off, its on-screen keyboard "
+                                   "returns.")
+                else:
+                    _emit("err", f"couldn't disconnect {label}.")
+                self._refresh_device_paired(device_id)
+            finally:
+                state["verb"] = ""
+                self.ui(self._refresh_device_rows_now)
         threading.Thread(target=work, daemon=True).start()
 
     def _unpair_device(self, device_id):
@@ -6426,23 +6997,32 @@ class App:
                 f"device is affected."):
             return
         state = self._dev_state(device_id)
+        # Set AFTER the confirm: a cancelled dialog must not leave the button
+        # saying "Unpairing…". The guest's forget-hid is a 25s ssh, which is
+        # exactly the wait this exists to make visible.
+        state["verb"] = "unpair"
+        self._refresh_device_rows_now()
 
         def work():
-            with state["lock"]:
-                state["broadcasting"] = False
-                state["inflight"] = False
-            set_target_advertising(device_id, False)
-            target_daemon_cmd(device_id, {"cmd": "disconnect"})
-            r = ssh_guest(
-                "python3 /opt/openspan/openspan_bt.py forget-hid "
-                f"--controller {controller} --target {device_id}",
-                timeout=25)
-            if r.returncode == 0:
-                state["paired"] = False
-                _emit("event", f"{label} UNPAIRED on the OpenSpan side.")
-            else:
-                _emit("err", f"{label} unpair failed — see console.")
-            self._refresh_device_paired(device_id)
+            try:
+                with state["lock"]:
+                    state["broadcasting"] = False
+                    state["inflight"] = False
+                set_target_advertising(device_id, False)
+                target_daemon_cmd(device_id, {"cmd": "disconnect"})
+                r = ssh_guest(
+                    "python3 /opt/openspan/openspan_bt.py forget-hid "
+                    f"--controller {controller} --target {device_id}",
+                    timeout=25)
+                if r.returncode == 0:
+                    state["paired"] = False
+                    _emit("event", f"{label} UNPAIRED on the OpenSpan side.")
+                else:
+                    _emit("err", f"{label} unpair failed — see console.")
+                self._refresh_device_paired(device_id)
+            finally:
+                state["verb"] = ""
+                self.ui(self._refresh_device_rows_now)
         threading.Thread(target=work, daemon=True).start()
 
     def _refresh_device_paired(self, device_id):
@@ -6476,7 +7056,17 @@ class App:
     # ---- device panel (dynamic: one row per configured device) -------------
     def _apply_device_rows(self, portal_on):
         """Colour + gate every device row from ITS OWN live state. One loop for
-        N devices; no branch anywhere depends on what kind of device it is."""
+        N devices; no branch anywhere depends on what kind of device it is.
+
+        THE ONLY WRITER of a device verb's label and enabled state, including
+        its BUSY presentation. This method re-derives all four verbs from
+        _dev_state on every 3-second poll tick, so a busy label painted over
+        the top by a click handler was guaranteed to be stomped within three
+        seconds. "In flight" is therefore read out of _dev_state here, exactly
+        like "paired" and "connected" -- one writer, one source of truth. The
+        click path gets its instant feedback by calling this method EARLY (see
+        _refresh_device_rows_now), never by painting around it.
+        """
         devices = self.canvas.devices()
         if set(self._dev_rows) != {d["id"] for d in devices}:
             self._rebuild_device_rows()
@@ -6491,6 +7081,14 @@ class App:
             paired = bool(state["paired"])
             up = status is not None
             busy = state["inflight"] or state["broadcasting"]
+            # Which verb owns this lane right now, "" for none. Set by the verb
+            # that started the work; the pair/connect pair is self-healing here
+            # because _pair_device_worker clears inflight down half a dozen
+            # separate failure paths and threading a clear through every one of
+            # them is how one gets missed and a button stays "Pairing…" forever.
+            verb = state.get("verb", "")
+            if verb in ("pair", "connect") and not busy:
+                state["verb"] = verb = ""
             radio = str(device.get("radio", "") or "")
             # Is this device's assigned radio actually PRESENT? A dongle that
             # vanished (unplugged, or claimed-but-not-attached by VirtualBox)
@@ -6501,42 +7099,57 @@ class App:
             known = {str(r.get("address", "")).upper()
                      for r in (getattr(self.bt_panel, "_radios", []) or [])}
             radio_missing = bool(radio) and bool(known) and radio not in known
-            # grey = not paired · amber = paired/idle · green = live
+            # Two RADIO faults outrank the state table, because in both the
+            # device's own state is unknowable rather than merely idle. The five
+            # rows that remain are device_state_colour -- the same pure function
+            # the indicator row uses, so the top of the window and the device
+            # area cannot disagree about what is wrong.
             if radio_missing:
                 colour, text = DANGER, "radio not present"
                 paired = False
-            elif live and portal_on:
-                colour, text = ACCENT, "connected"
-            elif live:
-                colour, text = WARN, "portal off"
-            elif paired:
-                colour, text = WARN, "paired"
-            elif not radio:
-                colour, text = MUTED, "no radio assigned"
             else:
-                colour, text = MUTED, "not paired"
+                colour, text = device_state_colour(portal_on, live, paired)
+                if not (live or paired) and not radio:
+                    colour, text = MUTED, "no radio assigned"   # the more
+                    #                    useful of the two grey readings
             row["dot"].config(fg=colour)
             row["name"].config(text=f"{device.get('name', device_id)}  ·  {text}")
             row["radio"].config(
                 text=(f"{radio}  :{device.get('port')}" if radio
                       else f":{device.get('port')}"))
             buttons = row["buttons"]
-            # NOT gated on `up`: pairing is what brings the lane into
-            # existence, so requiring its daemon first is a deadlock.
             usable = radio and not radio_missing
-            buttons["pair"].state(
-                ["!disabled"] if (usable and self._vm_reachable and not busy
-                                  and not live) else ["disabled"])
-            buttons["connect"].state(
-                ["!disabled"] if (usable and up and not busy and paired
-                                  and not live) else ["disabled"])
-            # Disconnect doubles as CANCEL for an in-flight attempt
-            buttons["disconnect"].state(
-                ["!disabled"] if (live or busy) else ["disabled"])
-            buttons["unpair"].state(
-                ["!disabled"] if (usable and up and not busy and paired)
-                else ["disabled"])
-            self.canvas.set_target_state(device_id, live and portal_on, paired)
+            # The gate itself is DEVICE_VERB_GATES, checked against
+            # DEVICE_VERBS at import. It used to be a hand-written four-key
+            # dict right here, indexed by the DEVICE_VERB_SPEC loop below: a
+            # fifth verb in the spec was a KeyError raised inside the poll,
+            # where _drain_ui swallows it and the whole status surface freezes.
+            facts = {
+                "usable": bool(usable),
+                "vm": bool(self._vm_reachable),
+                "up": bool(up),
+                "busy": bool(busy),
+                "paired": bool(paired),
+                "live": bool(live),
+            }
+            enabled = {key: bool(DEVICE_VERB_GATES[key](facts))
+                       for key in DEVICE_VERBS}
+            for key, resting, in_flight in DEVICE_VERB_SPEC:
+                button = buttons[key]
+                if key == verb:
+                    # The busy presentation WINS over the gate: this verb's own
+                    # work is running, and offering it again (or, for
+                    # disconnect-as-cancel, offering to cancel the cancel) is
+                    # not a thing the user can usefully do.
+                    paint_button_busy(button, in_flight)
+                else:
+                    button.config(text=resting)
+                    button.state(["!disabled"] if enabled[key] else ["disabled"])
+            # portal_on goes THROUGH to the canvas rather than being folded
+            # into `live` first. Collapsing it here is what let the biggest
+            # element in the window paint full-strength amber for a stopped
+            # portal while the card three inches below it said "suppressed".
+            self.canvas.set_target_state(device_id, live, paired, portal_on)
 
     def _any_device_busy(self):
         """True while ANY device is mid-pair/broadcast -- replaces the old
@@ -6576,56 +7189,128 @@ class App:
             self._build_device_row(device)
 
     def _build_device_row(self, device):
+        """ONE row per device: dot · name · state · radio/port · the four verbs.
+
+        This card used to be TWO stacked rows carrying NINE buttons, and spent
+        about 83px per card -- 250 across the three -- to expose at most two
+        live actions. Five of those nine (Radio…, Input…, Rename, Displays…,
+        Remove) appear nowhere in _apply_device_rows: all fifteen across three
+        cards were permanently enabled whether or not the device even had a
+        radio assigned. They are not actions on the LANE at all, they are
+        per-object property editors -- exactly the shape the Bluetooth tree and
+        (since the arrangement menus landed) the canvas already handle with a
+        right-click. So they are a right-click here too, and the row that held
+        them is gone.
+
+        The four CONNECTION verbs stay visible and gated. They are the opposite
+        kind of control: real state decides which of them is live, and in both
+        the paired-idle and the live state TWO of them are.
+
+        Returns the row dict as well as storing it, so a test can build one
+        without an assembled window.
+        """
         device_id = device["id"]
-        row = tk.Frame(self._dev_body, bg=BG)
-        row.pack(fill="x", pady=(PAD_XS, PAD_SM))
-        head = tk.Frame(row, bg=BG)
-        head.pack(fill="x")
+        head = tk.Frame(self._dev_body, bg=BG)
+        head.pack(fill="x", pady=(PAD_XS, PAD_XS))
         dot = tk.Label(head, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 11))
-        dot.pack(side="left")
         name = tk.Label(head, text=device.get("name", device_id), bg=BG, fg=FG,
                         font=("Segoe UI Semibold", 10))
-        name.pack(side="left", padx=(4, 8))
         radio = tk.Label(head, text="", bg=BG, fg=MUTED, font=("Consolas", 8))
-        radio.pack(side="left")
-        # The DEVICE record is the single writer of its radio. Assigning it
-        # here (rather than in a fixed global slot) is what lets a device added
-        # at runtime ever get one.
-        ttk.Button(head, text="Radio…",
-                   command=lambda d=device_id: self._assign_device_radio(d)
-                   ).pack(side="right", padx=(4, 0))
-        ttk.Button(head, text="Input…",
-                   command=lambda d=device_id: self._device_input_dialog(d)
-                   ).pack(side="right", padx=(4, 0))
-        ttk.Button(head, text="Rename",
-                   command=lambda d=device_id: self._rename_device(d)).pack(
-            side="right", padx=(4, 0))
-        ttk.Button(head, text="Displays…",
-                   command=lambda d=device_id: self._edit_device_displays(d)
-                   ).pack(side="right", padx=(4, 0))
-        ttk.Button(head, text="Remove",
-                   command=lambda d=device_id: self._remove_device(d)).pack(
-            side="right", padx=(4, 0))
-        verbs = tk.Frame(row, bg=BG)
-        verbs.pack(fill="x", pady=(PAD_XS, 0))
+        # The verbs are packed FIRST, from the right, so the packer allocates
+        # their natural widths before the labels take what is left. In a single
+        # row that ordering is load-bearing: a squeezed button is unclickable,
+        # a squeezed label merely runs out of view. Packing right-to-left means
+        # walking the spec in reverse to read Pair · Connect · Disconnect ·
+        # Unpair left-to-right on screen.
+        # Built off DEVICE_VERB_HANDLERS, which is checked against DEVICE_VERBS
+        # at import. This was a hand-written four-key dict indexed by the
+        # DEVICE_VERB_SPEC loop below it -- the same silent-KeyError shape as
+        # the gate in _apply_device_rows, and the same fix.
+        commands = {key: getattr(self, DEVICE_VERB_HANDLERS[key])
+                    for key in DEVICE_VERBS}
         buttons = {}
-        for column, (key, text, command) in enumerate((
-                ("pair", "Pair",
-                 lambda d=device_id: self._pair_device(d)),
-                ("connect", "Connect",
-                 lambda d=device_id: self._connect_device(d)),
-                ("disconnect", "Disconnect",
-                 lambda d=device_id: self._disconnect_device(d)),
-                ("unpair", "Unpair",
-                 lambda d=device_id: self._unpair_device(d)))):
-            button = ttk.Button(verbs, text=text, command=command)
-            button.grid(row=0, column=column, sticky="ew", padx=3)
+        for key, resting, _in_flight in reversed(DEVICE_VERB_SPEC):
+            button = ttk.Button(
+                head, text=resting,
+                command=lambda d=device_id, fn=commands[key]: fn(d))
+            button.pack(side="right", padx=(PAD_SM, 0))
             button.state(["disabled"])
             buttons[key] = button
-        for column in range(4):
-            verbs.columnconfigure(column, weight=1)
-        self._dev_rows[device_id] = {
-            "dot": dot, "name": name, "radio": radio, "buttons": buttons}
+        dot.pack(side="left")
+        name.pack(side="left", padx=(4, 8))
+        radio.pack(side="left")
+        # A tk.Frame does NOT receive its children's events -- FrameModal's own
+        # docstring documents that bubbling trap -- so the card's menu is bound
+        # to the frame AND to each label individually. Bind only the frame and
+        # right-clicking the device's own name, the thing you are aiming at,
+        # does nothing at all.
+        for widget in (head, dot, name, radio):
+            widget.bind("<Button-3>",
+                        lambda e, d=device_id: self._device_card_menu(e, d))
+        # Built off DEVICE_ROW_KEYS, not off a literal: this dict and the
+        # subscripts in _apply_device_rows are three thousand lines apart and
+        # their disagreement is SILENT (see the constant's comment).
+        parts = {"dot": dot, "name": name, "radio": radio, "buttons": buttons}
+        row = {key: parts[key] for key in DEVICE_ROW_KEYS}
+        self._dev_rows[device_id] = row
+        return row
+
+    # ---- the device card's right-click ------------------------------------
+    def _device_card_menu(self, event, device_id):
+        """Right-click a device card: everything about the OBJECT.
+
+        Mirrors _canvas_menu exactly, including the grab_release in a finally
+        -- a tk_popup that raises with the grab still held leaves the window
+        mouse-dead.
+        """
+        menu = self._card_menu
+        self._fill_card_menu(menu, device_id)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _fill_card_menu(self, menu, device_id):
+        """The five editors that used to be five permanently-enabled buttons.
+
+        EVERY entry here opens a modal, and every entry therefore goes through
+        _deferred. FrameModal.grab_set records grab_current() as _prev_grab and
+        hands the grab back when the modal closes; opened inline from a posted
+        menu it captures the MENU, then returns the grab to an unposted widget
+        and leaves the whole window mouse-dead. dark_prompt, dark_confirm and
+        MacDisplayEditor are all FrameModals.
+        """
+        record = self.device_record(device_id) or {}
+        menu.delete(0, "end")
+        menu.add_command(label=record.get("name", device_id), state="disabled")
+        # The lane, spelled out. The card shows the same two facts, but the card
+        # is now a single row whose labels are the last thing the packer serves:
+        # a long device name eats the radio readout. Here it cannot be squeezed.
+        _radio = str(record.get("radio", "") or "")
+        menu.add_command(
+            label="   " + (f"{_radio}   port {record.get('port')}" if _radio
+                           else f"no radio assigned   port {record.get('port')}"),
+            state="disabled")
+        menu.add_separator()
+        menu.add_command(
+            label="Rename…   (a label only — radio, port and bonds are kept)",
+            command=self._deferred(self._rename_device, device_id))
+        # The DEVICE record is the single writer of its radio. Assigning it per
+        # device (rather than in a fixed global slot) is what lets a device
+        # added at runtime ever get one.
+        menu.add_command(
+            label="Radio…   (this device's own Bluetooth radio)",
+            command=self._deferred(self._assign_device_radio, device_id))
+        menu.add_command(
+            label="Input…   (pointer speed, scroll, modifier keys)",
+            command=self._deferred(self._device_input_dialog, device_id))
+        menu.add_command(
+            label="Displays…   (saving restarts input ~8s)",
+            command=self._deferred(self._edit_device_displays, device_id))
+        menu.add_separator()
+        menu.add_command(
+            label="Remove…   (unpair it first if it is still bonded)",
+            command=self._deferred(self._remove_device, device_id))
 
     def _screen_sizes_dialog(self):
         """Type each screen's real diagonal in inches. Size is DERIVED from it
@@ -7396,7 +8081,7 @@ class App:
 
     def _stop_portal_if_running(self):
         """Stop the input portal if it's running (Tk-touching -> UI thread)."""
-        if self.portal_proc and self.portal_proc.poll() is None:
+        if self._portal_live():
             self.toggle_portal()
 
     # ---- status tick ----
@@ -7417,7 +8102,7 @@ class App:
         dev_status = self._poll_device_status() if running else {}
         self._dev_status = dev_status
         mac_st = None
-        on = bool(self.portal_proc and self.portal_proc.poll() is None)
+        on = self._portal_live()
         self._ensure_audio()  # watchdog: relaunch the sender if it died
         aud = bool(self.audio_proc and self.audio_proc.poll() is None)
         # compact mode has no device list on screen, so keep the buds line
@@ -7442,15 +8127,18 @@ class App:
         setind("vm", f"VM {'●' if running else '○'}", running)
         if st:
             _sub = bool(st.get("kbd_subscribed"))
-            if _sub and on:
-                self._ind["ipad"].config(text="iPad ● connected", fg=ACCENT)
-            elif _sub:                       # link up but portal off -> amber
-                self._ind["ipad"].config(text="iPad ◐ portal off", fg=WARN)
-            elif any(self._dev_state(d["id"])["paired"]
-                     for d in self.canvas.devices()):
-                self._ind["ipad"].config(text="iPad ◐ paired", fg=WARN)
-            else:
-                self._ind["ipad"].config(text="iPad ○ not paired", fg=MUTED)
+            _bonded = any(self._dev_state(d["id"])["paired"]
+                          for d in self.canvas.devices())
+            # The SAME truth table the device cards use, so the top of the
+            # window and the device area cannot disagree about what is wrong.
+            # The "— portal off" half of the text is dropped here because this
+            # row already carries its own `portal ● ON / ○ off` token two
+            # places along; in the row the colour alone carries the register.
+            _col, _txt = device_state_colour(on, _sub, _bonded)
+            if _txt.endswith(PORTAL_OFF_SUFFIX):
+                _txt = _txt[:-len(PORTAL_OFF_SUFFIX)]
+            _mark = "●" if (_sub and on) else ("◐" if (_sub or _bonded) else "○")
+            self._ind["ipad"].config(text=f"iPad {_mark} {_txt}", fg=_col)
         elif running:
             setind("ipad", "iPad ○ daemon starting", False)
         else:
@@ -7487,12 +8175,13 @@ class App:
         _adv_state = st.get("advertising_state", "off") if st else "off"
         _adv_error = st.get("advertising_error", "") if st else ""
         if st and not _adv:
-            if _adv_state in ("starting", "stopping"):
-                self._ind["bcast"].config(
-                    text=f"broadcast {_adv_state}...", fg=WARN)
-            elif _adv_error:
-                self._ind["bcast"].config(
-                    text="broadcast error", fg=DANGER)
+            # broadcast_token, not a raw fg=WARN. This token was the last
+            # full-strength amber in the file outside the Warn.TButton style,
+            # and while the portal is down it is a consequence like every other
+            # idle thing here -- so it takes the suppressed register too.
+            _token = broadcast_token(_adv_state, _adv_error, on)
+            if _token:
+                self._ind["bcast"].config(text=_token[0], fg=_token[1])
         # UIPI: without admin, input hooks die under any elevated window
         if is_elevated():
             self._ind["admin"].config(text="")
@@ -7537,7 +8226,11 @@ class App:
         self._cache = {"running": running, "connected": connected, "on": on,
                        "aud": aud,
                        "busy": self._any_device_busy()}
-        self.canvas.set_ipad_state(connected and on, False)
+        # `connected`, not `connected and on` -- the portal is its own argument
+        # now, for the same reason it is in _apply_device_rows below: folding it
+        # into liveness is what made the canvas unable to tell a stopped portal
+        # from an unconnected device.
+        self.canvas.set_ipad_state(connected, False, on)
         # gate the four verbs by REAL state. Pair: daemon up + not mid-pair.
         # Connect: bonded but not connected. Disconnect: connected. Unpair:
         # bonded. Never fight the pair flow while it owns the radio.
@@ -7581,13 +8274,11 @@ class App:
                         threading.Thread(
                             target=set_target_advertising, args=(_did, False),
                             daemon=True).start()
-                        if not (self.portal_proc
-                                and self.portal_proc.poll() is None):
+                        if not self._portal_live():
                             self.toggle_portal()
                             _emit("event", f"{_label} paired — portal "
                                            "auto-started.")
-                        on = bool(self.portal_proc
-                                  and self.portal_proc.poll() is None)
+                        on = self._portal_live()
                 else:
                     _emit("event", f"{_label} disconnected.")
             self._dev_conn[_did] = _live
@@ -7686,9 +8377,13 @@ class App:
                     "Ready — pair or connect the iPad or managed Mac.")
         # the Pair button stays a static "Pair"; connection state is shown by the
         # indicator colours + which of Connect/Disconnect/Unpair are enabled.
-        self.vm_btn.config(text="Bridge VM ✓" if running
-                           else "Start Bridge VM")
-        self.portal_btn.config(text="Stop portal" if on else "Start portal")
+        # button_is_busy is the guard that makes the pending state survive: this
+        # tick rewrites the VM button's label every 3 seconds and would
+        # otherwise paint straight over "Starting VM…".
+        if not button_is_busy(self.vm_btn):
+            self.vm_btn.config(text="Bridge VM ✓" if running
+                               else "Start Bridge VM")
+        self._render_portal_button(on)
 
 
 def _single_instance_lock():

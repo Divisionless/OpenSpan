@@ -1714,3 +1714,76 @@ puts the last panel under the clock. On this desk that is 1040, not 1080.
 Measured live: `window_height_plan(1263) -> (1040, 1040, over=False, clipped=True)`.
 
 Suite 532 -> 540.
+
+### W3 — one row per device, a real pending state, and the suppressed register
+
+Three changes in one wave because all three land in `_build_device_row` and
+`_apply_device_rows`. Splitting them would have meant rewriting that code three
+times.
+
+**The cards.** Each device spent 66px on nine buttons to expose at most two live
+actions, and five of those nine — Radio / Input / Rename / Displays / Remove —
+appeared nowhere in `_apply_device_rows`: all fifteen across three cards were
+permanently enabled whether or not the device even had a radio. They are pure
+per-object property editors, so they moved to a right-click on the card, the
+same shape the Bluetooth tree and (since W2) the arrangement canvas already use.
+One ~33px row per card. **-99px.**
+
+The four verbs stayed as visible, gated buttons. Collapsing them into one
+relabelling button was refuted: the predicates yield THREE live verbs in the
+paired-idle state, so there is no single correct verb, and a relabelling button
+re-aims under the cursor every 3s with Unpair in the rotation.
+
+**The pending state.** Doug: *"even in a pending state while the action runs."*
+26 actions here run on a worker thread and take seconds while the button says
+nothing. The trap: `_apply_device_rows` re-enables the verbs every 3s from
+`_dev_state`, so a busy state painted on top is stomped within three seconds. It
+had to become part of the state the poll tick READS. `inflight`/`broadcasting`
+were not sufficient on their own — Disconnect and Unpair *clear* inflight (they
+double as pair-cancel), and Unpair's `forget-hid` is a 25-second ssh, precisely
+the wait being complained about. So `verb` was added as a presentation-only
+field and the enable-gate left bit-for-bit unchanged.
+
+**The suppressed register.** Doug: *"currently there is no visual difference
+between a stopped portal and a paired but unconnected device."* He was exactly
+right, and it was literal:
+
+    colour, text = WARN, "portal off"
+    colour, text = WARN, "paired"
+
+The same amber for both, at two sites. The principle now implemented: **a stopped
+portal is a global CAUSE; an unconnected device is a local STATE.** One alarm, at
+the cause. When the portal is down every device colour drops to a suppressed
+register — green and amber that read as *paused*, not as *dead grey* — and
+full-strength amber survives in exactly one place: the Start portal button, which
+becomes a `Warn.TButton`. Nothing else in the window may wear an alarm colour
+while the portal explains everything.
+
+**What the adversarial pass caught after the suite was green.** The largest
+element in the window was untouched. `_apply_device_rows` passed
+`set_target_state(device_id, live and portal_on, paired)` — collapsing `portal_on`
+INTO `live` before the canvas could see it — and `IPAD_IDLE_LINE` is byte-for-byte
+`WARN`. So the arrangement canvas still painted both states identically and now
+CONTRADICTED the card two inches below. `_apply_poll` was collapsing the same way
+a second time.
+
+The fix was to stop having two truth tables rather than to widen both: the canvas
+state token is now looked up FROM the colour `device_state_colour` returns, so a
+new state is a `KeyError` at the moment it is added rather than a silent
+divergence, and the suppressed canvas fills are derived from the same constants at
+the ratios the existing fills already used.
+
+Also fixed from that pass: a crashed pair worker left `inflight` set, so the button
+read "Pairing…" for five minutes — a lying label where pre-W3 it merely disabled.
+`clear_button_busy` re-enabled buttons it had never parked. Two verb-keyed dict
+literals remained that would have raised `KeyError` inside the exception-swallowing
+`_drain_ui` the moment a fifth verb was added. And `toggle_portal` blocked the UI
+thread for ~8s in `_terminate_role_process` while reporting that it was doing so.
+
+Suite 540 -> 714 checks across 14 files.
+
+**Noted, not fixed:** `ArrangeCanvas` — the old single-iPad canvas, never
+instantiated anywhere including tests — still carries its own `IPAD_IDLE_LINE`
+painting with no portal awareness. The same divergent-second-table shape that
+produced the fatal above. W5 deletes it. `_portal_changed` also still calls
+`_terminate_role_process` on the UI thread.
