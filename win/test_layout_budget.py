@@ -246,25 +246,56 @@ check("the budget ceiling is referenced where it is exceeded",
 # This is the check that permanently closes the silent packer-starvation mode.
 # It is asserted as a PROPERTY over a range rather than at one point, because
 # the one point -- the assembled window -- is the thing a test cannot build.
+#
+# The invariant has ONE exception, learned the hard way on 2 August. Doug's desk
+# went from a 1440p primary to three 1080p panels between one launch and the
+# next. The content that had fitted was suddenly 223px taller than the display,
+# and because minsize equalled it, the window could not be shrunk to fit at all
+# -- System control and Bluetooth radio were unreachable by any means. So the
+# SCREEN outranks the content, and when it does the app must SAY so instead of
+# letting the packer eat panels quietly.
+TALL = 4000          # taller than any real screen
 worst = None
 for content in list(range(1, 400, 37)) + [680, 930, 1200, 1599, 1600, 1601,
                                           2120, 4000]:
-    geom_h, min_h, over = A.window_height_plan(content)
+    geom_h, min_h, over, clipped = A.window_height_plan(content, avail_h=TALL)
     if min_h < content or geom_h < content:
         worst = (content, geom_h, min_h)
         break
-check("minsize height >= content height, for every content height",
+check("minsize height >= content height whenever the screen allows it",
       worst is None, f"first violation: {worst}")
-check("geometry height == content height, so the window opens exactly as tall "
-      "as it needs",
-      all(A.window_height_plan(c)[0] == c for c in (700, 930, 1450, 2120)))
+check("geometry height == content height when the screen allows it",
+      all(A.window_height_plan(c, avail_h=TALL)[0] == c
+          for c in (700, 930, 1450, 2120)))
 check("the ceiling is a tripwire, not a clamp -- over-budget content still "
       "gets its full minsize",
-      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 500)[1]
+      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 500, avail_h=TALL)[1]
       == A.LAYOUT_MAX_CONTENT_H + 500)
 check("over-budget content is reported",
-      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 1)[2] is True
-      and A.window_height_plan(A.LAYOUT_MAX_CONTENT_H)[2] is False)
+      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 1, avail_h=TALL)[2] is True
+      and A.window_height_plan(A.LAYOUT_MAX_CONTENT_H, avail_h=TALL)[2] is False)
+
+# ---- (c2) ...but the screen outranks the content --------------------------
+# His live case: 1263px of content on a 1040px work area.
+geom_h, min_h, _over, clipped = A.window_height_plan(1263, avail_h=1040)
+check("a window is never taller than the screen it must live on",
+      geom_h == 1040 and min_h == 1040, f"geom={geom_h} min={min_h}")
+check("...and minsize comes down with it, so it can still be shrunk to fit",
+      min_h <= 1040, str(min_h))
+check("being cut off by the screen is REPORTED, never silent",
+      clipped is True)
+check("content that fits its screen is not flagged as clipped",
+      A.window_height_plan(900, avail_h=1040)[3] is False)
+check("the clipped flag tracks the screen, not the budget ceiling",
+      A.window_height_plan(1263, avail_h=1040)[3] is True
+      and A.window_height_plan(1263, avail_h=1400)[3] is False)
+check("work_area_height returns a plausible usable height for this desk",
+      400 <= A.work_area_height() <= 10000, str(A.work_area_height()))
+check("work_area_height is not just the raw screen height (taskbar counted)",
+      isinstance(A.work_area_height(), int))
+check("App.__init__ asks for the WORK AREA, not winfo_screenheight alone",
+      any(isinstance(n, ast.Call) and _name(n.func) == "work_area_height"
+          for n in ast.walk(APP_INIT)))
 
 # ...and that the derived numbers actually reach Tk. A literal here is the bug:
 # minsize(940, 680) is what let the window be sized shorter than its content.

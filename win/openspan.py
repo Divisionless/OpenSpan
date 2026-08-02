@@ -291,18 +291,49 @@ PAD_LG = 12
 LAYOUT_MAX_CONTENT_H = 1600
 
 
-def window_height_plan(content_h, ceiling=LAYOUT_MAX_CONTENT_H):
+def work_area_height(default=1080):
+    """Usable vertical space on the primary monitor -- the screen minus the
+    taskbar. winfo_screenheight() is the wrong number here: it counts pixels the
+    taskbar already owns, so sizing to it puts the last panel under the clock."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+        rect = wt.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(
+                0x0030, 0, ctypes.byref(rect), 0):   # SPI_GETWORKAREA
+            return max(400, rect.bottom - rect.top)
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
+def window_height_plan(content_h, avail_h=None, ceiling=LAYOUT_MAX_CONTENT_H):
     """Turn a MEASURED content height into the window's geometry and minsize.
 
-    Returns (geometry_h, minsize_h, over_budget).
+    Returns (geometry_h, minsize_h, over_budget, clipped).
 
-    minsize_h is never clamped below content_h. That clamp is precisely the
-    silent packer-starvation this exists to close -- a minsize shorter than the
-    content lets the window be sized so the last panels have nowhere to go, and
-    Tk's packer drops them without a word.
+    minsize_h follows the content, NOT a guessed constant: a minsize shorter
+    than the content is exactly the silent packer-starvation this exists to
+    close -- Tk drops the last-packed panels without a word, and with no
+    scrolling anywhere there is no scrollbar to hint they went.
+
+    But the content is not allowed to outrank the physical screen. Doug's desk
+    changed from a 1440p primary to three 1080p panels between one launch and
+    the next; the same content that fitted comfortably became 223px taller than
+    the display, and a minsize equal to it meant the window could not be shrunk
+    to fit AT ALL -- the bottom panels were unreachable by any means. A window
+    you cannot fit on your screen is worse than one whose overflow is reported.
+
+    So the screen wins, and when it does we say so out loud rather than let the
+    packer eat panels quietly. `clipped` is that signal, and it is the app's cue
+    that the CONTENT has to get shorter -- not that the warning should be muted.
     """
     content_h = max(1, int(content_h))
-    return content_h, content_h, content_h > ceiling
+    if avail_h is None:
+        avail_h = work_area_height()
+    avail_h = max(400, int(avail_h))
+    fitted = min(content_h, avail_h)
+    return fitted, fitted, content_h > ceiling, content_h > avail_h
 
 
 # ---- themed dialogs ---------------------------------------------------------
@@ -4998,14 +5029,24 @@ class App:
         self.canvas._fit_height()         # canvas now knows its real width
         self.root.update_idletasks()      # ...and its height propagates upward
         content_h = full.winfo_reqheight()
-        geom_h, min_h, over_budget = window_height_plan(content_h)
+        avail_h = work_area_height(self.root.winfo_screenheight())
+        geom_h, min_h, over_budget, clipped = window_height_plan(
+            content_h, avail_h)
         self._content_h = content_h
+        self._content_clipped = clipped
         self.root.geometry(f"1120x{geom_h}")
         self.root.minsize(940, min_h)
         _emit("info", f"layout: content height {content_h}px, canvas "
                       f"{self.canvas.winfo_reqheight()}px" +
                       (f" — OVER the {LAYOUT_MAX_CONTENT_H}px budget"
                        if over_budget else ""))
+        if clipped:
+            # Loud on purpose. The alternative -- sizing to the content and
+            # letting the window hang off the screen -- left the bottom panels
+            # unreachable with no way to shrink to them.
+            _emit("err", f"This screen is {avail_h}px tall and the window needs "
+                         f"{content_h}px. The bottom {content_h - avail_h}px "
+                         "cannot be shown — panels below the fold are cut off.")
         # re-sync the window width to the console state when un-maximized (a
         # width change requested while zoomed is deferred, not lost)
         self.root.bind("<Configure>", self._on_configure)

@@ -1685,3 +1685,32 @@ on those would be stomped within 3s. It has to be co-designed with the wave that
 rewrites that method, which is W3.
 
 +27 checks.
+
+### The screen outranks the content
+
+W1 set `minsize` equal to the measured content so the packer could never again
+drop the bottom panels in silence. Correct — until the desk changed under it.
+
+Doug rebooted and came back on three 1080p panels where the primary had been
+1440p. The same 1263px of content that fitted with 115px to spare was now 223px
+taller than the display, and because `minsize` equalled the content, the window
+**could not be shrunk to fit at all**. System control and Bluetooth radio were
+unreachable by any means: too low to see, and the window refused to get shorter.
+
+A window you cannot fit on your screen is worse than one whose overflow is
+reported. So the rule gains an exception, in this order:
+
+1. `minsize` follows the content — the starvation guard, unchanged.
+2. Unless the physical screen is shorter, in which case the SCREEN wins.
+3. And when the screen wins, the app says so, loudly, in the console.
+
+`clipped` is that signal. It is the app's cue that the CONTENT has to get
+shorter — W3 through W5 — not that the warning should be muted.
+
+`work_area_height()` reads `SPI_GETWORKAREA` rather than `winfo_screenheight()`:
+the raw screen height counts pixels the taskbar already owns, so sizing to it
+puts the last panel under the clock. On this desk that is 1040, not 1080.
+
+Measured live: `window_height_plan(1263) -> (1040, 1040, over=False, clipped=True)`.
+
+Suite 532 -> 540.
