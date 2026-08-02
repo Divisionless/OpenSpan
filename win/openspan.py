@@ -335,6 +335,137 @@ def broadcast_token(adv_state, adv_error, portal_on):
     return None
 
 
+# ---- N devices, honestly ----------------------------------------------------
+# What follows replaces a two-device status model that had been structurally
+# dead for as long as it existed. `_poll` opened with `mac_st = None`, never
+# reassigned it, and passed it into `_apply_poll`, where four surfaces read it:
+# the broadcast token, the "Mac ● up / ○ down" half of the System control line,
+# the compact-mode Mac dot, and the call-to-action line. `mac_st is not None`
+# is therefore False on every tick, so the window reported Doug's Managed Mac
+# as DOWN while it was connected -- not intermittently, always.
+#
+# The app had already outgrown that model: `self._dev_status` carries a daemon
+# status dict for EVERY configured device. The status rendering simply never
+# followed. These two functions are where it follows, and they are module-level
+# and pure for the same reason device_state_colour is: a claim buried inside a
+# 250-line _apply_poll is a claim no test can reach without building a window,
+# and _apply_poll is precisely the method whose exceptions get swallowed.
+
+
+def device_reach_state(portal_on, reachable, connected, paired, vm_up=True):
+    """(colour, text) for ONE device's card, with daemon REACHABILITY in it.
+
+    A card used to print "not paired" whether the device was genuinely
+    unpaired or its daemon simply did not answer. Those are two completely
+    different situations -- one is a thing you fix by pairing, the other is a
+    thing you fix by starting the VM or the lane -- and the only surface in the
+    window that distinguished them was a global line about a singleton device
+    that no longer exists.
+
+    This WRAPS device_state_colour, it does not restate it: when the daemon
+    answers, the returned pair is device_state_colour's, unchanged. There is
+    still exactly one truth table for connected/paired.
+
+    Unreachable is not a row in that table on purpose. It is not a state of the
+    lane, it is not KNOWING the state of the lane, so it is expressed as a
+    qualifier over the top:
+
+        unreachable + a known bond -> suppressed(WARN)  "paired · daemon
+                                      unreachable"      -- a lane we expected
+                                      to find is gone; that is worth amber, and
+                                      it takes the register like everything
+                                      else in the device area
+        unreachable + no bond      -> MUTED             "daemon unreachable"
+                                      -- nothing was expected, so nothing is
+                                      alarming; only the WORD was ever wrong
+
+    Both go through suppressed(), so an unreachable device while the portal is
+    stopped still reads in the drained register rather than shouting alongside
+    the one control that fixes it.
+
+    `vm_up` is what makes "unreachable" mean anything. With the VM DOWN, no
+    device's daemon can answer -- that is not N faults, it is one stopped
+    process -- and the words above turned an ordinary stopped desk into three
+    red-flag cards: "paired · daemon unreachable" on every one of them, for a
+    cause none of them owns. The register was already right (they were amber
+    suppressed); the SENTENCE was the alarm. So while the VM is down this
+    declines to make the claim at all and falls back to the ordinary state
+    table, and the one surface that owns the cause -- the readiness banner,
+    which says "○  Stopped" -- states it once. Same rule W3 established for the
+    portal: one alarm, at the cause.
+
+    An unanswered daemon while the VM IS up is the opposite case: something
+    that should be there is not, it belongs to that lane alone, and it keeps
+    its amber and its sentence.
+    """
+    if not reachable and vm_up:
+        if paired:
+            return (suppressed(WARN, portal_on),
+                    "paired · daemon unreachable"
+                    + ("" if portal_on else PORTAL_OFF_SUFFIX))
+        return (suppressed(MUTED, portal_on), "daemon unreachable")
+    return device_state_colour(portal_on, connected, paired)
+
+
+def device_status_rollup(devices, dev_status):
+    """Roll N per-device daemon statuses up into the counts the GLOBAL surfaces
+    need. Pure, so the aggregate can be checked without a window.
+
+    Returns a dict:
+
+        total       how many devices are configured
+        reachable   how many answered their daemon this tick
+        live        how many have the keyboard/mouse subscribed
+        live_names  those devices' names, in configured order
+        advertising names of the devices confirmed BROADCASTING by their own
+                    daemon -- never a UI guess
+        adv_state   the first transitional advertising state reported by any
+                    device ("starting"/"stopping"), else "off"
+        adv_error   the first advertising error reported by any device, else ""
+
+    Every global surface that used to reason about "the iPad" and "the Mac"
+    reads this instead. Where a surface genuinely wants an aggregate it now
+    says so in words -- "devices 2/3", "2 devices connected" -- rather than
+    naming one machine and silently meaning another.
+
+    The membership test is isinstance(dict), not `is not None`. A daemon status
+    is whatever json.loads made of the bytes on the socket, and JSON's top level
+    is legally a scalar or an array: one `5\\n` or `[]\\n` from a wrong process on
+    that port, and `status.get` is an AttributeError raised at the very TOP of
+    _apply_poll, which aborts every status surface below it inside the closure
+    _drain_ui swallows. That is the silent half-frozen window again, from a
+    stray byte. target_daemon_status normalises at the socket as well; this is
+    the second half of the same guard, because _dev_status is a plain dict that
+    anything can seed.
+    """
+    live_names, advertising = [], []
+    reachable = 0
+    adv_state, adv_error = "off", ""
+    for device in devices:
+        status = dev_status.get(device["id"])
+        if not isinstance(status, dict):
+            continue
+        reachable += 1
+        name = device.get("name", device["id"])
+        if status.get("kbd_subscribed"):
+            live_names.append(name)
+        if status.get("advertising"):
+            advertising.append(name)
+        if adv_state == "off":
+            adv_state = status.get("advertising_state", "off") or "off"
+        if not adv_error:
+            adv_error = status.get("advertising_error", "") or ""
+    return {
+        "total": len(devices),
+        "reachable": reachable,
+        "live": len(live_names),
+        "live_names": live_names,
+        "advertising": advertising,
+        "adv_state": adv_state,
+        "adv_error": adv_error,
+    }
+
+
 # ---- the device card, declared once -----------------------------------------
 # _build_device_row writes this dict and _apply_device_rows indexes it, three
 # thousand lines apart. When they drift the failure is SILENT: _poll marshals
@@ -580,6 +711,109 @@ PAD_XS = 2
 PAD_SM = 4
 PAD_MD = 6
 PAD_LG = 12
+
+
+def _section(parent, title, pady=(PAD_MD, PAD_XS), padx=16):
+    """A titled block in the left column. Returns the BODY frame to fill.
+
+    This is what the left column's three ttk.LabelFrames became. Measured on
+    this machine, at this theme, with an identical 50px body in both arms:
+
+        ttk.LabelFrame(text=..., padding=7/8)   85-87px   -> 35-37px of chrome
+        _section(...)                           69px      -> 19px of chrome
+
+    A LabelFrame spends that before it holds anything: a label band, a 1px
+    border on all four sides, and 7-8px of internal padding on all four sides.
+    Three of them stack in the one column that binds this window's height, so
+    the column was paying ~108px to say three words. A bold muted caption over
+    a hairline rule says the same three words for ~57px.
+
+    The right column's two LabelFrames (Radio options, Audio & status) are
+    deliberately LEFT ALONE. That column does not bind the window's height, so
+    changing them would buy nothing and cost a visual inconsistency for it.
+    The ttk TLabelframe theming in App._theme therefore now serves only BtPanel
+    -- it is still needed, just no longer by the left column.
+
+    `pady` is passed through rather than fixed so the vertical rhythm the
+    panels already had survives the swap exactly: the Devices block sat at
+    (PAD_XS, PAD_XS), the two below it at (PAD_MD, PAD_XS).
+    """
+    block = tk.Frame(parent, bg=BG)
+    block.pack(fill="x", padx=padx, pady=pady)
+    # bd=0/padx=0/pady=0: a tk.Label's DEFAULTS are a 1px border and 1px of
+    # internal pad on each side, which is 4px of nothing per caption.
+    tk.Label(block, text=title, bg=BG, fg=MUTED, font=("Segoe UI", 9, "bold"),
+             anchor="w", bd=0, padx=0, pady=0).pack(fill="x")
+    tk.Frame(block, bg="#2d3444", height=1).pack(fill="x", pady=(1, PAD_XS))
+    body = tk.Frame(block, bg=BG)
+    body.pack(fill="x")
+    return body
+
+
+# The wraplength a prose label starts at, before it has ever been mapped and
+# can measure itself. It is a FALLBACK and nothing else: bind_wraplength
+# replaces it with the label's real width the first time the widget is
+# configured, and every time it changes after that.
+#
+# The literals it replaces were not fallbacks. `wraplength=480` in the
+# Bluetooth-radio explainer, and 500/470 in BtPanel, were fixed numbers chosen
+# against a 1120px window; at the app's own minsize the column is ~460px wide,
+# so every one of them silently spent an extra line. A wraplength literal is a
+# height bug at any width its author did not have.
+WRAP_FALLBACK = 460
+
+
+def fit_wraplength(label, width, floor=240):
+    """Apply ONE measured width to a prose label. Returns True if it changed.
+
+    Out here as a named function rather than buried in the closure below so the
+    rule can be driven directly: a binding that is never exercised is a binding
+    nobody has checked.
+
+    `floor` is not decoration. Tk delivers <Configure> with width=1 for a
+    widget that has never been mapped -- which is exactly what happens under a
+    withdrawn root in the test suite, and briefly during startup -- and a
+    wraplength of 1 renders one word per line and multiplies the label's
+    height. Below the floor this declines to act and the fallback stands.
+    """
+    if width < floor:
+        return False
+    try:
+        current = int(str(label.cget("wraplength")))
+    except Exception:  # noqa: BLE001
+        current = -1
+    if current == width:
+        return False
+    label.config(wraplength=width)
+    return True
+
+
+# A default tk.Label's own chrome, per axis: 1px of border plus 1px of internal
+# pad on EACH side (see _section, which strips exactly this to stop paying 4px
+# per caption). <Configure> reports the widget's OUTER width, so a wraplength
+# set to that number is 4px wider than the box the text is actually laid out in
+# and the last line of a paragraph can clip. Named rather than written 4,
+# because it is a fact about the widget and not a taste.
+LABEL_CHROME_W = 4
+
+
+def bind_wraplength(label, inset=LABEL_CHROME_W, floor=240):
+    """Make a prose label wrap to its OWN width, for as long as it lives.
+
+    Setting wraplength cannot change the label's WIDTH (these all pack
+    fill="x"), so there is no Configure feedback loop; the no-op guard inside
+    fit_wraplength is there to keep a 3-second-tick-adjacent path cheap, not to
+    break a cycle.
+
+    `inset` defaults to the label's own chrome rather than to 0. Every call
+    site in this file is a default-bordered tk.Label, so 0 asked the text to
+    wrap at four pixels wider than the space it had.
+    """
+    label.config(wraplength=WRAP_FALLBACK)
+    label.bind("<Configure>",
+               lambda e: fit_wraplength(label, e.width - inset, floor),
+               add="+")
+    return label
 
 # Height budget for the whole window's content.
 #
@@ -2192,6 +2426,17 @@ def start_vm_clean():
 
 
 def target_daemon_status(target=None):
+    """One device's daemon status as a DICT, or None.
+
+    The return is normalised to a dict on purpose. Every caller does
+    `status.get(...)` after testing `status is not None`, and json.loads of a
+    legal JSON scalar or array -- `5`, `"ok"`, `[]`, which is what any other
+    process listening on that port would send -- passes that test and then
+    raises AttributeError. Both readers of this are inside the closure
+    _drain_ui swallows, at the very top of _apply_poll, so the whole status
+    surface below simply stops repainting with nothing in the console. A
+    non-dict reply is not a status; it is the same thing as no reply.
+    """
     try:
         endpoint = _device_endpoint(target)
         s = socket.create_connection(endpoint, 2)
@@ -2206,7 +2451,8 @@ def target_daemon_status(target=None):
                 break
             data += chunk
         s.close()
-        return json.loads(data.split(b"\n", 1)[0].decode())
+        reply = json.loads(data.split(b"\n", 1)[0].decode())
+        return reply if isinstance(reply, dict) else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -2220,7 +2466,12 @@ def daemon_status():
 
 
 def target_daemon_cmd(target, obj, timeout=2):
-    """Send one command to the daemon and return its reply (or None)."""
+    """Send one command to the daemon and return its reply DICT (or None).
+
+    Same normalisation as target_daemon_status, for the same reason: every
+    caller here does `reply and reply.get("ok")`, and a JSON scalar or array
+    reply satisfies the truthiness test and then raises.
+    """
     try:
         endpoint = _device_endpoint(target)
         s = socket.create_connection(endpoint, 2)
@@ -2233,7 +2484,8 @@ def target_daemon_cmd(target, obj, timeout=2):
                 break
             data += chunk
         s.close()
-        return json.loads(data.split(b"\n", 1)[0].decode())
+        reply = json.loads(data.split(b"\n", 1)[0].decode())
+        return reply if isinstance(reply, dict) else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -3928,12 +4180,17 @@ class BtPanel(tk.Frame):
         self.mac_radio = tk.StringVar(value="")
         self.scan_radio = tk.StringVar(value="")
 
-        tk.Label(self, text="Put headphones in pairing mode, Scan, then "
-                            "RIGHT-CLICK a device: Connect, Rename, Blacklist, "
-                            "Forget. Renames + blacklist are saved and survive "
-                            "re-pairing.",
-                 bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=500,
-                 justify="left").pack(anchor="w", padx=12, pady=(10, 0))
+        # wraplength is BOUND, not written down. The literal 500 that stood
+        # here was measured against a 1120px window; at this app's own minsize
+        # the column is ~460px and the same sentence quietly cost another line.
+        _scan_help = tk.Label(
+            self, text="Put headphones in pairing mode, Scan, then "
+                       "RIGHT-CLICK a device: Connect, Rename, Blacklist, "
+                       "Forget. Renames + blacklist are saved and survive "
+                       "re-pairing.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9), justify="left")
+        _scan_help.pack(anchor="w", fill="x", padx=12, pady=(10, 0))
+        bind_wraplength(_scan_help)
 
         options = ttk.LabelFrame(self, text="Radio options", padding=7)
         options.pack(fill="x", padx=12, pady=(7, 2))
@@ -3979,9 +4236,11 @@ class BtPanel(tk.Frame):
         self.scan_combo.bind("<<ComboboxSelected>>", self._on_scan_radio)
         self.radio_note = tk.StringVar(
             value="Single-radio compatibility is active.")
-        tk.Label(options, textvariable=self.radio_note, bg=BG, fg=MUTED,
-                 font=("Segoe UI", 8), anchor="w", justify="left",
-                 wraplength=470).pack(fill="x", pady=(5, 0))
+        _note_lbl = tk.Label(options, textvariable=self.radio_note, bg=BG,
+                             fg=MUTED, font=("Segoe UI", 8), anchor="w",
+                             justify="left")
+        _note_lbl.pack(fill="x", pady=(5, 0))
+        bind_wraplength(_note_lbl)
         # ---- which radios the VM actually holds -------------------------
         # A dongle that has been unplugged and plugged back in is claimed by
         # Windows, and VirtualBox only auto-captures at the moment a device
@@ -3991,9 +4250,11 @@ class BtPanel(tk.Frame):
         # it. Nothing about this scans, pairs or connects anything.
         self.radio_usb = tk.StringVar(value="Checking which radios the VM "
                                             "holds…")
-        tk.Label(options, textvariable=self.radio_usb, bg=BG, fg=MUTED,
-                 font=("Segoe UI", 8), anchor="w", justify="left",
-                 wraplength=470).pack(fill="x", pady=(6, 0))
+        _usb_lbl = tk.Label(options, textvariable=self.radio_usb, bg=BG,
+                            fg=MUTED, font=("Segoe UI", 8), anchor="w",
+                            justify="left")
+        _usb_lbl.pack(fill="x", pady=(6, 0))
+        bind_wraplength(_usb_lbl)
         button_row = tk.Frame(options, bg=BG)
         button_row.pack(fill="x", pady=(5, 0))
         self.reclaim_btn = ttk.Button(
@@ -4973,6 +5234,8 @@ class App:
         self._dev_conn = {}
         self._dev_status = {}   # device id -> last daemon status dict
         self._vm_reachable = False   # the VM answers ssh (readiness truth)
+        self._ui_faults = 0     # how many queued closures have raised; see
+        #                         _drain_ui -- capped so reporting cannot loop
         root.after(50, self._drain_ui)
         self._theme()
 
@@ -4996,10 +5259,12 @@ class App:
         self._consf = consf   # collapsed by default; opened via the header toggle
         self._ready_state = None
         self._ipad_conn = None
-        self.ready_lbl = tk.Label(consf, text="◌  Starting…", bg=PANEL,
-                                  fg=MUTED, font=("Segoe UI Semibold", 13),
-                                  anchor="w", padx=12, pady=12)
-        self.ready_lbl.pack(fill="x")
+        # NO readiness banner here. `consf` is CONSTRUCTED here and packed in
+        # exactly one place in this file -- the else-branch of _toggle_console
+        # -- and self._console_open is False at startup, so nothing inside this
+        # frame is in the default window at all. A banner built here is a widget
+        # the app writes to every three seconds and the user never sees. It
+        # lives in the Audio & status panel instead; see _build_audio_panel.
         chead = tk.Frame(consf, bg=PANEL)
         chead.pack(fill="x", padx=10)
         tk.Label(chead, text="Console — every command the app runs", bg=PANEL,
@@ -5255,9 +5520,8 @@ class App:
         # ---- Devices: one row per device, built from the config ------------
         # Nothing here is per-device-type. Every device the user has added gets
         # the identical four verbs against its own radio, port and bonds.
-        self._dev_frame = ttk.LabelFrame(
-            bridge, text="Devices", padding=7)
-        self._dev_frame.pack(fill="x", padx=16, pady=(PAD_XS, PAD_XS))
+        self._dev_frame = _section(bridge, "Devices",
+                                   pady=(PAD_XS, PAD_XS))
         self._dev_rows = {}
         self._dev_body = tk.Frame(self._dev_frame, bg=BG)
         self._dev_body.pack(fill="x")
@@ -5273,8 +5537,12 @@ class App:
         self._rebuild_device_rows()
 
         # ---- System control: every backend action, nothing hidden ----
-        sysf = ttk.LabelFrame(bridge, text="System control", padding=8)
-        sysf.pack(fill="x", padx=16, pady=(PAD_MD, PAD_XS))
+        # The title names what the line under it actually reports. It used to
+        # say "System control" over a readout claiming five things, four of
+        # which were said better somewhere else and one of which ("Mac ● up")
+        # could never be true. What is left is the daemon roll-up, so that is
+        # what the title says.
+        sysf = _section(bridge, "System control — device daemons")
         self.sys_status = tk.StringVar(value="…")
         tk.Label(sysf, textvariable=self.sys_status, bg=BG, fg=MUTED,
                  font=("Consolas", 8), anchor="w", justify="left").pack(
@@ -5297,17 +5565,21 @@ class App:
             sg.columnconfigure(c, weight=1)
 
         # ---- Radio ownership mode (switched via a clean reboot) ----
-        mode = ttk.LabelFrame(bridge, text="Bluetooth radio", padding=8)
-        mode.pack(fill="x", padx=16, pady=(PAD_MD, PAD_XS))
+        mode = _section(bridge, "Bluetooth radio")
         self.mode_lbl = tk.Label(mode, bg=BG, fg=FG, font=("Segoe UI", 10),
                                  anchor="w")
         self.mode_lbl.pack(fill="x")
-        tk.Label(mode, bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w",
-                 wraplength=480, justify="left",
-                 text="Station = the app owns the radio (iPad bridge + "
-                      "command station, near-bare-metal). Windows = native "
-                      "Bluetooth + audio. Switching cleanly reboots the PC."
-                 ).pack(fill="x", pady=(PAD_XS, PAD_MD))
+        # ONE line. The two-line version spent 32px to say in 152 characters
+        # what 81 say, and "(iPad bridge + command station, near-bare-metal)"
+        # was the parenthesis doing the spending. The label right above already
+        # names whichever mode is active; this only has to name the other one.
+        _mode_note = tk.Label(
+            mode, bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w",
+            justify="left",
+            text="Station = the app owns the radio. Windows = Bluetooth + "
+                 "audio. Switching reboots.")
+        _mode_note.pack(fill="x", pady=(PAD_XS, PAD_MD))
+        bind_wraplength(_mode_note)
         mrow = tk.Frame(mode, bg=BG)
         mrow.pack(fill="x")
         self.to_station = ttk.Button(
@@ -5407,37 +5679,48 @@ class App:
 
     # ---- Audio & status panel (always visible) + console toggle ----------
     def _build_audio_panel(self, parent):
-        """Audio + at-a-glance status, always on screen — this is what the tray
-        restores to and what the console-collapsed window shows. Readiness line,
-        VM / iPad / audio / portal dots, the connected headphones, a volume
-        slider (drives the Windows master volume, the same dial the sender's
-        GAIN mirror follows), and an L/R balance slider (written to
-        audio_balance.txt, applied per-channel inside the sender)."""
+        """Audio, plus the two status facts nothing else in the window carries:
+        whether the bridge is READY, and which headphones are connected. The
+        tray restores to this and the console-collapsed window shows it.
+
+        THE READINESS BANNER LIVES HERE, and there is exactly one of it.
+
+        It used to be built twice -- `c_ready` here and `ready_lbl` in the
+        console frame -- painted from the same r_txt/r_col two lines apart in
+        the same tick. W4 deleted this one on the grounds that the console copy
+        was its twin. It is not a twin: `consf.pack(...)` appears in exactly one
+        place in this file, the else-branch of _toggle_console, and
+        _console_open is False at startup. The console copy is CONSTRUCTED and
+        never MAPPED, so deleting this one left the default window with no
+        readiness surface at all -- and saved nothing, because the console
+        column is not in the default window either.
+
+        So the surviving copy is this one, and the reason is height. The LEFT
+        column binds this window's height; this is the right column, and it is
+        the shorter of the two. A banner here is free. The same banner packed
+        into `full` would be paid for in window height by every user on every
+        screen, to say something this panel is already titled for -- "Audio &
+        status" is exactly the claim.
+
+        The row of five status dots (`c_stat`: VM / iPad / Mac / Audio /
+        Portal) that also stood here stays deleted, and that one WAS a
+        duplicate: it restated the indicator row at the top of the window token
+        for token, and its "Mac" dot was wired to the dead two-device model, so
+        it was permanently grey whatever the Managed Mac was doing.
+        """
         p = ttk.LabelFrame(parent, text="Audio & status", padding=8)
         p.pack(fill="x", padx=12, pady=(0, 6))
 
-        self.c_ready = tk.Label(p, text="◌  Starting…", bg=BG, fg=MUTED,
-                                font=("Segoe UI Semibold", 11), anchor="w")
-        self.c_ready.pack(fill="x")
-
-        dots = tk.Frame(p, bg=BG)
-        dots.pack(fill="x", pady=(4, 0))
-        self.c_stat = {}
-        for key, label in [("vm", "VM"), ("ipad", "iPad"),
-                           ("mac", "Mac"),
-                           ("audio", "Audio"), ("portal", "Portal")]:
-            cell = tk.Frame(dots, bg=BG)
-            cell.pack(side="left", padx=(0, 12))
-            d = tk.Label(cell, text="●", bg=BG, fg=MUTED,
-                         font=("Segoe UI", 11))
-            d.pack(side="left")
-            tk.Label(cell, text=label, bg=BG, fg=MUTED,
-                     font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
-            self.c_stat[key] = d
+        # 11pt, not the console copy's 13pt with 12px of padding on every side:
+        # this is a line in a panel, not the masthead of a 390px column. The
+        # measured cost is asserted in test_status_surfaces.py section (g).
+        self.ready_lbl = tk.Label(p, text="◌  Starting…", bg=BG, fg=MUTED,
+                                  font=("Segoe UI Semibold", 11), anchor="w")
+        self.ready_lbl.pack(fill="x", pady=(0, 4))
 
         self.c_buds = tk.Label(p, text="🎧  —", bg=BG, fg=MUTED,
                                font=("Segoe UI", 10), anchor="w")
-        self.c_buds.pack(fill="x", pady=(8, 0))
+        self.c_buds.pack(fill="x", pady=(0, 0))
 
         self._vol_drag = False
         self._vol_syncing = False
@@ -6032,9 +6315,31 @@ class App:
         self._on_ui(lambda: set_button_busy(button, label))
         return lambda: self._on_ui(lambda: clear_button_busy(button))
 
+    UI_FAULT_REPORTS = 3
+
     def _drain_ui(self):
-        """UI-thread pump for ui(): run queued closures, reschedule."""
+        """UI-thread pump for ui(): run queued closures, reschedule.
+
+        THE SILENT-FREEZE POINT. `_poll` marshals the whole 200-line
+        `_apply_poll` through here as one closure. A KeyError or
+        AttributeError anywhere inside it therefore did not crash and did not
+        log: the closure aborted at the fault, every surface painted BELOW that
+        line simply stopped updating, and the app went on ticking every three
+        seconds looking half alive. There was nothing in the console, nothing
+        on stderr and no traceback anywhere. That is how W3's two verb tables
+        earned their import-time coverage check, and it is why the sys_status
+        block above no longer carries a blanket try of its own.
+
+        So the swallow stays -- a widget really can be destroyed under a queued
+        closure during shutdown, and raising out of an `after` callback would
+        take the pump down with it -- but it is no longer silent. The first few
+        faults print a full traceback to stderr and one line to the console.
+        The cap is what makes that safe: _emit routes back through ui(), so an
+        unbounded report of a fault in the logger itself would be an infinite
+        loop inside this very while.
+        """
         try:
+            faulted = False
             while True:
                 try:
                     fn = self._uiq.get_nowait()
@@ -6043,7 +6348,29 @@ class App:
                 try:
                     fn()
                 except Exception:  # noqa: BLE001
-                    pass  # e.g. a widget destroyed during shutdown
+                    faulted = True
+                    self._ui_faults = getattr(self, "_ui_faults", 0) + 1
+                    if self._closing or self._ui_faults > self.UI_FAULT_REPORTS:
+                        continue   # shutdown noise, or already said 3 times
+                    detail = traceback.format_exc()
+                    try:
+                        sys.stderr.write(detail)
+                        _emit("err",
+                              "a UI update failed — the status surfaces below "
+                              "it have stopped refreshing:\n"
+                              + detail.strip().splitlines()[-1])
+                    except Exception:  # noqa: BLE001
+                        pass
+            if not faulted:
+                # A clean drain RE-ARMS the reporting. Without this the counter
+                # is a lifetime cap: three faults anywhere in a session --
+                # including one benign widget-destroyed-at-shutdown -- would
+                # permanently re-silence the pump, which is the exact silent
+                # mode this reporting exists to close. The cap still does its
+                # real job, which is bounding a burst WITHIN one drain: _emit
+                # routes back through ui(), so an unbounded report of a fault in
+                # the logger would loop inside this very while.
+                self._ui_faults = 0
         finally:
             if not self._closing:
                 try:
@@ -7077,6 +7404,17 @@ class App:
                 continue
             state = self._dev_state(device_id)
             status = self._dev_status.get(device_id)
+            # isinstance, not `status and` / `is not None`. A daemon status is
+            # whatever json.loads made of the bytes on the socket, and JSON's
+            # top level is legally a scalar or an array -- so `5` short-circuits
+            # PAST the `status and` guard straight into `5.get(...)`, and
+            # `is not None` counts that stray byte as a reachable daemon. The
+            # AttributeError would land inside _apply_poll, whose closure
+            # _drain_ui swallows: every surface below it silently stops
+            # refreshing. device_status_rollup already guards this way; this is
+            # the same guard on the per-device path.
+            if not isinstance(status, dict):
+                status = None
             live = bool(status and status.get("kbd_subscribed"))
             paired = bool(state["paired"])
             up = status is not None
@@ -7104,14 +7442,23 @@ class App:
             # rows that remain are device_state_colour -- the same pure function
             # the indicator row uses, so the top of the window and the device
             # area cannot disagree about what is wrong.
+            #
+            # `up` is now READ OUT here as well as gating the verbs. Until this
+            # wave it only ever gated: a card whose daemon did not answer
+            # printed "not paired", exactly as if the device were genuinely
+            # unbonded, and the only surface in the window that could tell the
+            # two apart was a global "Mac ● up / ○ down" line about a singleton
+            # device -- a line that was itself structurally stuck on "down".
+            # device_reach_state is the composition, and it goes THROUGH
+            # device_state_colour and suppressed() rather than beside them.
             if radio_missing:
                 colour, text = DANGER, "radio not present"
                 paired = False
             else:
-                colour, text = device_state_colour(portal_on, live, paired)
+                colour, text = device_reach_state(portal_on, up, live, paired)
                 if not (live or paired) and not radio:
                     colour, text = MUTED, "no radio assigned"   # the more
-                    #                    useful of the two grey readings
+                    #                    useful of the three grey readings
             row["dot"].config(fg=colour)
             row["name"].config(text=f"{device.get('name', device_id)}  ·  {text}")
             row["radio"].config(
@@ -8101,7 +8448,6 @@ class App:
         # probe EVERY device's own daemon (worker thread; no Tk here)
         dev_status = self._poll_device_status() if running else {}
         self._dev_status = dev_status
-        mac_st = None
         on = self._portal_live()
         self._ensure_audio()  # watchdog: relaunch the sender if it died
         aud = bool(self.audio_proc and self.audio_proc.poll() is None)
@@ -8118,17 +8464,45 @@ class App:
             threading.Thread(
                 target=lambda: ssh_guest("sync", timeout=8, quiet=True),
                 daemon=True).start()
-        self.ui(lambda: self._apply_poll(running, st, on, aud, mac_st))
+        self.ui(lambda: self._apply_poll(running, st, on, aud))
 
-    def _apply_poll(self, running, st, on, aud, mac_st=None):
+    def _apply_poll(self, running, st, on, aud):
+        """Repaint every global status surface from one tick's facts.
+
+        There is no `mac_st` parameter any more and no read of one. It was
+        assigned None in _poll, never reassigned, and four surfaces here tested
+        it -- so `mac_st is not None` was False on every tick this app has ever
+        run, and the System control line reported the Managed Mac as DOWN while
+        it was connected. Everything that used it now comes out of
+        device_status_rollup, which is N devices wide.
+        """
         # per-indicator status row: each token coloured by ITS OWN live state.
+        roll = device_status_rollup(self.canvas.devices(), self._dev_status)
+
         def setind(key, text, good):
             self._ind[key].config(text=text, fg=(ACCENT if good else MUTED))
         setind("vm", f"VM {'●' if running else '○'}", running)
         if st:
+            # This token speaks for the FIRST configured device, under that
+            # device's OWN name and its OWN facts.
+            #
+            # It used to render the hardcoded word "iPad" over `_bonded =
+            # any(... for d in devices())` -- one device's name printed on top
+            # of an all-devices aggregate. On a three-device desk that made the
+            # token contradict the card three inches below it, on the same tick,
+            # and it was the surviving half of the same two-device model whose
+            # Mac half made System control permanently read "Mac ○ down".
+            #
+            # A token that names one machine must speak only for that machine.
+            # The aggregate already has its own home: the `devices N/M` token
+            # two places along, which says so in its text.
+            _devs = self.canvas.devices()
+            _first = _devs[0] if _devs else None
+            _fname = ((_first.get("name") or _first["id"]) if _first
+                      else "device")
             _sub = bool(st.get("kbd_subscribed"))
-            _bonded = any(self._dev_state(d["id"])["paired"]
-                          for d in self.canvas.devices())
+            _bonded = bool(
+                self._dev_state(_first["id"])["paired"]) if _first else False
             # The SAME truth table the device cards use, so the top of the
             # window and the device area cannot disagree about what is wrong.
             # The "— portal off" half of the text is dropped here because this
@@ -8138,43 +8512,42 @@ class App:
             if _txt.endswith(PORTAL_OFF_SUFFIX):
                 _txt = _txt[:-len(PORTAL_OFF_SUFFIX)]
             _mark = "●" if (_sub and on) else ("◐" if (_sub or _bonded) else "○")
-            self._ind["ipad"].config(text=f"iPad {_mark} {_txt}", fg=_col)
+            self._ind["ipad"].config(text=f"{_fname} {_mark} {_txt}", fg=_col)
         elif running:
             setind("ipad", "iPad ○ daemon starting", False)
         else:
             setind("ipad", "iPad ○ off", False)
         # one summary token for ALL devices -- the per-device detail lives in
         # the Devices panel, so the row does not grow a column per machine.
-        _devs = self.canvas.devices()
-        if _devs:
-            _liveN = sum(
-                1 for d in _devs
-                if (self._dev_status.get(d["id"]) or {}).get("kbd_subscribed"))
+        # The dict key is still "mac" for the same reason the file kept it: it
+        # is a slot in self._ind, not a claim about a machine. The TEXT is an
+        # honest aggregate and says the word "devices".
+        if roll["total"]:
             self._ind["mac"].config(
-                text=f"devices {_liveN}/{len(_devs)}",
-                fg=(ACCENT if _liveN else MUTED))
+                text=f"devices {roll['live']}/{roll['total']}",
+                fg=(ACCENT if roll["live"] else MUTED))
         else:
             self._ind["mac"].config(text="no devices", fg=MUTED)
         setind("portal", f"portal {'● ON' if on else '○ off'}", on)
         setind("audio", f"audio {'●' if aud else '○'}", aud)
-        # Honest broadcast state, read straight from the daemon -- never a UI
-        # guess: if it says BROADCASTING the machine really is advertising.
-        _ipad_adv = bool(st and st.get("advertising"))
-        _mac_adv = bool(mac_st and mac_st.get("advertising"))
-        _adv = _ipad_adv or _mac_adv
-        _adv_names = " + ".join(
-            name for name, enabled in (
-                ("iPad", _ipad_adv), ("Mac", _mac_adv)) if enabled)
+        # Honest broadcast state, read straight from each device's own daemon
+        # -- never a UI guess: if a daemon says BROADCASTING that machine
+        # really is advertising. This used to be exactly two names, "iPad" and
+        # "Mac", the second of which could never light because its status was
+        # the dead `mac_st`. Now it names whichever devices are actually
+        # beaconing, however many there are.
+        _adv = bool(roll["advertising"])
+        _adv_names = " + ".join(roll["advertising"])
         setind(
             "bcast",
             (f"📡 {_adv_names} BROADCASTING"
-             if _adv else "📡 not broadcasting") if (st or mac_st) else "",
+             if _adv else "📡 not broadcasting") if roll["reachable"] else "",
             _adv)
         # The boolean above is confirmed BlueZ state. Transitional and failure
         # states get their own honest, non-green rendering.
-        _adv_state = st.get("advertising_state", "off") if st else "off"
-        _adv_error = st.get("advertising_error", "") if st else ""
-        if st and not _adv:
+        _adv_state = roll["adv_state"]
+        _adv_error = roll["adv_error"]
+        if roll["reachable"] and not _adv:
             # broadcast_token, not a raw fg=WARN. This token was the last
             # full-strength amber in the file outside the Warn.TButton style,
             # and while the portal is down it is a consequence like every other
@@ -8221,7 +8594,6 @@ class App:
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
         connected = bool(st and st.get("kbd_subscribed"))
-        mac_connected = bool(mac_st and mac_st.get("kbd_subscribed"))
         # snapshot for the tray menu (built on the Tk thread; must never block)
         self._cache = {"running": running, "connected": connected, "on": on,
                        "aud": aud,
@@ -8301,18 +8673,39 @@ class App:
                                "window expired — press Pair or Connect again "
                                "when ready.")
         # secondary status readout — set AFTER the connect-edge auto-start so
-        # `on` reflects the portal we may have just started this tick
-        try:
-            self.sys_status.set(
-                f"VM {'● up' if running else '○ down'}    "
-                f"keyboard {'● up' if st is not None else '○ down'}"
-                f"{'  (iPad subscribed)' if (st and st.get('kbd_subscribed')) else ''}"
-                f"    Mac {'● up' if mac_st is not None else '○ down'}"
-                f"{' (subscribed)' if mac_connected else ''}"
-                f"    audio {'● on' if aud else '○ off'}"
-                f"    portal {'● on' if on else '○ off'}")
-        except Exception:  # noqa: BLE001
-            pass
+        # `on` reflects the portal we may have just started this tick.
+        #
+        # ONE fact, and it is this line's alone: how many device daemons
+        # ANSWERED this tick. Everything else it used to carry had a better
+        # home:
+        #
+        #   * "Mac ● up / ○ down" was the dead two-device model. It is gone,
+        #     not relocated.
+        #   * "VM", "audio" and "portal" are three tokens in the indicator row
+        #     at the top of this window, in a larger font, always visible.
+        #     Restating them here in 8pt was the same duplication the five
+        #     compact-mode dots were deleted for, and the same argument
+        #     retires it.
+        #   * "keyboard ● up" was daemon_status(), which is by its own
+        #     docstring the FIRST configured device's daemon. Since this wave
+        #     every card reports its own daemon's reachability, so that claim
+        #     now belongs to a card and not to a global line.
+        #
+        # What no card and no token has is the roll-up, which is exactly the
+        # shape the indicator row's `devices N/M` already uses for the other
+        # half of the same question: that token counts SUBSCRIBED, this line
+        # counts ANSWERING, and the difference between the two numbers is the
+        # difference between "the lane is idle" and "the lane is not there".
+        #
+        # No blanket try/except around it any more. This block was wrapped so
+        # that a fault here could not abort the tick, but the wrap made the
+        # fault INVISIBLE while everything below it kept running: the classic
+        # half-frozen window with nothing in any log. _drain_ui now reports
+        # what it swallows, so a real fault surfaces in the console instead.
+        self.sys_status.set(
+            f"device daemons {'●' if roll['reachable'] else '○'} "
+            f"{roll['reachable']}/{roll['total']} answering"
+            if roll["total"] else "no devices configured")
         # while hidden in the tray, make sure the icon still exists (an
         # explorer.exe restart wipes tray icons); if it can't be restored,
         # bring the window back — the app must never be strandable
@@ -8322,14 +8715,11 @@ class App:
                 _emit("event", "tray icon lost — bringing the window back.")
                 self._from_tray()
         # ---- compact-mode widgets (cheap; update even when hidden) ----
-        colors = {True: ACCENT, False: MUTED}
-        self.c_stat["vm"].config(fg=colors[bool(running)])
-        self.c_stat["ipad"].config(
-            fg=colors[bool(st and st.get("kbd_subscribed"))])
-        self.c_stat["mac"].config(fg=colors[mac_connected])
-        self.c_stat["audio"].config(fg=colors[bool(aud)])
-        self.c_stat["portal"].config(fg=colors[bool(on)])
-        self.c_ready.config(text=r_txt, fg=r_col)
+        # The five c_stat dots and the second c_ready banner that stood here
+        # are deleted, not moved. They were a verbatim second copy of the
+        # indicator row and of ready_lbl, painted from the same variables in
+        # the same tick -- and one of the five, "Mac", was wired to the dead
+        # two-device model and could never light at all.
         names = self.bt_panel._connected_names if running else []
         self.c_buds.config(
             text="🎧  " + (", ".join(names) if names
@@ -8368,13 +8758,18 @@ class App:
                 # kind of failure that turns into "the app just sits there"
                 self.status.set(getattr(self, "_boot_why", "")
                                 or "Booting the bridge… (~90s)")
-            elif connected:
-                self.status.set("iPad connected — keyboard & mouse bridging.")
-            elif mac_connected:
-                self.status.set("Device connected — keyboard & mouse bridging.")
+            # Named when one device is live, counted when several are. The
+            # branch this replaces was "iPad connected" / "Device connected",
+            # and the second of those was unreachable: it was gated on
+            # mac_connected, which was derived from the dead `mac_st`.
+            elif roll["live"] == 1:
+                self.status.set(f"{roll['live_names'][0]} connected — "
+                                "keyboard & mouse bridging.")
+            elif roll["live"]:
+                self.status.set(f"{roll['live']} devices connected — "
+                                "keyboard & mouse bridging.")
             else:
-                self.status.set(
-                    "Ready — pair or connect the iPad or managed Mac.")
+                self.status.set("Ready — pair or connect a device.")
         # the Pair button stays a static "Pair"; connection state is shown by the
         # indicator colours + which of Connect/Disconnect/Unpair are enabled.
         # button_is_busy is the guard that makes the pending state survive: this

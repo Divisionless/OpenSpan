@@ -1787,3 +1787,74 @@ instantiated anywhere including tests — still carries its own `IPAD_IDLE_LINE`
 painting with no portal awareness. The same divergent-second-table shape that
 produced the fatal above. W5 deletes it. `_portal_changed` also still calls
 `_terminate_role_process` on the UI thread.
+
+### W4 — the app stops reporting a two-device world it left behind
+
+`mac_st = None` was a hardcoded literal, never reassigned, threaded through
+`_apply_poll` and read at four sites. So
+
+    f"Mac {'● up' if mac_st is not None else '○ down'}"
+
+could never be true. System control has been reporting the Managed Mac as DOWN
+while it was connected, structurally, for as long as that code existed — and the
+`mac` dot was permanently grey for the same reason. Meanwhile `_dev_status`
+already held per-device daemon state for every device: the app outgrew the
+two-device (iPad + Mac) model and the status rendering never followed.
+
+Everything that read it now comes from `device_status_rollup()`, N devices wide.
+The verifier proved the fix by execution rather than structure, driving the real
+`_apply_poll` on the live 3-device shape: `sys_status` reports
+`device daemons ● 2/3 answering`, and the Mac reads connected on every surface.
+
+**Reachability moved onto the device.** `up = status is not None` was gate-only,
+so a card printed "not paired" whether the device was genuinely unpaired or its
+daemon was unreachable — two very different problems under one label, and the
+only surface that distinguished them was a global line about a singleton that no
+longer exists.
+
+**Three fatals the adversarial pass caught after the suite was green:**
+
+1. Deleting `c_ready` removed the app's ONLY readiness banner from the default
+   view. Its supposed twin `ready_lbl` lived inside `consf`, and `consf.pack`
+   appears exactly once in the file — inside `_toggle_console`'s else-branch,
+   with `_console_open = False` at startup. It was never packed. The deletion
+   also saved 0px, because the audio panel is in the right column, which does
+   not bind height. One banner now, in the right column, always visible.
+2. W4 killed the Mac half of the two-device model and left the iPad half, which
+   is worse than dead — it was FALSE. `_ind["ipad"]` rendered a hardcoded device
+   NAME over `any(paired for ALL devices)`, so on a three-device desk it
+   contradicted the card three inches below it on the same tick. It now speaks
+   for the first device under that device's own name and its own facts. The
+   aggregate already has a home: the `devices N/M` token, which says so in words.
+3. The one-fact-one-surface test was a duplicate-LITERAL detector: each marker
+   was the exact f-string of the call it located, so it could only fail on a
+   copy-paste, and three of its six facts already had three or four writers.
+
+`_drain_ui` still swallows — a widget really can die under a queued closure at
+shutdown — but the first faults now print a traceback. The cap bounds a burst
+WITHIN one drain (`_emit` routes back through `ui()`, so an unbounded report of a
+fault in the logger loops inside that same `while`), and a clean drain re-arms
+it. Without the re-arm the counter was a lifetime cap and three benign faults
+would permanently restore the silence it exists to break.
+
+`isinstance(status, dict)`, not `is not None`: a daemon status is whatever
+`json.loads` made of the socket bytes, and JSON's top level is legally a scalar.
+One stray `5` short-circuits past `status and` straight into `5.get(...)`, at the
+very top of `_apply_poll`, inside the closure `_drain_ui` swallows.
+
+Suite 714 -> 795 checks across 16 files.
+
+**Known red, and NOT from this wave.** `test_portal_invariants.py` fails two
+checks against the live config after the desk was rearranged. Bisected: identical
+failures on the W3 tree with none of W4's changes.
+
+    mac/mac-2 pointer lands 1373 desk units from the model after a 2129-unit jump
+    mac: nothing reached the wire
+
+The new arrangement has a DIRECT crossing onto Mac Display 2 — the 90°-rotated
+3840x2160 panel, 1569 x 2789 desk units. Every Mac crossing used to land on
+mac-3. One HID report is worth ~190 target px on a compensated device, so a
+~2100-unit jump onto that portrait panel is not fully paid in reports and the
+model believes the pointer is about half a jump from where it is. Config-driven,
+affects the shipped build too, and wants its own investigation rather than a
+patch bundled here.
