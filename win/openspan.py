@@ -166,6 +166,20 @@ DANGER = "#e06c68"
 SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
 BORDER = "#39435a"  # card edge for the in-frame modal
 
+# ---- pressed feedback -------------------------------------------------------
+# ttk's "active" state is HOVER, not pressed. Every button map in this file used
+# only "active", so a click produced no change on the button at all: you pressed
+# something, nothing moved, and the only way to learn whether it had registered
+# was to watch for a side effect somewhere else in the window. Several actions
+# here are threaded and take seconds, so "no side effect yet" and "the click
+# missed" looked identical.
+#
+# These are one step further along each button's own hover ramp, so a press
+# always reads as more of what hover already started.
+PRESS = "#3d4860"         # TButton        : CARD -> #2d3444 hover -> this
+PRESS_ACCENT = "#35ad70"  # Accent.TButton : #1f6f43 -> #2a8f5c hover -> this
+PRESS_DANGER = "#8b4043"  # Danger.TButton : #53292a -> #6e3335 hover -> this
+
 # One look for every popup menu in the app. disabledforeground is not decoration
 # here: a menu's title line and its read-only Windows facts are disabled ENTRIES,
 # and Tk's default disabled grey is very nearly invisible on this background.
@@ -805,13 +819,18 @@ def _theme_startup_buttons():
     st.configure("TButton", background=CARD, foreground=FG,
                  bordercolor=CARD, focuscolor=CARD, relief="flat",
                  padding=8, font=("Segoe UI", 10))
-    st.map("TButton", background=[("active", "#2d3444")])
+    # "pressed" BEFORE "active": ttk takes the first matching state, and a held
+    # button is both pressed and hovered at once. Active-first would mean the
+    # press never showed.
+    st.map("TButton", background=[("pressed", PRESS), ("active", "#2d3444")])
     st.configure("Accent.TButton", background=ACCENT_DIM,
                  foreground="#eafff3", font=("Segoe UI Semibold", 10))
-    st.map("Accent.TButton", background=[("active", "#2a8f5c")])
+    st.map("Accent.TButton",
+           background=[("pressed", PRESS_ACCENT), ("active", "#2a8f5c")])
     st.configure("Danger.TButton", background="#53292a",
                  foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
-    st.map("Danger.TButton", background=[("active", "#6e3335")])
+    st.map("Danger.TButton",
+           background=[("pressed", PRESS_DANGER), ("active", "#6e3335")])
 
 
 def _elevation_gate():
@@ -5197,20 +5216,31 @@ class App:
         st.configure("TButton", background=CARD, foreground=FG,
                      bordercolor=CARD, focuscolor=CARD, relief="flat",
                      padding=(10, 3), font=("Segoe UI", 10))
-        st.map("TButton", background=[("active", "#2d3444")])
+        # NOTE: the TButton map here is superseded a few lines down, where the
+        # disabled colours are added. Both carry "pressed" so neither can be the
+        # one that silently drops it.
+        st.map("TButton",
+               background=[("pressed", PRESS), ("active", "#2d3444")])
         st.configure("Accent.TButton", background=ACCENT_DIM,
                      foreground="#eafff3", font=("Segoe UI Semibold", 10))
-        st.map("Accent.TButton", background=[("active", "#2a8f5c")])
+        st.map("Accent.TButton",
+               background=[("pressed", PRESS_ACCENT), ("active", "#2a8f5c")])
         st.configure("Danger.TButton", background="#53292a",
                      foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
-        st.map("Danger.TButton", background=[("active", "#6e3335")])
+        st.map("Danger.TButton",
+               background=[("pressed", PRESS_DANGER), ("active", "#6e3335")])
         # sliders (compact mode's volume/balance)
         st.configure("Horizontal.TScale", background=BG, troughcolor=CARD,
                      bordercolor=CARD, lightcolor=ACCENT_DIM,
                      darkcolor=ACCENT_DIM)
+        # THE EFFECTIVE MAP: this replaces the TButton map set above, so a
+        # "pressed" entry that exists only up there would be dead. Order is
+        # load-bearing -- disabled first (a disabled button must never look
+        # pressed), then pressed, then hover.
         st.map("TButton",
                foreground=[("disabled", "#5b6172")],
-               background=[("disabled", PANEL), ("active", "#2d3444")])
+               background=[("disabled", PANEL), ("pressed", PRESS),
+                           ("active", "#2d3444")])
         # LabelFrame (the panel that was glaringly light)
         st.configure("TLabelframe", background=BG, bordercolor="#2d3444",
                      relief="solid", borderwidth=1)

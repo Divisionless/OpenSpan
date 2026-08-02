@@ -1652,3 +1652,36 @@ Suite 399 -> 505 checks across 12 files.
 with no per-kind validation, so a desktop resolution can still be typed onto an
 iPad display through "Edit all screens…" — the exact hazard `_resolution_presets`
 prevents on the right-click path. Pre-existing; belongs to a later wave.
+
+### Pressed feedback — ttk's "active" is hover, not pressed
+
+Doug, 2 August: *"when i click a button i need visual indication it has been
+clicked on the button itself. it needs to react in some way, even in a pending
+state while the action runs."*
+
+One misreading of ttk ran through every button map in the file. **`active` is the
+HOVER state.** Every map here specified only `("active", …)`, so pressing a button
+changed nothing about the button. The only way to learn a click had registered was
+to watch for a side effect somewhere else in the window — and 26 actions in this
+app run on a worker thread and take seconds, so "hasn't happened yet" and "the
+click missed" were indistinguishable. Exactly two buttons in the app (`vm_btn`)
+had ad-hoc feedback, out of roughly fifty.
+
+Two things are load-bearing and neither is obvious:
+
+**Order.** ttk takes the FIRST matching state, and a held button is `pressed` AND
+`active` at the same time. Listing `active` first means the press never shows.
+`disabled` must precede both, or a disabled button can render as pressed.
+
+**There are two TButton maps and the later one wins.** `_theme_widgets` sets one,
+then replaces it a few lines down with the version carrying the disabled colours.
+A `pressed` entry added only to the first is dead code — and it would test green
+against `ttk.Style` if the test happened to inspect the other one. Both carry it
+now, and `test_button_feedback.py` asserts EVERY map rather than the first found.
+
+The pending/busy half of the request is deliberately NOT here. `_apply_device_rows`
+re-enables the four per-device verbs on a 3-second poll tick, so a busy state set
+on those would be stomped within 3s. It has to be co-designed with the wave that
+rewrites that method, which is W3.
+
++27 checks.
