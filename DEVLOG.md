@@ -1527,3 +1527,22 @@ second — 34 checks, suite now 352.
 **Consequence to be aware of:** `0.747` is no longer typeable from the slider; the
 nearest notch is `0.75`. Matching the Managed Laptop to the Mac by hand means
 either accepting `0.75` on both or editing `openspan_config.json` directly.
+
+### Applied: every device on the 0.75 notch
+
+All three devices are now `sensitivity: 0.75` — `Managed Mac` from 0.747,
+`Managed Laptop` from its never-tuned 1.0, `iPad` from 0.686.
+
+Doug's rule, and it is the better one: **no stored value that the settings
+cannot reproduce.** A number reachable only by hand-editing JSON is a number
+nobody can explain later, and both of the odd values here came from the
+old slider's two-places-shown / three-places-stored split rather than from
+anyone choosing them.
+
+That makes the Managed Laptop prediction from the previous entry cleanly
+testable at last: identical curve, identical compensation, identical
+sensitivity. If the two Macs still feel different, the cause is outside this
+table — which was the point of closing the gap.
+
+The iPad moved 0.686 → 0.75 (+9%), the largest single change here, so that is
+the one to watch for feel.
