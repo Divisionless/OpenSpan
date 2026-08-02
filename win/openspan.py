@@ -1500,6 +1500,77 @@ def _terminate_role_process(proc, timeout=4):
         pass
 
 
+# EsotericOS coexistence, GUI side. The portal process is the one that holds
+# Local\EsotericOS.InputCaptureLease (win/openspan_portal.py, InputCaptureLease)
+# and this process never captures anything, so strictly nothing is required
+# here: when the portal is hard-killed mid-capture by _terminate_role_process
+# above, Windows marks the mutex ABANDONED and the next waiter reclaims it. That
+# is exactly why the contract specifies a mutex rather than an event, and
+# EsotericOS has verified that path end to end.
+#
+# What this adds is timing, not correctness. An abandoned mutex is only
+# collected when somebody next waits on it, so between the taskkill and
+# EsotericOS's next probe the lease reads as held by a process that no longer
+# exists. Taking it and handing it straight back COLLECTS the abandonment at the
+# moment we know the holder is gone. It costs one mutex round trip on a worker
+# thread and it can only ever shorten the window, never lengthen it.
+LEASE_NAME = r"Local\EsotericOS.InputCaptureLease"
+
+
+def _clear_input_capture_lease(why=""):
+    """Collect an abandoned input-capture lease. Never raises, never blocks
+    the caller: the whole thing runs on a throwaway daemon thread, because a
+    contended wait would otherwise stall the Tk thread for up to a second.
+
+    Acquire and release happen on ONE thread -- this one. A Windows mutex is
+    thread-owned and ReleaseMutex from anywhere else fails while leaving it
+    held, which is the precise failure this is supposed to prevent.
+    """
+    def work():
+        handle = None
+        k32 = None
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateMutexW.restype = ctypes.c_void_p   # HANDLE: the default
+            k32.CreateMutexW.argtypes = [ctypes.c_void_p,  # 32-bit restype
+                                         ctypes.c_long,    # truncates a 64-bit
+                                         ctypes.c_wchar_p]  # handle
+            k32.WaitForSingleObject.restype = ctypes.c_ulong
+            k32.WaitForSingleObject.argtypes = [ctypes.c_void_p,
+                                                ctypes.c_ulong]
+            k32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = k32.CreateMutexW(None, False, LEASE_NAME)
+            if not handle:
+                return
+            # 1000 ms, not 0: EsotericOS probes the lease by taking it and
+            # handing it straight back, so a zero-timeout wait can lose that
+            # race and report a free lease as contended.
+            rc = k32.WaitForSingleObject(handle, 1000)
+            if rc in (0x00000000, 0x00000080):   # WAIT_OBJECT_0/WAIT_ABANDONED
+                k32.ReleaseMutex(handle)
+                if rc == 0x00000080:
+                    _emit("event", "input-capture lease reclaimed after the "
+                                   "portal exited without releasing it"
+                                   + (f" ({why})" if why else ""))
+            # A timeout means something else genuinely holds it -- not ours to
+            # break, and not ours to complain about. Stay quiet.
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            try:
+                if handle and k32 is not None:
+                    k32.CloseHandle(handle)
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        threading.Thread(target=work, name="openspan-lease-reset",
+                         daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _launch_elevated():
     """Request UAC elevation. The caller has already released the app mutex."""
     reset_name = "PYINSTALLER_RESET_ENVIRONMENT"
@@ -2669,8 +2740,66 @@ def get_clipboard_text():
         u.CloseClipboard()
 
 
-def set_clipboard_text(text):
-    """Put Unicode text on the Windows clipboard (stdlib ctypes)."""
+# ---- clipboard privacy markers -----------------------------------------
+#
+# Every byte set_clipboard_text() writes came off an iPad over the LAN relay,
+# and CLIPBOARD_DESIGN.md 4 is explicit that it carries passwords. Windows'
+# own Win+V history, its cloud-clipboard sync, and any third-party clipboard
+# manager would otherwise record it. Four documented opt-out FORMATS say "do
+# not keep this", and they go on the clipboard alongside the data.
+#
+#   Clipboard Viewer Ignore                        presence flag
+#   ExcludeClipboardContentFromMonitorProcessing   presence flag
+#   CanIncludeInClipboardHistory                   DWORD, 0 = do not keep
+#   CanUploadToCloudClipboard                      DWORD, 0 = do not sync
+#
+# The first three are what EsotericOS's clipboard-history gate reads, and that
+# gate fails closed -- see D:\EsotericOS\docs\INTEROP.md, "Clipboard". The
+# fourth is not in their gate; it is what stops Windows itself syncing the
+# payload to the Microsoft account.
+#
+# Registered ONCE, here at import. RegisterClipboardFormatW is idempotent, is
+# case-insensitive, and returns the same id for the same name in every process
+# on the session -- so our ids and EsotericOS's agree by construction rather
+# than by arrangement. Doing it here rather than inside the Open/Close pair
+# keeps atom-table work off the global clipboard lock.
+#
+# THE VISIBLE CONSEQUENCE, stated because it is a behaviour change and not a
+# side effect: text copied on the iPad no longer appears in Win+V on this PC
+# and no longer syncs to the Microsoft account. That is the correct trade for
+# password-bearing relay traffic, and it is the only thing this changes.
+_CLIP_MARK_NAMES = [
+    ("Clipboard Viewer Ignore", 0),
+    ("ExcludeClipboardContentFromMonitorProcessing", 0),
+    ("CanIncludeInClipboardHistory", 0),
+    ("CanUploadToCloudClipboard", 0),
+]
+
+try:
+    import ctypes as _ct_mark
+    _ct_mark.windll.user32.RegisterClipboardFormatW.restype = _ct_mark.c_uint
+    _ct_mark.windll.user32.RegisterClipboardFormatW.argtypes = [
+        _ct_mark.c_wchar_p]
+    CLIPBOARD_PRIVACY_FORMATS = [
+        (_ct_mark.windll.user32.RegisterClipboardFormatW(name), value)
+        for name, value in _CLIP_MARK_NAMES]
+except Exception:  # noqa: BLE001
+    CLIPBOARD_PRIVACY_FORMATS = []
+
+# All four must have registered. A zero id is a format that does not exist.
+CLIPBOARD_MARKING_AVAILABLE = (
+    len(CLIPBOARD_PRIVACY_FORMATS) == len(_CLIP_MARK_NAMES)
+    and all(fmt for fmt, _ in CLIPBOARD_PRIVACY_FORMATS))
+
+
+def set_clipboard_text(text, private=True):
+    """Put Unicode text on the Windows clipboard (stdlib ctypes).
+
+    private=True marks the write so clipboard-history tools skip it. The relay
+    always wants that; it is a parameter rather than a constant only so that a
+    future non-relay caller can opt out deliberately, in code, at its own call
+    site -- never from config, and never by accident.
+    """
     import ctypes
     CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
     u, k = ctypes.windll.user32, ctypes.windll.kernel32
@@ -2683,6 +2812,26 @@ def set_clipboard_text(text):
     k.GlobalFree.argtypes = [ctypes.c_void_p]
     u.SetClipboardData.restype = ctypes.c_void_p
     u.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
+    if private and not CLIPBOARD_MARKING_AVAILABLE:
+        # FAIL CLOSED. An unmarked write of relayed text is the exact outcome
+        # this mechanism exists to prevent, so it is better to drop the paste
+        # than to record a password in clipboard history. The relay surfaces
+        # False as a 500 and the iPad shortcut can simply be run again.
+        return False
+
+    def _alloc_dword(value):
+        h = k.GlobalAlloc(GMEM_MOVEABLE, 4)
+        if not h:
+            return None
+        p = k.GlobalLock(h)
+        if not p:
+            k.GlobalFree(h)
+            return None
+        ctypes.memmove(p, ctypes.byref(ctypes.c_uint32(value)), 4)
+        k.GlobalUnlock(h)
+        return h
+
     buf = ctypes.create_unicode_buffer(text)
     size = ctypes.sizeof(buf)
     for _ in range(5):
@@ -2692,7 +2841,29 @@ def set_clipboard_text(text):
     else:
         return False
     try:
+        # EmptyClipboard wipes EVERYTHING, markers from a previous write
+        # included, so it comes first and the markers are re-placed every time.
         u.EmptyClipboard()
+        # MARKERS BEFORE THE PAYLOAD, in the SAME Open/Close pair. Listeners are
+        # notified once, on CloseClipboard, which is what makes markers and text
+        # atomic to an observer -- their order among themselves is invisible.
+        # Placing them first is for the abort path: a failure midway leaves
+        # markers and no text, rather than unmarked password text.
+        if private:
+            for fmt, value in CLIPBOARD_PRIVACY_FORMATS:
+                # REAL DATA, never NULL. SetClipboardData(fmt, NULL) means
+                # delayed rendering: the format shows as available and the
+                # OWNER WINDOW is asked for the bytes later, via
+                # WM_RENDERFORMAT. OpenClipboard(NULL) leaves the clipboard
+                # with no owner, so nothing can ever render it -- and
+                # EsotericOS reads CanIncludeInClipboardHistory's DWORD rather
+                # than only testing that the format is present.
+                h = _alloc_dword(value)
+                if not h:
+                    return False
+                if not u.SetClipboardData(fmt, h):
+                    k.GlobalFree(h)  # ownership passes only on SUCCESS
+                    return False
         h = k.GlobalAlloc(GMEM_MOVEABLE, size)
         if not h:
             return False
@@ -2826,13 +2997,21 @@ class ClipboardServer:
                         self._plain(400, b"OpenSpan relay: JSON body needs "
                                          b'a string "text" field')
                         return
+                # THE ONLY CLIPBOARD WRITE IN THE TREE. private defaults to
+                # True and is not overridden here: relayed text is exactly what
+                # must stay out of clipboard history.
                 if set_clipboard_text(body):
                     self._plain(200, b"ok")
                     _emit("event", "clipboard received from the iPad "
                                    f"({len(body)} chars)")
                 else:
                     self._plain(500)
-                    _emit("err", "clipboard write failed (clipboard busy?)")
+                    _emit("err", "clipboard write failed "
+                          + ("(clipboard busy?)"
+                             if CLIPBOARD_MARKING_AVAILABLE else
+                             "— the privacy markers would not register, so "
+                             "the write was refused rather than land "
+                             "unmarked in clipboard history"))
 
         try:
             self.httpd = http.server.ThreadingHTTPServer(
@@ -6672,6 +6851,10 @@ class App:
                     _terminate_role_process(p)
             except Exception:  # noqa: BLE001
                 pass
+        # The portal was just hard-killed and may have been holding the
+        # coexistence lease. Nothing depends on this -- abandonment heals it --
+        # but the whole point of a full stop is that nothing lingers.
+        _clear_input_capture_lease("full stop")
         try:
             if vm_running():
                 vbox("controlvm", VM, "poweroff")
@@ -6797,6 +6980,13 @@ class App:
             # acceleration edit immediately.
             _terminate_role_process(self.portal_proc)
             self.portal_proc = None
+            # THIS is the path EsotericOS's spec names by hand: a geometry
+            # change is two clicks away in normal use and it taskkills the
+            # portal outright, so a capture in progress ends with the lease
+            # held by a dead process. Collect it before the replacement starts
+            # -- the new portal creates the same named mutex and would
+            # otherwise inherit a stale abandonment on its first crossing.
+            _clear_input_capture_lease("portal restarted for a geometry change")
             self._start_portal_process()
             self.log("event", "portal geometry reloaded from the arrangement.")
 
@@ -6870,6 +7060,11 @@ class App:
                 try:
                     _terminate_role_process(proc)
                 finally:
+                    # Stopping the portal mid-capture leaves the lease held by
+                    # a dead process until somebody waits on it. Collect it now
+                    # so EsotericOS comes back the moment the bridge is down,
+                    # not whenever it next happens to probe.
+                    _clear_input_capture_lease("portal stopped")
                     done()
                     self.ui(lambda: self._render_portal_button(
                         self._portal_live()))

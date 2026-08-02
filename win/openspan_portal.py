@@ -363,6 +363,258 @@ user32.GetSystemMetrics.restype = ctypes.c_int
 kernel32.GetModuleHandleW.restype = ctypes.c_void_p
 kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
 
+# ---- EsotericOS coexistence: the input-capture lease -------------------
+#
+# WHAT THIS IS. EsotericOS is separate software on this machine that installs
+# its own low-level keyboard and mouse hooks. Two such programs cannot see each
+# other, and Windows calls hooks in reverse installation order -- so which one
+# sees an event first is decided by nothing more principled than which launched
+# last. While OpenSpan is capturing, the user is not looking at this desktop at
+# all: the pointer and the keyboard are on an iPad or a Mac. EsotericOS acting
+# on that input is simply wrong. Holding this lease is how it is told to stand
+# down; releasing it is how it is told to come back.
+#
+# The other half of the contract is D:\EsotericOS\docs\INTEROP.md. Ours is
+# D:\OpenSpan\docs\INTEROP.md. Neither restates the other.
+#
+# WHY A MUTEX AND NOT AN EVENT. A mutex is abandonment-detectable. The OpenSpan
+# GUI hard-kills this process with `taskkill /PID <pid> /T /F`
+# (openspan.py _terminate_role_process, line 1487) on every geometry change --
+# two clicks away in normal use -- and no teardown code of ours runs. Under an
+# event, "OpenSpan is capturing" would stay signalled forever and EsotericOS
+# would be silently and permanently suspended, which is the worst available
+# failure mode for a coexistence contract. Under a mutex the OS marks it
+# abandoned, the next waiter receives WAIT_ABANDONED, and ownership transfers.
+# That is why WAIT_ABANDONED is treated below as a SUCCESSFUL acquire and not as
+# an error: it is the mechanism working.
+#
+# WHY A DEDICATED THREAD. A Windows mutex is owned by the THREAD that acquired
+# it. ReleaseMutex from any other thread returns FALSE and THE MUTEX STAYS HELD
+# -- and because nobody died, nothing self-heals. Capture in this file does not
+# start and end on one thread:
+#
+#   leave() is called from the keyboard hook thread (_kbd_proc), the mouse hook
+#           thread (_route_motion, _jump_nearest), the sender thread (send), and
+#           from _status_watcher's own thread -- a dropped lane tears capture
+#           down from a thread that never acquired anything.
+#   enter() is called from the mouse hook thread (_mouse_proc) and the keyboard
+#           hook thread (_kbd_proc, _enter_nearest).
+#
+# So exactly one thread -- the one started by InputCaptureLease.start() -- owns
+# the handle for its entire life, and enter()/leave() only POST to it. No hook
+# thread, no watcher thread and no sender thread ever touches the handle.
+#
+# WHY EVERY CALL IS GUARDED. enter() and leave() run INSIDE low-level hook
+# procedures. An exception raised there is a dead keyboard and mouse, on a
+# machine whose input may already be pointed at another device. So the posting
+# side cannot raise and cannot block, and the lease thread cannot die: a mutex
+# that will not create, a handle that is denied, a wait that fails -- each is
+# logged once and then ignored, and capture proceeds exactly as it did before
+# this contract existed.
+#
+# WITH ESOTERICOS ABSENT this is a behavioural no-op: one CreateMutexW at
+# startup and one uncontended wait/release per crossing, on a mutex no other
+# process opens. Nothing about capture changes.
+LEASE_NAME = r"Local\EsotericOS.InputCaptureLease"
+# Their spec asks for a timeout and specifically NOT zero: EsotericOS probes the
+# lease by taking it and handing it straight back, so a zero-timeout acquire can
+# lose that race and wrongly conclude the lease is unavailable.
+LEASE_TIMEOUT_MS = 1000
+_WAIT_OBJECT_0 = 0x00000000
+_WAIT_ABANDONED = 0x00000080
+_WAIT_TIMEOUT = 0x00000102
+
+# A PRIVATE kernel32 binding, deliberately not the module-level `kernel32`.
+# Setting .argtypes/.restype mutates a cached, process-wide function object, and
+# `kernel32` is shared with the rest of this file; use_last_error is also needed
+# for ctypes.get_last_error() to report anything truthful, and turning it on
+# globally would change the calling convention of every existing kernel32 call.
+try:
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.CreateMutexW.restype = ctypes.c_void_p     # HANDLE: the default 32-bit
+    _k32.CreateMutexW.argtypes = [ctypes.c_void_p,  # restype TRUNCATES a 64-bit
+                                  wt.BOOL,          # handle, which is a silent
+                                  wt.LPCWSTR]       # and total failure
+    _k32.WaitForSingleObject.restype = wt.DWORD
+    _k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, wt.DWORD]
+    _k32.ReleaseMutex.restype = wt.BOOL
+    _k32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    _k32.CloseHandle.restype = wt.BOOL
+    _k32.CloseHandle.argtypes = [ctypes.c_void_p]
+except Exception:  # noqa: BLE001 -- no kernel32 is not a reason to lose input
+    _k32 = None
+
+
+class InputCaptureLease:
+    """Owns Local\\EsotericOS.InputCaptureLease while OpenSpan owns this
+    machine's keyboard and mouse.
+
+    ONE thread owns the handle. acquire() and release() are safe to call from
+    any thread -- including from inside a low-level hook procedure -- because
+    all they do is put a bool on a queue: they cannot raise, cannot block, and
+    cannot touch the handle.
+    """
+
+    def __init__(self, name=LEASE_NAME, timeout_ms=LEASE_TIMEOUT_MS):
+        self.name = name
+        self.timeout_ms = int(timeout_ms)
+        self._q = queue.Queue()
+        self._thread = None
+        self._ready = threading.Event()
+        # Written ONLY by the lease thread. Read elsewhere for diagnostics.
+        self.held = False
+        self.available = False      # did the mutex actually get created?
+        self.last_error = None
+
+    # ---- posted from ANY thread. Never raises, never blocks. -----------
+    def acquire(self):
+        """Capture is starting. Take the lease."""
+        self._post(True)
+
+    def release(self):
+        """Capture has ended. Hand the lease back."""
+        self._post(False)
+
+    def stop(self):
+        """Drop the lease and end the thread. Nothing in the portal's normal
+        life calls this -- the process is hard-killed and abandonment does the
+        job -- but a clean exit should not leave the lease held either."""
+        self._post(None)
+
+    def _post(self, want):
+        try:
+            self._q.put_nowait(want)
+        except Exception:  # noqa: BLE001 -- an unbounded Queue cannot refuse,
+            pass           # but the input path may not find out if it does
+
+    def start(self, wait=0.0):
+        """Start the one thread that will own the handle. Never raises.
+
+        `wait` is for tests only: it blocks until the mutex has been created (or
+        failed to be), so an assertion does not race the thread's first line.
+        Nothing in the portal passes it.
+        """
+        try:
+            self._thread = threading.Thread(
+                target=self._run, name="openspan-lease", daemon=True)
+            self._thread.start()
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = repr(exc)
+            self._log(f"thread would not start ({exc}) -- coexistence "
+                      "signalling is OFF for this run. Capture is unaffected.")
+            return False
+        if wait:
+            self._ready.wait(wait)
+        return True
+
+    @staticmethod
+    def _log(message):
+        # A collision that reaches the user as "my shortcut stopped working",
+        # with nothing in any log, is the outcome this exists to prevent.
+        try:
+            print(f"[lease] {message}", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---- EVERYTHING BELOW RUNS ONLY ON THE LEASE THREAD ----------------
+    # Nothing else may call these, and nothing else may touch `handle`.
+
+    def _run(self):
+        handle = self._create()
+        self._ready.set()
+        while True:
+            try:
+                want = self._q.get()
+            except Exception:  # noqa: BLE001
+                return
+            if handle is None:
+                # No mutex: keep draining so the queue cannot grow without
+                # bound over a long session, and stay a total no-op.
+                if want is None:
+                    return
+                continue
+            try:
+                if want is None:
+                    if self.held:
+                        self._give(handle)
+                    self._close(handle)
+                    return
+                if want and not self.held:
+                    self._take(handle)
+                elif self.held and not want:
+                    self._give(handle)
+            except Exception as exc:  # noqa: BLE001
+                # A lease fault must never reach the input path, and must never
+                # kill this thread -- a dead lease thread that still reports
+                # `held` would suspend EsotericOS forever.
+                self.last_error = repr(exc)
+                self._log(f"unexpected error ({exc}) -- ignored, still running")
+
+    def _create(self):
+        if _k32 is None:
+            self._log("kernel32 unavailable -- coexistence signalling OFF")
+            return None
+        try:
+            handle = _k32.CreateMutexW(None, False, self.name)
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = repr(exc)
+            self._log(f"CreateMutexW raised ({exc}) -- coexistence signalling "
+                      "OFF. Capture is unaffected.")
+            return None
+        if not handle:
+            # CreateMutexW opens the existing mutex if EsotericOS made it first,
+            # so ERROR_ALREADY_EXISTS is the ordinary case and not a failure.
+            # Order-independence is a property of the contract, not luck.
+            err = ctypes.get_last_error()
+            self.last_error = f"CreateMutexW err {err}"
+            self._log(f"could not create {self.name} (err {err}) -- "
+                      "coexistence signalling OFF. Capture is unaffected.")
+            return None
+        self.available = True
+        self._log(f"ready -- {self.name}")
+        return handle
+
+    def _take(self, handle):
+        rc = _k32.WaitForSingleObject(handle, self.timeout_ms)
+        if rc == _WAIT_OBJECT_0:
+            self.held = True
+            self._log("ACQUIRED -- EsotericOS stands down")
+        elif rc == _WAIT_ABANDONED:
+            # We own it now. The previous holder died without releasing --
+            # our own hard-killed predecessor, most likely. Reclaiming is the
+            # entire reason this is a mutex; it is not an error.
+            self.held = True
+            self._log("ACQUIRED after WAIT_ABANDONED -- the previous holder "
+                      "died without releasing and the lease healed itself")
+        elif rc == _WAIT_TIMEOUT:
+            # CAPTURE PROCEEDS. OpenSpan never waits on other software to
+            # decide whether this keyboard may reach the device it is pointed
+            # at; the lease is a courtesy signal, not a permission gate.
+            self._log(f"TIMEOUT after {self.timeout_ms} ms -- something else "
+                      "holds the lease. Capturing anyway, WITHOUT it.")
+        else:
+            self._log(f"WaitForSingleObject returned 0x{rc:08X} "
+                      f"(err {ctypes.get_last_error()}) -- not holding")
+
+    def _give(self, handle):
+        if _k32.ReleaseMutex(handle):
+            self.held = False
+            self._log("released -- EsotericOS is live again")
+            return
+        # STAY held, deliberately. A mutex is re-entrant for its owning thread:
+        # clearing the flag here would let the next acquire take it a SECOND
+        # time, and one release would then never let go. Keeping it True makes
+        # the next leave() retry this exact call, which converges.
+        self._log(f"ReleaseMutex FAILED (err {ctypes.get_last_error()}) -- "
+                  "still holding; the next release retries. EsotericOS stays "
+                  "suspended until it succeeds.")
+
+    def _close(self, handle):
+        try:
+            _k32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001
+            pass
+
 
 def load_portals():
     """Turn the saved arrangement into a list of enter-able edges.
@@ -414,6 +666,10 @@ class Portal:
     _side_seen = False          # has a side button arrived in THIS process?
     _cross_button = False       # hold a side button to cross a device edge
     _button_jumps = False       # ...and while held, go to the NEAREST surface
+    # EsotericOS coexistence. None on a Portal built directly by the routing
+    # tests, which never install a hook and never capture anything, so the two
+    # helpers below are the only places allowed to assume it exists.
+    lease = None
 
     def __init__(self):
         self.cfg, self.portals = load_portals()
@@ -433,6 +689,9 @@ class Portal:
                     self.cfg["monitors"][0])
         self.cx = prim["x"] + prim["w"] // 2
         self.cy = prim["y"] + prim["h"] // 2
+        # Constructed here, STARTED in run(). Constructing it costs a Queue and
+        # an Event; no handle exists until the thread that will own it runs.
+        self.lease = InputCaptureLease()
         self.active = False
         self._last_seen = {}   # device id -> (display_id, vx, vy)
         self._resync_plans = {}  # geometry is fixed for this process's life
@@ -1625,7 +1884,34 @@ class Portal:
         self.vy = self._clamp(ny, y, bottom)
         return False
 
+    def _lease_acquire(self):
+        """Ask the lease thread to take the lease. Called from hook threads.
+
+        The whole body is guarded because an exception raised inside a
+        low-level hook procedure is a dead keyboard and mouse -- possibly on a
+        machine whose input has already left for another device. Coexistence
+        signalling is never worth that.
+        """
+        try:
+            if self.lease is not None:
+                self.lease.acquire()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _lease_release(self):
+        """Ask the lease thread to hand the lease back. Same guarantee."""
+        try:
+            if self.lease is not None:
+                self.lease.release()
+        except Exception:  # noqa: BLE001
+            pass
+
     def enter(self, portal, along):
+        # FIRST LINE ON PURPOSE. Every crossing posts the request at the
+        # earliest instant capture is decided, so the lease thread has the
+        # longest possible head start on the clipboard sync at the end of this
+        # method (see docs/INTEROP.md, "What the lease does not order").
+        self._lease_acquire()
         self.active = True
         self.cur = portal
         self.entry_along = along
@@ -1683,6 +1969,12 @@ class Portal:
                 self.vx, self.vy = record[1], record[2]
         self._rem_x = self._rem_y = 0.0
         self.active = False
+        # THE SINGLE CHOKE POINT. Every exit from capture funnels through this
+        # method -- a routed edge crossing, a side-button jump, Ctrl+Alt+I, the
+        # Esc x3 panic bail, a link failure in send(), a lane dropping in
+        # _status_watcher -- across at least four different threads, none of
+        # which may touch the mutex. Posting here covers all of them at once.
+        self._lease_release()
         # NOTE: self.mods is the PHYSICAL modifier mirror, maintained in every
         # mode by _kbd_proc. Zeroing it here corrupted it while the key was
         # still DOWN -- the later key-UP then cleared an already-clear bit, so
@@ -2346,6 +2638,10 @@ class Portal:
         if not self.portals:
             print("[portal] WARNING: no portals in config — only "
                   "Ctrl+Alt+I toggle will work. Run openspan_setup.py.")
+        # BEFORE the hooks. The one thread that will ever own the lease handle
+        # starts here, so a crossing can never be the thing that creates it --
+        # nothing on a hook thread may touch that handle. See INTEROP.md.
+        self.lease.start()
         threading.Thread(target=self.sender, daemon=True).start()
         threading.Thread(target=_scroll_watcher, daemon=True).start()
         threading.Thread(target=self._status_watcher, daemon=True).start()

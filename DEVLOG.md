@@ -1858,3 +1858,78 @@ mac-3. One HID report is worth ~190 target px on a compensated device, so a
 model believes the pointer is about half a jump from where it is. Config-driven,
 affects the shipped build too, and wants its own investigation rather than a
 patch bundled here.
+
+### The input-capture lease — coexisting with EsotericOS
+
+EsotericOS is a macOS-interaction layer for Windows that hooks keyboard and mouse
+for its own gestures. Two low-level hooks cannot see each other and Windows calls
+them in reverse installation order, so whichever launched last wins — and Doug hit
+it live: he crossed to his Mac and Alt+scroll zoomed *this* machine instead.
+
+The contract, published by EsotericOS and implemented here:
+
+    Local\EsotericOS.InputCaptureLease   -- a MUTEX, not an event
+
+Held while OpenSpan owns input; released when it hands input back. A mutex rather
+than an event because a mutex is **abandonment-detectable**: if the holder dies
+without releasing, the next waiter gets `WAIT_ABANDONED` and reclaims it. An
+abandoned event fails silently and permanently, which is the worst failure mode a
+coexistence contract can have.
+
+**The ship-blocker, and why the obvious implementation would have failed.**
+Windows mutexes are THREAD-owned, and `ReleaseMutex` from a thread that did not
+acquire returns FALSE while the mutex STAYS HELD. Capture here does not start and
+end on one thread — `leave()` has seven call sites across at least three:
+
+    2214  _kbd_proc         hook thread (the Esc x3 panic bail)
+    1799  _route_motion     hook thread
+    1871  _route_motion     hook thread
+     921  _status_watcher   ITS OWN THREAD  <- a dropped lane, the killer case
+     851  send              sender thread
+     866  send              sender thread
+    1046  _jump_nearest
+
+So "acquire where capture starts, release where capture ends" would have left the
+lease held by a healthy process that could no longer release it — same end state
+as the abandoned event, by a different road, and *less* discoverable because
+nothing died. The handle therefore lives as a LOCAL variable inside the lease
+thread's `_run`, never an attribute, so no other thread can even name it;
+`enter()`/`leave()` post requests to it.
+
+That finding went back to EsotericOS and they promoted the dedicated-thread
+pattern from a caveat to the default in their own spec.
+
+**A failed release must not clear the held flag.** A mutex is re-entrant for its
+owning thread, so setting `held = False` after a failed release lets the next
+`enter()` take it a second time — after which one release can never let go.
+`_give` stays held on failure, logs, and the next `leave()` retries. That is the
+difference between self-healing and quietly permanently stuck, and it is invisible
+in any single run.
+
+**Clipboard.** The iPad relay carries passwords. Relay writes are now marked with
+`Clipboard Viewer Ignore`, `ExcludeClipboardContentFromMonitorProcessing` and
+`CanIncludeInClipboardHistory=0`, in one Open/Close pair with real GlobalAlloc
+DWORDs. EsotericOS's history gate honours all three and fails closed, so relayed
+clipboard traffic never enters it.
+
+**Elevation is a stated consequence, not a bug.** EsotericOS runs `asInvoker` by
+design and will not change — it hooks input, reads the clipboard and captures the
+screen. OpenSpan must run elevated. So while an OpenSpan window has focus,
+EsotericOS gestures do not fire, silently, because UIPI declines to deliver to a
+non-elevated hook. On this machine UAC is disabled so every process carries the
+elevated token and it does not arise; for other users the elevation gate's
+"Ignore — normal mode for this run" is the documented escape.
+
+**The three-link chain**, which came out of the exchange and belonged to neither
+side. A unified cross-machine gesture needs: (1) not stolen locally — the lease;
+(2) the modifier survives translation — the keymap; (3) the destination OS is
+listening for the modifier that actually arrives. Link 3 has no owner and leaves
+no trace: both products can behave perfectly and the user still sees nothing. Alt
+reaches the Mac as Option (`modifier_remap: {}`, deliberate), and macOS zoom
+listens for Control by default — so the gesture needs the Mac's own
+Accessibility → Zoom modifier set to Option. No code on either side can fix it.
+
+`docs/INTEROP.md` carries OpenSpan's half and cites EsotericOS's rather than
+restating it, so the two documents cannot drift into contradiction.
+
+Suite 795 -> 931 checks across 17 files.
