@@ -465,6 +465,80 @@ def dark_alert(parent, title, message, ok="OK"):
     _dialog(parent, title, message, [(ok, True, "Accent.TButton")])
 
 
+# Mouse sensitivity has notches rather than a free slide. A continuous scale
+# stored 0.747 while the readout said 0.75, so the number on screen was not the
+# number in the file — and a value tuned by feel could never be typed back.
+#
+# The spacing is deliberately NOT uniform. Everything usable sits between 0.55
+# and 1.0, so that band gets 0.05 steps; below and above it the steps open out,
+# because the difference between 2.5 and 2.75 is not a decision anyone makes.
+SENSITIVITY_NOTCHES = (
+    0.25, 0.5,
+    0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
+    1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
+)
+
+
+def nearest_notch_index(value, notches=SENSITIVITY_NOTCHES):
+    """Which notch a value sits closest to. Ties go to the LOWER notch, so a
+    value exactly between two never drifts a device faster on its own."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = 1.0
+    best = 0
+    for i in range(1, len(notches)):
+        if abs(notches[i] - value) < abs(notches[best] - value) - 1e-12:
+            best = i
+    return best
+
+
+def snap_sensitivity(value, notches=SENSITIVITY_NOTCHES):
+    """The notch value a slider lands on. Used when the handle MOVES — never
+    when a dialog opens, so a value already tuned by feel is left alone."""
+    return notches[nearest_notch_index(value, notches)]
+
+
+def format_sensitivity(value):
+    """Show the number that is actually stored. Two places for a notch, three
+    for a legacy value that predates them — 0.747 must not read as 0.75."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "1.00"
+    return (f"{value:.2f}" if abs(value - round(value, 2)) < 1e-9
+            else f"{value:.3f}")
+
+
+def notched_scale(parent, var, notches=SENSITIVITY_NOTCHES, **kw):
+    """A slider that can only come to rest ON a notch.
+
+    The scale runs in notch-INDEX space rather than value space, so there is no
+    position between two notches for the handle to stop at. `var` holds the
+    real value and is written only when the handle moves — building the widget
+    positions the handle at the nearest notch and leaves `var` exactly as it
+    was found, so opening a dialog never rewrites a device tuned by feel."""
+    pos = tk.DoubleVar(value=float(nearest_notch_index(var.get(), notches)))
+    snapping = []
+
+    def on_drag(raw):
+        if snapping:                # our own snap-back, not the user's hand
+            return
+        index = max(0, min(len(notches) - 1, int(round(float(raw)))))
+        snapping.append(True)
+        try:
+            pos.set(float(index))   # the handle jumps to the notch
+        finally:
+            snapping.pop()
+        var.set(notches[index])
+
+    scale = ttk.Scale(parent, from_=0, to=len(notches) - 1, variable=pos,
+                      orient="horizontal", command=on_drag, **kw)
+    scale.notch_position = pos      # the test needs to drive it
+    scale.notches = notches
+    return scale
+
+
 PROFILE_DIR = os.path.join(ROOT, "profiles")
 # What a profile deliberately does NOT carry. These follow the HARDWARE, not the
 # situation: a radio is a physical dongle, a port is a lane on the guest, and the
@@ -6285,7 +6359,7 @@ class App:
 
         state = {}
 
-        def slider(key, title, lo, hi, default, hint):
+        def slider(key, title, lo, hi, default, hint, notches=None):
             box = tk.Frame(win, bg=CARD)
             box.pack(fill="x", padx=18, pady=(6, 0))
             head = tk.Frame(box, bg=CARD)
@@ -6298,19 +6372,27 @@ class App:
             var = tk.DoubleVar(value=float(record.get(key, default)))
 
             def on_move(_v=None):
-                val.config(text=f"{var.get():.2f}")
+                val.config(text=(format_sensitivity(var.get()) if notches
+                                 else f"{var.get():.2f}"))
             var.trace_add("write", lambda *_a: on_move())
-            ttk.Scale(box, from_=lo, to=hi, variable=var,
-                      orient="horizontal").pack(fill="x", pady=(2, 0))
+
+            if notches:
+                scale = notched_scale(box, var, notches)
+            else:
+                scale = ttk.Scale(box, from_=lo, to=hi, variable=var,
+                                  orient="horizontal")
+            scale.pack(fill="x", pady=(2, 0))
             tk.Label(box, text=hint, bg=CARD, fg=MUTED,
                      font=("Segoe UI", 8), wraplength=430,
                      justify="left").pack(anchor="w")
             on_move()
             state[key] = var
 
-        slider("sensitivity", "Mouse sensitivity", 0.1, 3.0, 1.0,
+        slider("sensitivity", "Mouse sensitivity", 0.25, 3.0, 1.0,
                "How far the pointer travels on this device for the same hand "
-               "movement. Lower it if this device feels too fast.")
+               "movement. Lower it if this device feels too fast. The slider "
+               "steps between set values, finely where the useful range is.",
+               notches=SENSITIVITY_NOTCHES)
         slider("pointer_accel", "Pointer acceleration", 0.0, 4.0, 0.0,
                "0 = perfectly linear. Applied here, so the pointer position "
                "stays exact — unlike the device's own acceleration.")
@@ -6375,7 +6457,8 @@ class App:
             self.canvas.save()
             win.destroy()
             _emit("event", f"{label}: sensitivity "
-                           f"{record['sensitivity']:.2f}, acceleration "
+                           f"{format_sensitivity(record['sensitivity'])}, "
+                           f"acceleration "
                            f"{record['pointer_accel']:.2f}, Alt={choice}.")
 
         row = tk.Frame(win, bg=CARD)

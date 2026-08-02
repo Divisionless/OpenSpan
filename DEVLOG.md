@@ -1490,3 +1490,40 @@ So the entire feel difference between the two Macs is one number: `sensitivity`,
 compensation, identical everything else — which makes it a clean prediction rather
 than a suggestion. If matching the number does not match the feel, something
 outside this table is involved and that is worth knowing.
+
+### The sensitivity slider gets notches
+
+The slider was a continuous `ttk.Scale` over 0.1–3.0. Its readout formatted at two
+decimal places while `apply_and_close` stored at three, so it showed `0.75` and
+wrote `0.747`. The number on screen was not the number in the file, and a value
+arrived at by feel could not be read back off the dialog — which is exactly the
+number the whole calibration question above turns on.
+
+Eighteen notches now, deliberately non-uniform: `0.25, 0.5`, then 0.05 steps from
+`0.55` to `1.0`, then `1.25, 1.5, 1.75, 2.0, 2.5, 3.0`. Everything usable lives in
+that middle band, so that is where the resolution goes; above it the difference
+between 2.5 and 2.75 is not a decision anyone makes.
+
+Two calls worth recording because either could have gone the other way:
+
+**The ceiling stayed at 3.0, not 2.0.** Capping at 2.0 would have been tidier and
+covers every value on this desk, but it makes the top of the old range
+unrepresentable — a config already carrying 2.5 would have no notch to land on.
+
+**Notches snap on DRAG ONLY, never on load.** `0.747` on the Mac and `0.686` on the
+iPad are real tunings. Snapping at load would mean opening the dialog to check
+something else and pressing Apply quietly moved both. So the widget runs in notch-
+INDEX space — the handle physically cannot rest between notches — while the value
+variable is written only when the handle moves. Opening the dialog positions the
+handle at the nearest notch and leaves the stored value untouched; the readout
+shows three places when it has to (`0.747`), two when it does not (`0.75`).
+
+That split is why there are two functions rather than one: `nearest_notch_index`
+only positions, `snap_sensitivity` only changes. A test that checked snapping alone
+would pass on an implementation that silently rewrote both devices on first open,
+so `test_sensitivity_notches.py` checks the load path first and the drag path
+second — 34 checks, suite now 352.
+
+**Consequence to be aware of:** `0.747` is no longer typeable from the slider; the
+nearest notch is `0.75`. Matching the Managed Laptop to the Mac by hand means
+either accepting `0.75` on both or editing `openspan_config.json` directly.
