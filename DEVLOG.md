@@ -2170,3 +2170,34 @@ the test now redirects CONFIG / PROFILE_DIR / BT_PREFS to a scratch copy before
 App is constructed. The suite run is now hash-verified not to touch either file.
 
 Suite 1157 -> 1220 checks across 19 files, all green.
+
+### A "⋯" on the card, because a right-click advertises itself to nobody
+
+Doug: *"put a '...' floating next to the Pair button for all devices -- this
+will make it obvious there are other options to be had"*
+
+When the card collapsed to one row, five per-object editors (Rename, Radio,
+Input, Displays, Remove) moved onto a right-click. That was the correct place
+for them — they are not lane actions — but discoverability was the known cost,
+recorded at the time and not paid. BtPanel solves the same problem in prose
+("right-click a device for actions"); a one-row card has no space for a
+sentence, so it gets a glyph.
+
+It sits immediately left of Pair: `side="right"` allocates first-packed
+rightmost and the verb loop runs the spec reversed, so packing the button LAST
+lands it just inside Pair, where the eye arrives before reading the verbs.
+
+Never disabled, unlike the verbs. There is no device state in which all five
+editors are meaningless, and a greyed-out hint advertises nothing.
+
+**One poster, not two.** `_device_card_menu` and the button both call
+`_post_card_menu`; the button supplies its own screen coordinates rather than a
+synthetic event. A second posting path would be a second place for the grab to
+leak, and a `tk_popup` that raises while holding it leaves the window
+mouse-dead.
+
+The test that asserted `count("ttk.Button") == 1` in the builder was standing in
+for "no per-object editor is a permanent button" — which is already asserted per
+editor by name. Replaced with what it meant, rather than bumping the number.
+
+Suite 1220 -> 1223 across 19 files.

@@ -96,6 +96,7 @@ OpenSpan, the live config, the VM, or any radio.
 Exit 0 = all pass.
 """
 import ast
+import inspect
 import os
 import sys
 import threading
@@ -459,17 +460,43 @@ for gone in ("Radio…", "Input…", "Rename", "Displays…", "Remove"):
     check(f"the card no longer builds a “{gone}” button",
           f'text="{gone}"' not in build_src, "still in _build_device_row")
 check("the four verbs are still built as real, gated buttons",
-      build_src.count("ttk.Button") == 1
-      and "button.state([\"disabled\"])" in build_src,
+      "button.state([\"disabled\"])" in build_src,
       "the verbs must stay VISIBLE buttons, not menu entries")
+# The card gained a “⋯” button when the five editors moved to a right-click:
+# a right-click advertises itself to nobody, and a one-row card has no space
+# for the sentence BtPanel uses. It is a second ttk.Button in the source, so
+# the old `count("ttk.Button") == 1` no longer says what it meant.
+#
+# What it MEANT is that no per-object EDITOR is a permanent button -- which is
+# the loop above, per editor by name. So the count is replaced by the claim it
+# was standing in for: exactly one button in this method is built from the verb
+# spec, and exactly one is the menu affordance.
+check("exactly one button in the card is built from the verb spec",
+      build_src.count("for key, resting, _in_flight in") == 1, build_src[:0])
+check("...and the ⋯ affordance opens the SAME menu as the right-click, "
+      "rather than being a second path to the editors",
+      "_card_menu_from_button" in build_src
+      and "_post_card_menu" in inspect.getsource(A.App._card_menu_from_button)
+      and "_post_card_menu" in inspect.getsource(A.App._device_card_menu),
+      "the ⋯ button and Button-3 must share one poster")
 
 card_widgets = body.winfo_children()
 check("one card frame per device", len(card_widgets) == 3, str(card_widgets))
 buttons_per_card = [
     len([w for w in card.winfo_children() if isinstance(w, ttk.Button)])
     for card in card_widgets]
-check("each card carries exactly four buttons, not nine",
-      buttons_per_card == [4, 4, 4], str(buttons_per_card))
+# Four verbs plus the ⋯ affordance. It was nine: four verbs and five per-object
+# editors that were permanently enabled whether or not the device even had a
+# radio. The five are gone as buttons; the fifth control here is the hint that
+# they exist, not one of them.
+check("each card carries the four verbs plus ⋯, not the old nine",
+      buttons_per_card == [5, 5, 5], str(buttons_per_card))
+check("...and exactly one of them is the ⋯ affordance",
+      all(len([w for w in card.winfo_children()
+               if isinstance(w, ttk.Button) and w.cget("text") == "⋯"]) == 1
+          for card in card_widgets),
+      str([[w.cget("text") for w in c.winfo_children()
+            if isinstance(w, ttk.Button)] for c in card_widgets]))
 check("each card is ONE row -- no nested verbs frame",
       all(not [w for w in card.winfo_children() if isinstance(w, tk.Frame)]
           for card in card_widgets))

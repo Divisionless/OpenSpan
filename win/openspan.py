@@ -558,7 +558,7 @@ def device_status_rollup(devices, dev_status):
 # _apply_poll mid-function and the status dots, the readiness banner and the
 # headphones line simply freeze with nothing in the console. Both sides are
 # driven off these two constants so they cannot drift.
-DEVICE_ROW_KEYS = ("dot", "name", "radio", "buttons")
+DEVICE_ROW_KEYS = ("dot", "name", "radio", "buttons", "more")
 
 # (key, resting label, in-flight label). The four CONNECTION verbs -- never
 # collapsed into one relabelling button: two of them are live at once in both
@@ -8485,6 +8485,19 @@ class App:
             button.pack(side="right", padx=(PAD_SM, 0))
             button.state(["disabled"])
             buttons[key] = button
+        # The "⋯" affordance, packed LAST so it lands immediately left of Pair.
+        # side="right" allocates first-packed rightmost, and the loop above runs
+        # the spec reversed, so Pair is the leftmost verb -- this then sits just
+        # inside it, where the eye arrives before reading the verbs.
+        #
+        # It is never disabled. The five editors behind it (Rename, Radio,
+        # Input, Displays, Remove) are per-object properties, not lane actions:
+        # unlike the verbs there is no device state in which they are all
+        # meaningless, and a greyed-out hint would advertise nothing.
+        more = ttk.Button(head, text="⋯", width=3)
+        more.configure(command=lambda b=more, d=device_id:
+                       self._card_menu_from_button(b, d))
+        more.pack(side="right", padx=(PAD_SM, 0))
         dot.pack(side="left")
         name.pack(side="left", padx=(4, 8))
         radio.pack(side="left")
@@ -8499,7 +8512,8 @@ class App:
         # Built off DEVICE_ROW_KEYS, not off a literal: this dict and the
         # subscripts in _apply_device_rows are three thousand lines apart and
         # their disagreement is SILENT (see the constant's comment).
-        parts = {"dot": dot, "name": name, "radio": radio, "buttons": buttons}
+        parts = {"dot": dot, "name": name, "radio": radio, "buttons": buttons,
+                 "more": more}
         row = {key: parts[key] for key in DEVICE_ROW_KEYS}
         self._dev_rows[device_id] = row
         return row
@@ -8512,12 +8526,40 @@ class App:
         -- a tk_popup that raises with the grab still held leaves the window
         mouse-dead.
         """
+        self._post_card_menu(device_id, event.x_root, event.y_root)
+
+    def _post_card_menu(self, device_id, x_root, y_root):
+        """Post the card menu at absolute screen coordinates.
+
+        Split out of _device_card_menu so the "⋯" button can reach the SAME
+        menu without a synthetic event. One filler, one menu, one grab_release
+        -- a second posting path would be a second place for the grab to leak,
+        and a tk_popup that raises while holding it leaves the window
+        mouse-dead.
+        """
         menu = self._card_menu
         self._fill_card_menu(menu, device_id)
         try:
-            menu.tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(int(x_root), int(y_root))
         finally:
             menu.grab_release()
+
+    def _card_menu_from_button(self, button, device_id):
+        """The ⋯ button's action: post the card menu under the button itself.
+
+        Doug: *"put a '...' floating next to the Pair button for all devices --
+        this will make it obvious there are other options to be had"*.
+
+        Five per-object editors moved onto a right-click when the card collapsed
+        to one row, and a right-click advertises itself to nobody. The Bluetooth
+        panel has the same problem and solves it in prose ("right-click a device
+        for actions"); a card has no room for a sentence, so it gets a glyph
+        that opens the very same menu. Anyone who finds the button learns the
+        right-click exists; anyone who already knows never needs the button.
+        """
+        self._post_card_menu(device_id,
+                             button.winfo_rootx(),
+                             button.winfo_rooty() + button.winfo_height())
 
     def _fill_card_menu(self, menu, device_id):
         """The five editors that used to be five permanently-enabled buttons.
