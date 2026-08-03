@@ -56,6 +56,7 @@ import shutil
 import sys
 import tempfile
 import tkinter as tk
+import types
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -256,7 +257,8 @@ check("redraw() draws that hint",
 
 
 # ---- (e) structural half: every menu command is deferred -------------------
-MENU_BUILDERS = ("_fill_surface_menu", "_fill_local_entries", "_fill_desk_menu")
+MENU_BUILDERS = ("_fill_surface_menu", "_fill_local_entries", "_fill_desk_menu",
+                 "_fill_device_verb_entries")
 inline = []
 commands = 0
 for builder in MENU_BUILDERS:
@@ -437,6 +439,16 @@ class StubApp:
         self._hz_menu = tk.Menu(self._surface_menu, tearoff=0, **A.MENU_STYLE)
         self._device_menu = tk.Menu(self._desk_menu, tearoff=0, **A.MENU_STYLE)
         self.status = tk.StringVar(value="")
+        # A managed display's menu now ends with that DEVICE's four connection
+        # verbs, so filling one reaches the per-device state the card reads.
+        # Empty _radios means "no radio list yet", which is the honest reading
+        # for a stub -- _device_verb_facts only calls a radio missing when it
+        # has a list to miss it from.
+        self._dev_states = {}
+        self._dev_status = {}
+        self._vm_reachable = True
+        self.bt_panel = types.SimpleNamespace(_radios=[])
+        self.clicked = []
 
 
 for _name_ in ("_deferred", "_canvas_menu", "_fill_surface_menu",
@@ -445,8 +457,23 @@ for _name_ in ("_deferred", "_canvas_menu", "_fill_surface_menu",
                "_edit_display", "_menu_set_resolution", "_menu_rotate",
                "_menu_set_refresh", "_menu_diagonal", "_menu_device_editor",
                "_menu_refresh_monitors", "_menu_display_settings",
-               "_screen_sizes_dialog"):
+               "_screen_sizes_dialog", "_dev_state", "_device_verb_facts",
+               "_device_verb_entries", "_verb_menu_label",
+               "_fill_device_verb_entries", "device_record"):
     setattr(StubApp, _name_, A.App.__dict__[_name_])
+
+
+# The four verb handlers ssh to the guest, so they are recorders here. Bound
+# off DEVICE_VERB_HANDLERS rather than by name, so a rename cannot leave a
+# stale stub that never fires.
+def _verb_recorder(verb):
+    def handler(self, device_id):
+        self.clicked.append((verb, device_id))
+    return handler
+
+
+for _verb_, _handler_ in A.DEVICE_VERB_HANDLERS.items():
+    setattr(StubApp, _handler_, _verb_recorder(_verb_))
 
 app = StubApp(root, canvas)
 
@@ -532,6 +559,31 @@ check("the device editor is reachable from the screen you clicked",
 check("the menu's title line names the surface it is about",
       mac_rows[0][2].startswith("Managed Mac")
       and mac_rows[0][3] == "disabled", str(mac_rows[0]))
+
+# ---- the connection verbs ride on the managed menu, and only there ---------
+# The behaviour of that section -- which verbs are live in which state, and
+# that the menu and the card can never disagree about it -- is
+# test_device_verbs.py. What belongs HERE is which menu carries it at all: the
+# verbs act on a DEVICE, and a Windows monitor does not have one.
+check("a managed display's menu carries the device's connection section, "
+      "headed by the DEVICE's name -- the menu is opened on one screen but "
+      "Unpair unpairs the whole machine",
+      any(row[2] == "Managed Mac — connection" and row[3] == "disabled"
+          for row in mac_rows), str([row[2] for row in mac_rows]))
+check("...and it is the LAST section, after the display entries",
+      [row[2] for row in mac_rows].index("Managed Mac — connection")
+      > [row[2] for row in mac_rows].index(
+          "Edit all screens on Managed Mac…"))
+check("a Windows monitor's menu carries NO connection section -- there is no "
+      "device behind it to pair",
+      not any("connection" in row[2] for row in local_rows),
+      str([row[2] for row in local_rows]))
+app._fill_desk_menu(app._desk_menu)
+_desk_rows = entries(app._desk_menu)
+check("the empty-canvas menu carries none either -- a verb needs a device to "
+      "act on, and right-clicking nothing names none",
+      not any("connection" in row[2] for row in _desk_rows),
+      str([row[2] for row in _desk_rows]))
 
 
 # ---- resolution lists are per display KIND ---------------------------------

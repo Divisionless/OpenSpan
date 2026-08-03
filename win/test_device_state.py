@@ -428,8 +428,26 @@ check("the card's command table is built off DEVICE_VERB_HANDLERS, not written "
       "DEVICE_VERB_HANDLERS" in build_src
       and "self._pair_device," not in build_src,
       "a four-key literal here drifts silently from DEVICE_VERB_SPEC")
-check("the verb gate is DEVICE_VERB_GATES, not a literal inside the poll",
-      "DEVICE_VERB_GATES" in (ast.get_source_segment(SOURCE, APPLY) or ""))
+# The gate moved behind device_verb_offer when the arrangement canvas grew a
+# second surface for these same four verbs. It is bound by AST rather than by
+# substring now, and deliberately: the poll's source still MENTIONS
+# DEVICE_VERB_GATES in a comment, so a substring test would pass over a poll
+# that had gone back to a hand-written literal. test_device_verbs.py holds the
+# other half -- that device_verb_offer is the only code in the file that reads
+# the gate table at all.
+check("the verb gate is device_verb_offer -- one call, not a literal inside "
+      "the poll",
+      any(isinstance(node, ast.Call)
+          and _dotted(node.func) == "device_verb_offer"
+          for node in ast.walk(APPLY)))
+check("...and the poll builds no gate predicate of its own",
+      not [node for node in ast.walk(APPLY) if isinstance(node, ast.Lambda)],
+      "a lambda in the poll is a second opinion about which verbs are live")
+check("the poll reads its facts from the shared producer, not from _dev_state "
+      "directly -- the canvas menu reads the same one",
+      any(isinstance(node, ast.Call)
+          and _dotted(node.func) == "self._device_verb_facts"
+          for node in ast.walk(APPLY)))
 
 
 # ===========================================================================

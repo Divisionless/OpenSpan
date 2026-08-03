@@ -9,14 +9,19 @@ derived from it, the physical size that screen is drawn at is derived from it,
 and the crossing bands on its edges are derived from those -- so switching the
 Mac between 4K and 2K means re-entering the desk, or keeping two of them.
 
-The two things that can go wrong here are both invisible until the moment they
-bite:
+The things that can go wrong here are all invisible until the moment they bite:
 
     * a profile that carries RADIO and PORT would move a dongle assignment along
       with a picture of the desk. Bonds live on the guest per radio, so loading
       an arrangement saved when the Mac was on a different dongle would point
       the lane at a radio holding no bond for it -- a device that pairs, goes
       green, and does nothing.
+    * a profile that carries a device's FEEL undoes tuning. Observed live on
+      2 August: all three devices were set to the 0.75 notch, the arrangement
+      was switched from "Mac 2k 2" to "Mac 2k", and all three reverted to the
+      numbers that arrangement had been saved with -- 0.686, 0.747 and 1.0.
+      Sensitivity, key mapping and scroll direction describe the device and the
+      hand using it, not where the screens sit.
     * `ipad` and `selected` on the canvas are references to specific display
       dicts. A switch that rebuilds the config but leaves those behind keeps a
       live handle into the arrangement that is no longer on screen.
@@ -90,6 +95,11 @@ check("no radio or port travels with an arrangement",
       not [d for d in saved["devices"]
            if "radio" in d or "port" in d],
       str([{k: v for k, v in d.items() if k in ("radio", "port")}
+           for d in saved["devices"]]))
+check("and no device-scoped field of any kind is written into the file",
+      not [d for d in saved["devices"]
+           for f in A.DEVICE_FIELDS if f in d],
+      str([{k: v for k, v in d.items() if k in A.DEVICE_FIELDS}
            for d in saved["devices"]]))
 check("the derived portal list is not frozen into it",
       "portals" not in saved)
@@ -291,6 +301,160 @@ canvas.save()
 check("a deleted arrangement is not resurrected by the next save",
       A.list_profiles() == ["Mac 4K"], str(A.list_profiles()))
 A.CONFIG = real_config
+
+# ---- a device's own settings do not travel with the desk -------------------
+# The bug this closes, live on 2 August: three devices tuned to the 0.75 notch,
+# one arrangement switch, all three reverted to that arrangement's stored
+# numbers. MACHINE_FIELDS excluded only radio and port, so every other field in
+# a device record -- sensitivity, key mapping, scroll direction, the device's
+# own name -- was saved into the picture of the desk and restored from it.
+#
+# Everything below is bound to the SHIPPED constants and the SHIPPED whitelist.
+# Nothing here re-states the field list: a copy typed into a test passes while
+# the real record grows a field nobody classified, which is the failure mode
+# this file exists to make impossible.
+import ast  # noqa: E402
+import json  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def device_whitelist():
+    """Every key a device record can hold, read out of normalize_config.
+
+    normalize_config builds each device from one dict literal, so that literal
+    IS the complete field list. Reading it here rather than listing the fields
+    means a field added there without being classified fails this test on the
+    day it is added, not on the day it loses somebody's tuning."""
+    with open(os.path.join(HERE, "openspan_targets.py"), encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "normalize_config")
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append"
+                and getattr(node.func.value, "id", "") == "devices"
+                and node.args and isinstance(node.args[0], ast.Dict)):
+            return {key.value for key in node.args[0].keys
+                    if isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)}
+    return set()
+
+
+WHITELIST = device_whitelist()
+classified = {A.DEVICE_KEY} | set(A.DEVICE_FIELDS) | set(A.ARRANGEMENT_FIELDS)
+
+check("the shipped whitelist was actually found",
+      len(WHITELIST) > 5, str(sorted(WHITELIST)))
+check("every field a device record can hold is classified",
+      WHITELIST <= classified,
+      "unclassified: " + str(sorted(WHITELIST - classified))
+      + " -- add it to DEVICE_FIELDS or ARRANGEMENT_FIELDS in openspan.py")
+check("and nothing is classified that a device record cannot hold",
+      classified <= WHITELIST,
+      "named but never built: " + str(sorted(classified - WHITELIST)))
+check("no field is claimed by both sides at once",
+      not (set(A.DEVICE_FIELDS) & set(A.ARRANGEMENT_FIELDS)),
+      str(sorted(set(A.DEVICE_FIELDS) & set(A.ARRANGEMENT_FIELDS))))
+
+
+def poison(value):
+    """A value of the right shape that is definitely not the live one."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 111
+    if isinstance(value, float):
+        return round(value * 0.5 + 0.13, 3)
+    if isinstance(value, str):
+        return "POISONED-" + value
+    return {"alt": "cmd"}          # None or {} -> an explicit override
+
+
+# A live desk, tuned by hand the way Doug tuned his.
+live = normalize_config(desk(), LIVE)
+for device in live["devices"]:
+    device["sensitivity"] = 0.75
+
+# A profile written the OLD way: a full snapshot of every device field, holding
+# the values the live desk has since been tuned away from. This is exactly what
+# the three arrangements on his disk still contain.
+legacy = json.loads(json.dumps(live))
+legacy["profile"] = "Legacy"
+for device in legacy["devices"]:
+    for field in WHITELIST - {A.DEVICE_KEY} - set(A.ARRANGEMENT_FIELDS):
+        device[field] = poison(device.get(field))
+    # Not from the loop above: the loop is steered by the shipped constants, so
+    # moving a field to the arrangement side would quietly stop poisoning it and
+    # the test would go green on the exact mistake it exists to catch. 0.686 is
+    # the real number "Mac 2k" put back on his iPad.
+    device["sensitivity"] = 0.686
+with open(A._profile_path("Legacy"), "w", encoding="utf-8") as handle:
+    json.dump(legacy, handle, indent=2)
+
+restored = A.load_profile("Legacy", live)
+by_id = {d[A.DEVICE_KEY]: d for d in restored["devices"]}
+stale = []
+for was in live["devices"]:
+    got = by_id.get(was[A.DEVICE_KEY], {})
+    for field in WHITELIST - {A.DEVICE_KEY} - set(A.ARRANGEMENT_FIELDS):
+        if got.get(field) != was.get(field):
+            stale.append(f"{was[A.DEVICE_KEY]}.{field}: "
+                         f"{was.get(field)!r} -> {got.get(field)!r}")
+check("loading an arrangement restores NO field the live device owns",
+      not stale, "; ".join(stale))
+check("including the one that was actually lost -- the 0.75 notch survives a "
+      "switch to an arrangement saved at 0.686",
+      all(d.get("sensitivity") == 0.75 for d in restored["devices"]),
+      str([d.get("sensitivity") for d in restored["devices"]]))
+check("the field count is not zero, so the check above cannot pass by "
+      "iterating over nothing",
+      len(WHITELIST - {A.DEVICE_KEY} - set(A.ARRANGEMENT_FIELDS)) >= 10,
+      str(len(WHITELIST - {A.DEVICE_KEY} - set(A.ARRANGEMENT_FIELDS))))
+
+# ...while the arrangement itself is still restored, or the profile would be
+# carrying nothing at all.
+moved = json.loads(json.dumps(live))
+moved["devices"][1]["displays"][0]["x"] = -9000
+moved["profile"] = "Moved"
+with open(A._profile_path("Moved"), "w", encoding="utf-8") as handle:
+    json.dump(moved, handle, indent=2)
+back = A.load_profile("Moved", live)
+check("but the screens themselves ARE restored -- that is what a profile is",
+      back["devices"][1]["displays"][0]["x"] == -9000,
+      str(back["devices"][1]["displays"][0]["x"]))
+
+# The one place a stale value could still have come from: a device that the
+# live desk no longer has, so there is nothing to take the value from. It is
+# deleted rather than left as the file found it.
+orphaned = A.load_profile("Legacy", {"devices": [], "monitors": []})
+leaked = [f"{d.get(A.DEVICE_KEY)}.{f}={d[f]!r}" for d in orphaned["devices"]
+          for f in A.DEVICE_FIELDS if f in d]
+check("a device the desk no longer has brings back none of it either",
+      not leaked, "; ".join(leaked))
+check("and it still loads, with its screens, ready to be set up again",
+      len(orphaned["devices"]) == 2
+      and all(d.get("displays") for d in orphaned["devices"]),
+      str([len(d.get("displays", [])) for d in orphaned["devices"]]))
+healed = normalize_config(orphaned, LIVE)
+check("normalisation then gives it the defaults, not the file's numbers",
+      all(d["sensitivity"] == 1.0 and d["pointer_gain"] == 1.0
+          for d in healed["devices"]),
+      str([(d["sensitivity"], d["pointer_gain"]) for d in healed["devices"]]))
+
+# Re-saving is what migrates the three arrangements already on disk: the write
+# path strips what the read path now ignores.
+A.save_profile(live, "Legacy")
+with open(A._profile_path("Legacy"), encoding="utf-8") as handle:
+    rewritten = json.load(handle)
+check("re-saving an old arrangement strips it, so the stale copy stops "
+      "existing at all",
+      not [f for d in rewritten["devices"] for f in A.DEVICE_FIELDS if f in d],
+      str([{k: v for k, v in d.items() if k in A.DEVICE_FIELDS}
+           for d in rewritten["devices"]]))
+A.delete_profile("Legacy")
+A.delete_profile("Moved")
 
 shutil.rmtree(A.PROFILE_DIR, ignore_errors=True)
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))

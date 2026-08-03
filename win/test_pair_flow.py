@@ -30,6 +30,33 @@ except Exception:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import openspan  # noqa: E402
 
+# ---- NOTHING BELOW MAY TOUCH THE RUNNING APP'S FILES -----------------------
+# This file builds a REAL App and calls canvas.save() six times. Until 3 August
+# it did that against the LIVE config -- and save() write-throughs to whichever
+# arrangement is active, so a suite run silently rewrote Doug's own profile.
+# It bit for real: a run under a new save rule stripped every device field out
+# of "Mac 2k.json" while the app he was using still expected them there.
+#
+# The redirect must happen HERE, before the module-level neutralisation below
+# and long before App(root), because App reads these at construction. The live
+# config is COPIED in so the tests still see a realistic three-device desk;
+# every write lands in the copy.
+import json  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+_SCRATCH = tempfile.mkdtemp(prefix="openspan-pairflow-")
+_LIVE_CONFIG = openspan.CONFIG
+openspan.CONFIG = os.path.join(_SCRATCH, "openspan_config.json")
+openspan.PROFILE_DIR = os.path.join(_SCRATCH, "profiles")
+openspan.BT_PREFS = os.path.join(_SCRATCH, "bt_prefs.json")
+os.makedirs(openspan.PROFILE_DIR, exist_ok=True)
+try:
+    shutil.copy2(_LIVE_CONFIG, openspan.CONFIG)
+except OSError:
+    with open(openspan.CONFIG, "w", encoding="utf-8") as _fh:
+        json.dump({"version": 3, "monitors": [], "devices": []}, _fh)
+
 
 def R(rc=0, out="", err=""):
     return types.SimpleNamespace(returncode=rc, stdout=out, stderr=err)

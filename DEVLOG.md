@@ -2131,3 +2131,42 @@ a property of its own copy of the subject rather than binding to the shipped one
 Mutation is the only thing that has caught it — reading never has.
 
 Suite 1111 -> 1157 checks across 18 files.
+
+### Feel follows the device; verbs on the canvas menu
+
+**Backlog 1.** `MACHINE_FIELDS = ("radio", "port")` were the only per-device
+fields a profile did not carry, so switching arrangement reverted sensitivity,
+acceleration, scroll direction, modifier remapping — everything about how a
+machine feels. Observed live: three devices tuned to 0.75, one arrangement
+switch, all three back to 0.686 / 0.747 / 1.0.
+
+All 14 fields in a device record are now classified against one question: *if
+the desk were rearranged and nothing else, would this value now be wrong?*
+Twelve are device-scoped, `displays` is the arrangement, `id` is the join key.
+
+`pointer_gain` was the one worth arguing. The DEVLOG records it as model-side,
+which tempts a reading that it belongs to the desk. But model-side vs wire-side
+decides which SYMPTOM a wrong value produces, not who owns it: the arrangement
+is already represented by `display["w"]` in `gain * display["w"] / res_w`, so
+the two are orthogonal. Gain calibrates that machine's window server. Device.
+
+`load_profile` now DELETES a device field the live desk has no device for,
+rather than leaving what the file held — otherwise a stale value leaks back
+through an orphan record.
+
+**Backlog 3.** The four verbs are on the canvas right-click menu, generated from
+`DEVICE_VERB_SPEC` and gated by `DEVICE_VERB_GATES` — the same predicates the
+cards use, one path. The count is not two: paired-idle offers THREE, because
+`pair` is not gated on "not paired" and re-pairing is how a bad bond is
+recovered. The device is named in the verb section, since the menu is per-display
+and a Mac has three.
+
+**The suite was writing his live files.** `test_pair_flow.py` builds a real App
+and calls `canvas.save()` six times with no redirect, and `save()` writes
+through to whichever arrangement is active. Running the suite under the new
+strip rule stripped every device field out of `Mac 2k.json` — his ACTIVE profile
+— while the running exe still expected them. Repaired from the live config, and
+the test now redirects CONFIG / PROFILE_DIR / BT_PREFS to a scratch copy before
+App is constructed. The suite run is now hash-verified not to touch either file.
+
+Suite 1157 -> 1220 checks across 19 files, all green.

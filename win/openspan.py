@@ -628,6 +628,55 @@ DEVICE_VERB_GATES = _require_verb_coverage({
 }, "DEVICE_VERB_GATES")
 
 
+# How each verb reads in a MENU, where there is room to say what it costs.
+# Coverage-checked like the gate and handler tables: a fifth verb in the spec
+# with no entry here would be a KeyError raised while a menu is being posted.
+#
+# The waits are MEASURED off the handlers, not estimated. Pair and Connect run
+# the same worker, whose guest command is ssh_guest(timeout=55) and which may
+# start the VM first; Pair asks with dark_confirm, Connect does not.
+# Disconnect is set_target_advertising (a daemon command with an 8s timeout,
+# because BlueZ completes advertising changes asynchronously) plus a 2s
+# disconnect. Unpair is those two plus forget-hid, ssh_guest(timeout=25).
+#
+# None of them says "restarts input": portal_signature is taken over CONFIG
+# fields, and no verb here writes config. The display entries above them in the
+# same menu DO cost eight seconds and say so.
+DEVICE_VERB_MENU_SUFFIX = _require_verb_coverage({
+    "pair": "{verb}…   (confirms first — up to ~1 min before it broadcasts)",
+    "connect": "{verb}   (up to ~1 min)",
+    "disconnect": "{verb}   (up to ~10s)",
+    "unpair": "{verb}…   (confirms first — a ~25s guest command)",
+}, "DEVICE_VERB_MENU_SUFFIX")
+
+# Disconnect's gate is `live or busy`, so mid-pair it is the CANCEL -- and
+# "Disconnect" there offers to end a connection that does not exist yet.
+DEVICE_VERB_CANCEL_LABEL = "Cancel pairing   (stops the broadcast, up to ~10s)"
+
+
+def device_verb_offer(facts):
+    """Which verbs are LIVE for one device, as {verb: bool}. THE ONLY CALLER
+    OF DEVICE_VERB_GATES, and therefore the only place the answer is decided.
+
+    TWO surfaces offer these four verbs now: the device card's row of buttons
+    and the arrangement canvas's right-click menu. That is exactly the shape
+    that has already failed once in this app -- a second surface for the same
+    action, carrying its own copy of the state, drifting from the first. See
+    the comment on _build_device_row about the five permanently-enabled
+    buttons: they were enabled because nothing re-derived them, and the row
+    that held them looked authoritative the whole time.
+
+    So neither surface owns a predicate. Both call THIS, with facts from the
+    single producer (App._device_verb_facts), and the menu therefore cannot
+    offer Unpair on a lane whose card has Unpair greyed out. Adding a third
+    surface later costs two calls and no new judgement.
+
+    Pure and module-level so a test can drive it through every device state
+    without a window.
+    """
+    return {key: bool(DEVICE_VERB_GATES[key](facts)) for key in DEVICE_VERBS}
+
+
 # ---- pending: the OTHER half of "a button must react" -----------------------
 # The pressed state above covers the instant of the click. This covers the wait
 # after it: 26 actions in this file run on a worker thread and take seconds, and
@@ -1441,11 +1490,102 @@ def notched_scale(parent, var, notches=SENSITIVITY_NOTCHES, **kw):
 
 
 PROFILE_DIR = os.path.join(ROOT, "profiles")
-# What a profile deliberately does NOT carry. These follow the HARDWARE, not the
-# situation: a radio is a physical dongle, a port is a lane on the guest, and the
-# bonds behind them live on the guest per radio. Two arrangements of the same
-# desk must not fight over one lane.
-MACHINE_FIELDS = ("radio", "port")
+
+# ---------------------------------------------------------------------------
+# WHAT A PROFILE CARRIES, AND WHAT IT MUST NOT.
+#
+# A device record holds two different kinds of fact, and only one of them has
+# anything to do with an arrangement.
+#
+#   DEVICE fields follow the HARDWARE. They describe the machine, the lane it
+#   is reached on, or how it feels under the hand. Rearrange every screen on
+#   the desk and not one of them is any different. The live config owns them;
+#   a profile neither stores them nor restores them.
+#
+#   ARRANGEMENT fields describe WHERE THINGS SIT. They are the entire reason a
+#   named arrangement exists, so a profile carries them.
+#
+# ONE QUESTION classifies a new field: if the desk were rearranged and nothing
+# else changed, would this value now be wrong? If no, it is a DEVICE field.
+#
+# Do NOT classify by what a field affects downstream. `pointer_gain` is
+# model-side (DEVLOG: it scales the virtual cursor's belief, never the wire)
+# and `sensitivity` is wire-side, but that only decides which SYMPTOM a wrong
+# value produces -- drift on a crossing versus the wrong feel. It says nothing
+# about who owns the value, and reasoning from it puts the two halves of one
+# calibration in different places.
+#
+# The classification below is COMPLETE by construction: normalize_config()
+# builds a device from a fixed whitelist, so these two tuples plus the join key
+# are exactly its keys, and test_profiles.py fails if a new field appears in
+# that whitelist without being classified here.
+#
+#   id           the JOIN KEY, neither kind. It is how a saved record finds the
+#                live one, so it is stripped from neither side.
+#
+#   radio        DEVICE. A physical dongle. The bonds behind it live on the
+#                guest per radio, so an arrangement saved when the Mac was on a
+#                different dongle would point the lane at a radio holding no
+#                bond for it -- pairs, goes green, does nothing.
+#   port         DEVICE. A lane on the guest, allocated one per machine. Two
+#                arrangements of one desk must never fight over a lane.
+#   name         DEVICE. What that machine is called. It is a label on the
+#                hardware; renaming a device and then switching arrangement
+#                used to silently undo the rename.
+#   enabled      DEVICE. Whether the machine is in service at all -- it gates
+#                the daemon, pairing and status polling, which are hardware
+#                acts. It also drops the device's screens from the desk, which
+#                is why it reads arrangement-shaped; that is a CONSEQUENCE of
+#                the machine being out of service, not the purpose. An
+#                arrangement that wants a device off the desk moves or omits
+#                its screens; it does not stop that machine's daemon.
+#   clipboard    DEVICE. A capability, not a preference: the relay needs helper
+#                shortcuts installed ON the device. Whether they are installed
+#                cannot depend on where its screens sit.
+#   sensitivity  DEVICE. Feel. A property of the device and of the hand using
+#                it. This is the field that produced the bug: three devices
+#                tuned to one notch reverted the moment the arrangement
+#                changed, because the profile carried a snapshot of the
+#                numbers they had been tuned away from.
+#   pointer_accel   DEVICE. Our own acceleration curve for that device, applied
+#                here so the wire and the model see the same motion. Feel.
+#   scroll_invert   DEVICE. Which way the wheel goes on that machine. It exists
+#                to cancel the device's OWN scroll convention (a Mac with
+#                "natural" scrolling on), so it tracks that machine's settings.
+#   pointer_gain DEVICE. Target POINTS produced per HID unit -- a calibration
+#                of that machine's window server, which is a hardware fact. The
+#                arrangement is already accounted for elsewhere in the same
+#                expression (`gain * display["w"] / res_w`): resize a screen's
+#                desk rectangle and the mapping follows on its own, with no
+#                change to gain. Were it arrangement-scoped, re-calibrating one
+#                desk would leave the SAME machine mis-calibrated on every
+#                other -- the defect this constant exists to prevent.
+#   compensate_target_accel   DEVICE. Inverts the TARGET's own acceleration
+#                curve. Only meaningful where that curve is known, which is a
+#                statement about the target OS.
+#   keyboard_verbatim   DEVICE. "This machine already remaps its own
+#                modifiers." A fact about that Mac, true at any desk.
+#   modifier_remap   DEVICE. An iPad wants physical Alt as Command, a Mac wants
+#                Option. A device convention.
+#
+#   displays     ARRANGEMENT. The rectangles ARE the desk.
+#                Known and accepted impurity: a display record also carries
+#                res_w/res_h/rotation/refresh_hz/diagonal_in, which are
+#                hardware facts. They stay with the arrangement deliberately --
+#                re-describing a screen is exactly what a second arrangement is
+#                FOR here (the saved desks are named "Mac4k" and "Mac 2k" after
+#                the resolution they hold), and w/h are derived from the
+#                diagonal, resolution and rotation together, so the rectangle
+#                cannot be separated from them. This is the one path by which a
+#                profile can still overwrite a hardware fact, and it is meant
+#                to.
+# ---------------------------------------------------------------------------
+DEVICE_KEY = "id"
+DEVICE_FIELDS = ("radio", "port", "name", "enabled", "clipboard",
+                 "sensitivity", "pointer_accel", "scroll_invert",
+                 "pointer_gain", "compensate_target_accel",
+                 "keyboard_verbatim", "modifier_remap")
+ARRANGEMENT_FIELDS = ("displays",)
 
 
 def profile_name(name):
@@ -1480,7 +1620,11 @@ def list_profiles():
 
 
 def save_profile(config, name):
-    """Snapshot the arrangement under a name. Machine fields are dropped.
+    """Snapshot the arrangement under a name. Device fields are dropped.
+
+    An arrangement is a picture of WHERE THINGS SIT. Everything that follows
+    the hardware instead -- see DEVICE_FIELDS above -- is left out entirely,
+    so the file cannot hold an opinion about it to restore later.
 
     Returns the name it was actually saved as, which is the only one that
     should be used afterwards."""
@@ -1492,7 +1636,7 @@ def save_profile(config, name):
     # nudges screens toward their neighbours -- so stripping it would let a
     # saved arrangement move the very screens it was saved to preserve.
     for device in snapshot.get("devices", []):
-        for field in MACHINE_FIELDS:
+        for field in DEVICE_FIELDS:
             device.pop(field, None)
     snapshot["profile"] = name
     os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -1503,20 +1647,37 @@ def save_profile(config, name):
 
 
 def load_profile(name, current):
-    """A saved arrangement, wearing THIS machine's radios and ports.
+    """A saved arrangement, wearing THIS machine's devices.
 
-    Which dongle drives which device is a fact about the desk, not about the
-    arrangement -- so it is carried over from what is running now, matched by
-    device id, and never restored from the file."""
+    Which dongle drives a device, what it is called, and how it feels under the
+    hand are facts about the hardware, not about the desk -- so every field in
+    DEVICE_FIELDS is taken from what is running NOW, matched by device id, and
+    never read out of the file.
+
+    A field the live device does not carry is DELETED rather than left as the
+    file found it. Profiles written before this rule still hold the old values,
+    and a device that has since been removed from the desk would be the one
+    record able to smuggle them back in; normalize_config supplies the default
+    instead. The result: no device-scoped value can originate from a profile,
+    conditional on nothing.
+
+    The cost, stated so it is not a surprise: a device that exists ONLY in a
+    saved arrangement comes back as an unconfigured stub -- no radio, a fresh
+    port, no name, default feel -- with its screens laid out where they were.
+    That was already true of its radio and port; it is now true of the rest,
+    which is the honest reading, because there is no live device for those
+    values to describe."""
     with open(_profile_path(name), encoding="utf-8") as handle:
         loaded = json.load(handle)
-    hardware = {device.get("id"): device
+    hardware = {device.get(DEVICE_KEY): device
                 for device in current.get("devices", [])}
     for device in loaded.get("devices", []):
-        live = hardware.get(device.get("id"), {})
-        for field in MACHINE_FIELDS:
+        live = hardware.get(device.get(DEVICE_KEY), {})
+        for field in DEVICE_FIELDS:
             if field in live:
                 device[field] = live[field]
+            else:
+                device.pop(field, None)
     loaded["profile"] = profile_name(name)
     return loaded
 
@@ -7808,6 +7969,73 @@ class App:
             "gen": 0, "started": 0.0, "verb": "", "lock": threading.Lock(),
         })
 
+    def _device_verb_facts(self, device):
+        """Every fact the four connection verbs are decided from, for ONE
+        device record. THE ONLY PRODUCER -- device_verb_offer's input.
+
+        This used to be assembled inline in _apply_device_rows, which was fine
+        while the card was the only surface offering the verbs. It is not fine
+        now that the arrangement canvas offers them too: two producers reading
+        the same _dev_state can disagree about `up` or `busy` for a whole poll
+        interval and both be defensible, and the visible result is a menu that
+        offers Connect while the card three inches away has it greyed out.
+        One producer, one gate table (device_verb_offer), two renderers.
+
+        Returns the six keys DEVICE_VERB_GATES reads, plus three the RENDERERS
+        need and would otherwise re-derive:
+
+            verb            which verb owns this lane right now, "" for none.
+                            Both surfaces let it OVERRIDE the gate -- the card
+                            paints that button busy, the menu shows the same
+                            present participle disabled.
+            radio           the assigned controller address, "" if none
+            radio_missing   assigned, but that dongle is not present
+
+        The pair/connect self-heal lives here rather than in the caller, and it
+        WRITES: _pair_device_worker clears inflight down half a dozen separate
+        failure paths, so the label is cleared from whatever reads the state
+        next instead of from every one of them. Callers are on the Tk thread
+        (the poll marshals through ui(); the menu is an event handler), which
+        is the same thread that owned this write before.
+        """
+        device_id = device["id"]
+        state = self._dev_state(device_id)
+        status = self._dev_status.get(device_id)
+        # isinstance, not `status and` / `is not None`. A daemon status is
+        # whatever json.loads made of the bytes on the socket, and JSON's top
+        # level is legally a scalar or an array -- so `5` short-circuits PAST
+        # the `status and` guard straight into `5.get(...)`, and `is not None`
+        # counts that stray byte as a reachable daemon. The AttributeError
+        # would land inside _apply_poll, whose closure _drain_ui swallows:
+        # every surface below it silently stops refreshing.
+        if not isinstance(status, dict):
+            status = None
+        busy = bool(state["inflight"] or state["broadcasting"])
+        verb = state.get("verb", "")
+        if verb in ("pair", "connect") and not busy:
+            state["verb"] = verb = ""
+        radio = str(device.get("radio", "") or "")
+        # Is this device's assigned radio actually PRESENT? A dongle that
+        # vanished (unplugged, or claimed-but-not-attached by VirtualBox) left
+        # the row showing its last known "paired" forever, because every query
+        # errored with "controller not available" and the state simply never
+        # updated. A frozen yes is worse than an honest "cannot tell" -- it
+        # hides the real fault.
+        known = {str(r.get("address", "")).upper()
+                 for r in (getattr(self.bt_panel, "_radios", []) or [])}
+        radio_missing = bool(radio) and bool(known) and radio not in known
+        return {
+            "usable": bool(radio) and not radio_missing,
+            "vm": bool(self._vm_reachable),
+            "up": status is not None,
+            "busy": busy,
+            "paired": bool(state["paired"]),
+            "live": bool(status and status.get("kbd_subscribed")),
+            "verb": verb,
+            "radio": radio,
+            "radio_missing": radio_missing,
+        }
+
     def _portal_live(self):
         """Is the input portal running? The single source of truth, read
         straight off the process handle. Every renderer of portal state calls
@@ -8105,41 +8333,20 @@ class App:
             row = self._dev_rows.get(device_id)
             if not row:
                 continue
-            state = self._dev_state(device_id)
-            status = self._dev_status.get(device_id)
-            # isinstance, not `status and` / `is not None`. A daemon status is
-            # whatever json.loads made of the bytes on the socket, and JSON's
-            # top level is legally a scalar or an array -- so `5` short-circuits
-            # PAST the `status and` guard straight into `5.get(...)`, and
-            # `is not None` counts that stray byte as a reachable daemon. The
-            # AttributeError would land inside _apply_poll, whose closure
-            # _drain_ui swallows: every surface below it silently stops
-            # refreshing. device_status_rollup already guards this way; this is
-            # the same guard on the per-device path.
-            if not isinstance(status, dict):
-                status = None
-            live = bool(status and status.get("kbd_subscribed"))
-            paired = bool(state["paired"])
-            up = status is not None
-            busy = state["inflight"] or state["broadcasting"]
-            # Which verb owns this lane right now, "" for none. Set by the verb
-            # that started the work; the pair/connect pair is self-healing here
-            # because _pair_device_worker clears inflight down half a dozen
-            # separate failure paths and threading a clear through every one of
-            # them is how one gets missed and a button stays "Pairing…" forever.
-            verb = state.get("verb", "")
-            if verb in ("pair", "connect") and not busy:
-                state["verb"] = verb = ""
-            radio = str(device.get("radio", "") or "")
-            # Is this device's assigned radio actually PRESENT? A dongle that
-            # vanished (unplugged, or claimed-but-not-attached by VirtualBox)
-            # left the row showing its last known "paired" forever, because
-            # every query errored with "controller not available" and the state
-            # simply never updated. A frozen yes is worse than an honest
-            # "cannot tell" -- it hides the real fault.
-            known = {str(r.get("address", "")).upper()
-                     for r in (getattr(self.bt_panel, "_radios", []) or [])}
-            radio_missing = bool(radio) and bool(known) and radio not in known
+            # ONE producer, shared with the canvas's right-click verb section.
+            # Everything below -- the dot, the state text, the radio readout
+            # and all four buttons -- is read out of this single dict, so the
+            # card cannot describe a different lane than the menu offers verbs
+            # for. Its docstring carries the guard against re-deriving any of
+            # it here. It also performs the pair/connect self-heal on
+            # state["verb"], which used to live in this loop.
+            facts = self._device_verb_facts(device)
+            live = facts["live"]
+            paired = facts["paired"]
+            up = facts["up"]
+            verb = facts["verb"]
+            radio = facts["radio"]
+            radio_missing = facts["radio_missing"]
             # Two RADIO faults outrank the state table, because in both the
             # device's own state is unknowable rather than merely idle. The five
             # rows that remain are device_state_colour -- the same pure function
@@ -8168,22 +8375,14 @@ class App:
                 text=(f"{radio}  :{device.get('port')}" if radio
                       else f":{device.get('port')}"))
             buttons = row["buttons"]
-            usable = radio and not radio_missing
-            # The gate itself is DEVICE_VERB_GATES, checked against
-            # DEVICE_VERBS at import. It used to be a hand-written four-key
-            # dict right here, indexed by the DEVICE_VERB_SPEC loop below: a
-            # fifth verb in the spec was a KeyError raised inside the poll,
-            # where _drain_ui swallows it and the whole status surface freezes.
-            facts = {
-                "usable": bool(usable),
-                "vm": bool(self._vm_reachable),
-                "up": bool(up),
-                "busy": bool(busy),
-                "paired": bool(paired),
-                "live": bool(live),
-            }
-            enabled = {key: bool(DEVICE_VERB_GATES[key](facts))
-                       for key in DEVICE_VERBS}
+            # device_verb_offer is the ONLY caller of DEVICE_VERB_GATES, which
+            # is checked against DEVICE_VERBS at import. This was a
+            # hand-written four-key dict right here, indexed by the
+            # DEVICE_VERB_SPEC loop below: a fifth verb in the spec was a
+            # KeyError raised inside the poll, where _drain_ui swallows it and
+            # the whole status surface freezes. The canvas menu calls the same
+            # function on the same facts, so the two surfaces cannot disagree.
+            enabled = device_verb_offer(facts)
             for key, resting, in_flight in DEVICE_VERB_SPEC:
                 button = buttons[key]
                 if key == verb:
@@ -8583,6 +8782,124 @@ class App:
         menu.add_command(
             label=f"Edit all screens on {device.get('name', key[1])}…",
             command=self._deferred(self._menu_device_editor, key[1]))
+        self._fill_device_verb_entries(menu, key[1])
+
+    # ---- the four connection verbs, as menu entries ------------------------
+    # Doug: "it'd be nice if i could have my Pair connect disconnect unpair
+    # options here, only surfacing two at a time based on what is relevant to
+    # toggle".
+    #
+    # TWO IS NOT THE COUNT, and guessing it would have shipped a menu that hid
+    # a live action. Run DEVICE_VERB_GATES through the real states:
+    #
+    #   unpaired                Pair                                    (1)
+    #   paired, not connected   Pair, Connect, Unpair                   (3)
+    #   connected               Disconnect, Unpair                      (2)
+    #   mid-pair (busy)         Disconnect, which here means CANCEL     (1)
+    #   no radio / radio gone   none                                    (0)
+    #
+    # Pair is live on a bonded-but-idle lane because it is NOT gated on "not
+    # paired": re-pairing a bonded device is legal and is how a bad bond gets
+    # recovered. So the rule is SHOW THE ONES THAT ARE LIVE, whatever the
+    # count, and the zero case gets a reason rather than an empty section.
+    #
+    # Nothing in this section restarts the input portal. That was measured, not
+    # assumed: portal_signature is taken over CONFIG fields (monitor and
+    # display geometry, per-device input settings), and none of the four verbs
+    # writes config -- they move bond and link state, which the signature does
+    # not contain. The display entries above them cost eight seconds and say
+    # so; these do not, and must not claim to.
+
+    def _device_verb_entries(self, device_id):
+        """(verb, label, enabled) for every verb entry this device gets, in
+        DEVICE_VERB_SPEC order. Decides; renders nothing.
+
+        Split from the filler so the decision can be driven through every
+        device state without a window, and so the menu is WRITTEN FROM this
+        list rather than alongside it -- a returned description that the
+        renderer then ignores is the same drift this whole wave is closing.
+
+        The gate is device_verb_offer on facts from _device_verb_facts: the
+        same call, on the same producer, that paints the card's four buttons.
+        There is deliberately no predicate of any kind in this method.
+        """
+        record = self.device_record(device_id) or {}
+        facts = self._device_verb_facts(dict(record, id=device_id))
+        offered = device_verb_offer(facts)
+        rows = []
+        for key, resting, in_flight in DEVICE_VERB_SPEC:
+            # The in-flight verb OVERRIDES its own gate, exactly as it does on
+            # the card: _apply_device_rows paints that one button with the
+            # present participle and disables it whatever the gate said. If
+            # the menu instead dropped it, the surface the user right-clicked
+            # to check on a pair attempt would be the one surface that never
+            # mentions it.
+            if key == facts["verb"]:
+                rows.append((key, in_flight, False))
+                continue
+            if not offered[key]:
+                continue
+            rows.append((key, self._verb_menu_label(key, resting, facts), True))
+        return rows
+
+    @staticmethod
+    def _verb_menu_label(key, resting, facts):
+        """The resting label plus what it COSTS. Timings are the real ones.
+
+        Disconnect is the one verb whose name is wrong half the time: its gate
+        is `live or busy`, so it is also the CANCEL for a pair attempt, and
+        mid-pair the card's "Disconnect" offers to end a connection that does
+        not exist yet. The card cannot say otherwise -- its label comes
+        straight out of DEVICE_VERB_SPEC and is four characters wide. A menu
+        entry can, so here it does.
+        """
+        if key == "disconnect" and facts["busy"] and not facts["live"]:
+            return DEVICE_VERB_CANCEL_LABEL
+        return DEVICE_VERB_MENU_SUFFIX[key].format(verb=resting)
+
+    def _fill_device_verb_entries(self, menu, device_id):
+        """Append the verb section to an already-filled menu. Returns the rows.
+
+        NAMED, always. This menu is opened on one DISPLAY, but every verb here
+        acts on the whole DEVICE: right-clicking any one of the Managed Mac's
+        three panels and choosing Unpair unpairs the Mac. A header carrying the
+        device's name is the difference between that being obvious and it being
+        a trap.
+
+        Every enabled entry is deferred, like every other command in these
+        menus. Pair and Unpair open dark_confirm and Connect can open
+        dark_alert -- all FrameModals, and FrameModal.grab_set records
+        grab_current(): opened inline from a posted menu it captures the MENU,
+        hands the grab back to a widget that is no longer posted, and the whole
+        window goes mouse-dead. Disconnect opens nothing today, and is deferred
+        anyway -- see _deferred's own docstring on why this is uniform.
+        """
+        record = self.device_record(device_id) or {}
+        rows = self._device_verb_entries(device_id)
+        menu.add_separator()
+        menu.add_command(
+            label=f"{record.get('name', device_id)} — connection",
+            state="disabled")
+        for key, label, enabled in rows:
+            if not enabled:
+                menu.add_command(label="   " + label, state="disabled")
+                continue
+            menu.add_command(
+                label="   " + label,
+                command=self._deferred(
+                    getattr(self, DEVICE_VERB_HANDLERS[key]), device_id))
+        if not rows:
+            facts = self._device_verb_facts(dict(record, id=device_id))
+            if facts["radio_missing"]:
+                why = "its radio is not present"
+            elif not facts["radio"]:
+                why = "no radio assigned"
+            elif not facts["vm"]:
+                why = "the VM is not answering"
+            else:
+                why = "nothing to do right now"
+            menu.add_command(label=f"   — {why} —", state="disabled")
+        return rows
 
     def _fill_local_entries(self, menu, key, _item):
         """A Windows monitor's menu. Honest about who owns what.
