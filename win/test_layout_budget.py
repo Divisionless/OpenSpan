@@ -16,9 +16,12 @@ identical disease: it declared height=8 and then expanded, which made the
 declaration decorative.
 
 The second is worse, because it is silent. Nothing in openspan.py set a window
-HEIGHT. geometry("1120x930") named one at import; _set_win_width parses the
-height back out of geometry() and puts it straight back, so it never changed
-again. And minsize(940, 680) permitted a window far shorter than the left
+HEIGHT. geometry("1120x930") named one at import; _set_win_width parsed the
+height back out of geometry() and put it straight back, so it never changed
+again. (_set_win_width itself is gone as of the rail wave -- the console is a
+pane now and a pane switch changes height, not width -- but the fault it
+carried is what these checks exist for.) And minsize(940, 680) permitted a
+window far shorter than the left
 column actually needs. At that size Tk's packer simply does not place the last
 panels -- "System control" and "Bluetooth radio" are gone. There is no
 scrolling anywhere in this app by design, so there is no scrollbar, no clipped
@@ -183,15 +186,40 @@ for frame in ("main", "bridge_col", "bridge"):
     check(f"cavity frame `{frame}` still expands", expands(frame),
           f"pack kwargs: {PACKS.get(frame)}")
 
+# THE INVARIANT, RESTATED. It was written here as "the only expanding child of
+# `bridge` is the designated spacer", which was the consequence and not the
+# rule. The rule is that `bridge` has EXACTLY ONE expanding child, so the
+# window's surplus height has a single named destination and cannot be split
+# between two panels that each distort a little to absorb it.
+#
+# Which child that is depends on the pane, and it has to: the console is a LOG,
+# and vertical room is the entire point of looking at one. It packed
+# expand=False like every other pane, with cwrap expanding inside it, so every
+# pixel of a dragged-taller window went to a spacer that draws nothing while the
+# log stayed the height it opened at. select_pane moves the flag between the
+# pane and the spacer now, and the count stays one. Both halves are checked:
+# the built state here, the switching state live at the bottom of this file.
 bridge_kids = children_of("bridge")
 expanding = [w for w in bridge_kids if expands(w)]
 check("`bridge` has children at all", len(bridge_kids) >= 5,
       f"found: {bridge_kids}")
-check("the only expanding child of `bridge` is the designated spacer",
+check("as BUILT, the only expanding child of `bridge` is the designated spacer "
+      "— no pane is packed in __init__ at all",
       expanding == ["self._bridge_spacer"],
       f"expanding: {expanding}   of: {bridge_kids}")
 check("`bridge` is never left with zero expanding children",
       len(expanding) == 1, f"expanding: {expanding}")
+check("PANE_EXPANDS declares which panes take the surplus instead of the "
+      "spacer, and it is the console alone",
+      getattr(A, "PANE_EXPANDS", None) == ("console",),
+      str(getattr(A, "PANE_EXPANDS", None)))
+SELECT = _method("App", "select_pane")
+select_src = ast.unparse(SELECT) if SELECT else ""
+check("select_pane derives the pane's expand flag from PANE_EXPANDS rather "
+      "than a literal", "PANE_EXPANDS" in select_src)
+check("...and re-configures the spacer against it in the same breath, so the "
+      "two flags can never both be on or both be off",
+      "self._bridge_spacer.pack_configure" in select_src, select_src[:600])
 
 check("arr_wrap no longer expands -- it was the sponge PARENT",
       not expands("arr_wrap"), f"pack kwargs: {PACKS.get('arr_wrap')}")
@@ -460,6 +488,64 @@ check(f"BtPanel is within its {BT_PANEL_MAX_H}px budget",
       f"{panel.winfo_reqheight()} px")
 check(f"the arrangement canvas is within its {CANVAS_FIT_MAX_H}px budget",
       fit <= CANVAS_FIT_MAX_H, f"{fit} px")
+
+
+# ---- (e) ONE expanding child of `bridge`, on every pane --------------------
+# The runtime half of the invariant above, driven through the SHIPPED
+# select_pane. App(root) is never constructed -- that starts the VM -- so this
+# is App.__new__ plus the five attributes select_pane touches, and rederive is
+# off because the height budget is not what is under test here.
+#
+# pack_info() is the observable, not winfo_height: the root is withdrawn so
+# nothing on it is ever allocated real geometry, but the geometry manager's own
+# record of the -expand option is exact and is what the invariant is about.
+bridge = tk.Frame(root, bg=A.BG)
+bridge.pack(fill="both", expand=True)
+panes = {key: tk.Frame(bridge, bg=A.BG, width=200, height=120)
+         for key in A.PANE_KEYS}
+spacer = tk.Frame(bridge, bg=A.BG, height=0)
+spacer.pack(fill="both", expand=True)
+
+napp = A.App.__new__(A.App)
+napp.root = root
+napp._pane = None
+napp._prev_pane = None
+napp._panes = panes
+napp._rail = {}
+napp._bridge_spacer = spacer
+napp._cons_btn = ttk.Button(root, text="▸  Console")
+
+
+def expands_live(widget):
+    """Is this widget currently packed AND expanding? A pack_forget'd pane is
+    not expanding in any sense the surplus can reach, and pack_info() on one
+    raises rather than answering."""
+    try:
+        info = widget.pack_info()
+    except tk.TclError:
+        return False
+    return str(info.get("expand", "0")) in ("1", "True", "true")
+
+
+for key in A.PANE_KEYS:
+    napp.select_pane(key, rederive=False, remember=False)
+    root.update_idletasks()
+    growing = [w for w in bridge.pack_slaves() if expands_live(w)]
+    wanted = panes[key] if key in A.PANE_EXPANDS else spacer
+    check(f"'{key}': `bridge` still has exactly one expanding child",
+          len(growing) == 1, f"{[str(w) for w in growing]}")
+    check(f"'{key}': ...and it is the "
+          f"{'pane' if key in A.PANE_EXPANDS else 'spacer'}",
+          growing == [wanted], f"{[str(w) for w in growing]}")
+# ...and it is genuinely reversible, not a one-way handover.
+napp.select_pane("console", rederive=False, remember=False)
+console_holds = expands_live(panes["console"]) and not expands_live(spacer)
+napp.select_pane("desk", rederive=False, remember=False)
+spacer_holds = expands_live(spacer) and not expands_live(panes["console"])
+check("the surplus moves to the console and back again — the spacer is not "
+       "left switched off once the console has been visited",
+      console_holds and spacer_holds,
+      f"console_holds={console_holds} spacer_holds={spacer_holds}")
 
 root.destroy()
 shutil.rmtree(SCRATCH, ignore_errors=True)

@@ -8,7 +8,7 @@ streamed to the iPad over BLE; cross back to return control to the PC.
 
   Cross the portal edge   -> control the iPad
   Move back across it, or -> control the PC
-  press Esc 3x in a row   -> panic exit (Ctrl+Alt+Q kept as backup)
+  press Esc 3x in a row   -> panic exit (the only bail-out; always ours)
   press Ctrl+Alt+I        -> toggle manually (ignores geometry)
 
 Pure ctypes; closing this console unhooks everything (safety net).
@@ -2256,8 +2256,16 @@ class Portal:
             # So they fire only when no device is captured. Esc x3 remains the
             # bail-out and is the one thing that is always ours -- it is
             # advertised on every entry line in the log for exactly this reason.
-            if down and vk == 0x51 and ctrl and alt and not self.active:
-                return 1                                  # Ctrl+Alt+Q, legacy
+            # Ctrl+Alt+Q RELEASED, 2 August. It used to be swallowed here and do
+            # nothing -- `return 1` and no action -- and the guard was
+            # `not self.active`, so it fired only when there was nothing to bail
+            # out OF and fell through when capture was live. The module
+            # docstring called it a backup panic exit; it had not been one for a
+            # long time, if ever. Esc x3 is the bail-out and always has been.
+            #
+            # Released rather than merely left dead because EsotericOS moved its
+            # Quick Actions off this chord to avoid us, and it is not reasonable
+            # to hold a chord hostage to a stub. See docs/INTEROP.md.
             if down and vk == 0x49 and ctrl and alt and not self.active:
                 ready = next(
                     (portal for portal in self.portals

@@ -515,8 +515,19 @@ print("\n---- (d) the one surface that explains a dead mouse ----")
 INIT = _method("App", "__init__")
 init_src = _src(INIT)
 check("the indicator row is still built", "indrow = tk.Frame(" in init_src)
+# The row's keys used to be a literal tuple inside __init__. They are
+# INDICATOR_ORDER now, because that row OVERFLOWS its cavity at the app's
+# minimum width and, with no scrolling, Tk clips and then drops whatever was
+# packed last -- so the order is load-bearing and lives beside the reason for
+# it. test_panes.py measures the consequence at 940px; this only has to know
+# the admin token is still one of the row's own.
 check("...and still declares an `admin` token among its keys",
-      '"admin"' in init_src and "self._ind[_k] = _lb" in init_src)
+      "admin" in A.INDICATOR_ORDER and "self._ind[_k] = _lb" in init_src,
+      str(A.INDICATOR_ORDER))
+check("...packed FIRST, because pack order is drop order and this is the one "
+      "token that must never be the casualty",
+      A.INDICATOR_ORDER[0] == "admin" and "admin" in A.INDICATOR_MUST_SURVIVE,
+      str(A.INDICATOR_ORDER))
 admin_writes = surfaces_writing("NOT ADMIN")
 check("the admin lamp is painted, by exactly one widget",
       admin_writes == {"self._ind['admin']"}, str(sorted(admin_writes)))

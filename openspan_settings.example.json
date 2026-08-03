@@ -6,9 +6,13 @@
     "daemon_host: 127.0.0.1 = an OpenSpan VM on THIS PC. Set it to another",
     "  machine's LAN IP (e.g. a spare laptop) to use that machine's Bluetooth",
     "  as the bridge, leaving this PC's radio free for headphones.",
+    "last_pane is written by the app: which rail pane it reopens on. Valid",
+    "  values are desk, devices, bluetooth, system, console; anything else",
+    "  falls back to desk.",
     "Restart the portal after changing anything here."
   ],
   "vm_name": "OpenSpan",
+  "last_pane": "desk",
   "app_label": "OpenSpan",
   "mouse_sensitivity": 1.0,
   "daemon_host": "127.0.0.1",

@@ -345,11 +345,26 @@ del broker._mouse_has_side_buttons
 # never pasted. A combination the portal swallows is one the target never sees.
 import inspect  # noqa: E402
 hook = inspect.getsource(openspan_portal.Portal)
-for combo, vk in (("Ctrl+Alt+Q", "0x51"), ("Ctrl+Alt+I", "0x49")):
+for combo, vk in (("Ctrl+Alt+I", "0x49"),):
     line = [ln for ln in hook.splitlines()
             if f"vk == {vk} and ctrl and alt" in ln]
     check(f"{combo} is not taken from a captured device",
           bool(line) and "not self.active" in line[0])
+
+# Ctrl+Alt+Q is RELEASED, and the check is stronger than the one it replaces.
+#
+# This used to assert that the chord was swallowed only when no device was
+# captured -- which is a claim about HOW the stub was guarded, i.e. a test that
+# encoded the implementation. The stub did nothing: `return 1` and no action,
+# fired only when there was nothing to bail out of. Meanwhile EsotericOS moved
+# its Quick Actions off this chord to avoid colliding with us, so we were
+# holding a chord hostage to dead code.
+#
+# The honest claim is not "we take it politely" but "we do not take it". That is
+# what is asserted now, and it cannot be satisfied by re-adding a better-guarded
+# stub. See docs/INTEROP.md.
+check("Ctrl+Alt+Q is not taken by OpenSpan at all",
+      not [ln for ln in hook.splitlines() if "vk == 0x51 and ctrl and alt" in ln])
 check("plain Ctrl+Alt+V is not swallowed at all any more",
       not [ln for ln in hook.splitlines()
            if "vk == 0x56 and ctrl and alt and self.active" in ln])

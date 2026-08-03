@@ -1933,3 +1933,157 @@ Accessibility → Zoom modifier set to Option. No code on either side can fix it
 restating it, so the two documents cannot drift into contradiction.
 
 Suite 795 -> 931 checks across 17 files.
+
+### W7 — one pane at a time: the window is the tallest pane, not the sum
+
+Doug: *"the app is still showing too much information at once i think — how can
+we get this thing to be a reasonable size on 1080p? it demands too much —
+consider InputDirector interface for ideas"*
+
+Input Director's shape, and the reason it fits on a laptop: a narrow labelled
+rail, ONE pane beside it, a small persistent header. The window's height is then
+the tallest pane rather than the sum of every section. This window was the sum —
+two columns, every panel packed at once, **1136 x 1054 measured on a 1040px work
+area**. Under the rail, measured on the live config (3 devices, 3 monitors, 96
+DPI):
+
+| pane | pane px | window px | minsize px |
+|---|---:|---:|---:|
+| Desk | 552 | **725** | 725 |
+| Devices | 157 | **520** (floored) | 520 |
+| Bluetooth | 819 | **992** | 992 |
+| System | 332 | **520** (floored) | 520 |
+| Console | 385 | **558** | 558 |
+
+The rail is 116px wide and 170px tall. The arrangement canvas is *better* off:
+one column gives it 940px of width instead of 852, so `_fit_height` returns 493px
+instead of 447 and the desk is drawn larger in a shorter window.
+
+**The panes are built once and hidden with `pack_forget` — never destroyed,
+never lazy.** Tk has no reparent operation, and two of them are service objects
+as much as panels: `BtPanel._radios` gates the radio check on every device card,
+`_connected_names` feeds the headphones line, `_poll` calls
+`bt_panel.refresh(quiet=True)` on every fifth tick, and `MultiArrangeCanvas` owns
+the desk config that six calls a tick read. A pane that existed only while you
+were looking at it would take those with it. `test_panes.py` walks the tree on
+every pane and proves both survive being hidden, then makes the tick's real
+writes — including `set_ipad_state`, which reaches `redraw()` and `winfo_` — with
+the pane hidden.
+
+**The readiness banner had to leave the panes, and this is the part that would
+have shipped broken.** `ready_lbl` lived in the Audio & status panel, which
+becomes the Bluetooth pane — so under a rail it would vanish whenever any other
+pane was up. That is the W4 fatal verbatim, one commit old: the banner was then
+inside the console frame, which `_console_open = False` meant was constructed and
+never mapped, so the default window could not say whether the bridge was up. It
+now sits in the pinned header (`full`), assigned once, written by one caller.
+
+**Height is re-derived on every switch, and minsize moves in both directions.**
+`_rederive_height` re-runs the W1 budget against the pane on show: settle the
+packer, re-fit the canvas if the desk is up, measure `full`, `pane_window_plan`,
+apply. **minsize before geometry** — Tk clamps `geometry()` to whatever minsize
+is in force, so lowering the window without lowering the floor first is a silent
+no-op and the window stays stuck at the tall pane's height. The same order was
+wrong at the end of `App.__init__` (the provisional `minsize(940, 680)` is taller
+than a short pane) and was swapped there too.
+
+**A floor, and it is not a re-introduced guess.** `FrameModal._fit` clamps its
+card to `host.winfo_height() - 40`, and the tallest dialog in the file
+(`MacDisplayEditor`) asks for 900x420. The Devices pane is the shortest in the
+app *and* its own card menu is what opens that dialog — so without a floor,
+selecting the smallest pane would cut the buttons off the biggest modal it can
+raise. `PANE_MIN_WINDOW_H = 520`, never taller than the screen.
+
+**The console stopped being a width problem.** It was a fixed 390px strip pinned
+to the right edge; opening it widened the whole window 1120 → 1520, with a
+`<Configure>` handler to re-apply that width whenever the window left a maximized
+state because Tk ignores `geometry()` while zoomed. `_set_win_width`,
+`App._on_configure`, `_was_zoomed`, `_console_open`, `_cons_anchor` and both
+width literals are gone. The title-bar button selects the pane and a second press
+returns to where you were.
+
+**Persisted.** `last_pane` in `openspan_settings.json`, written only on a
+deliberate switch. An unknown, missing or corrupt value falls back to `desk`
+rather than raising — this runs inside `App.__init__`, before there is any
+surface to report a fault on.
+
+The rail labels every item in words, not a glyph alone: this app is opened rarely
+enough that a bare icon is a memory test every time.
+
+Left standing, and named rather than fixed: the Bluetooth pane at 992px is now
+the app's height ceiling, and it is ~85% BtPanel. Its `self.out` Text (height=5,
+72px) is a second console, and the app has a console pane now — but removing it
+is a behaviour change nobody asked for.
+
+Suite 931 -> 1032 checks across 18 files (`test_panes.py`, 101 checks). The one
+standing red is the config-state check in `test_sensitivity_notches.py`, unchanged
+and not a code fault.
+
+### W7 — a nav rail, one pane at a time
+
+Doug: *"the app is still showing too much information at once i think -- how can
+we get this thing to be a reasonable size on 1080p? it demands too much --
+consider InputDirector interface for ideas"*
+
+Input Director's shape: a narrow left rail, one pane visible at a time, a small
+persistent header. The consequence is the point — **window height becomes the
+tallest pane rather than the sum of every section.** W5's ~1006px floor was still
+summing; this does not.
+
+    devices  520    system  520    console  558    desk  725    bluetooth  992
+
+against a 1040px work area, from a fixed 1054. Last pane is remembered across
+restarts; the pinned header is the token row, the status line and the readiness
+banner, and nothing else.
+
+**Panes are built once and hidden with pack_forget, never destroyed.** BtPanel is
+a service object as much as a panel — `_radios` feeds the device-row radio gate,
+`_connected_names` feeds the headphones line, and `_poll` calls
+`bt_panel.refresh()` every fifth tick whether or not it is on screen. The canvas
+is the same: it owns the config, and `set_target_state` runs every tick. Hiding
+is free; destroying would break the poll, which is why the sweep refuted
+"dissolve the Bluetooth column" while this wave is safe.
+
+**The readiness banner moved to the header.** It lived in the audio panel, which
+became the Bluetooth pane — under a rail it would have vanished on four panes out
+of five. That is exactly the W4 fatal (no readiness surface in the default view,
+because `ready_lbl` sat inside the never-packed console frame) and it would have
+been reintroduced one commit after it was fixed.
+
+**The header starves, and the casualty was the one that matters.** At the app's
+940px minimum the honest token row wants ~932px against a 908px cavity, and Tk's
+packer does not shrink overflow — it drops the last-packed child. That was
+`admin`: per `is_elevated`'s docstring the ONLY surface in this app that explains
+a silently dead mouse under UIPI. Fixed by ORDER, not by widening minsize —
+`INDICATOR_ORDER` puts the non-negotiables first and the widest, most transient
+token (`bcast`) last, and `broadcast_names()` collapses to a count past two
+devices. Measured: admin PLACED at 940px, bcast the only casualty.
+
+The row is deliberately NOT required to fit whole. Widening minsize to close a
+24px gap would trade a real constraint — the window must fit a 1080p panel — for
+a cosmetic one. What is asserted instead is the ordering invariant: overflow is
+permitted, but only a yieldable token may be cut.
+
+**The test that proved nothing.** The starvation check built its own probe row
+from `INDICATOR_ORDER` and then asserted properties of `INDICATOR_ORDER` — a
+closed loop. Reverting the shipped `for _k in INDICATOR_ORDER:` back to the old
+literal tuple, with the constant and its rationale left untouched, made the whole
+file report ALL PASS while the header dropped the lamp again. Found by mutation,
+not by reading. There is now an AST check binding the loop to the constant.
+
+Also fixed: a bare `except Exception: pass` re-introduced on the height path by
+the same wave that deleted one from `_apply_poll`; another still wrapping the
+readiness banner's own update inside `_apply_poll`; the console pane unable to
+grow (the one pane where vertical growth is the entire point); `_prev_pane` going
+stale when the console was reached from the rail; and rail hover painting the
+same value as rail selection.
+
+**`Ctrl+Alt+Q` released.** It was `return 1` and nothing else, guarded on
+`not self.active` — so it fired only when there was nothing to bail out of and
+fell through when capture was live, while the module docstring called it a backup
+panic exit. EsotericOS moved its Quick Actions off that chord to avoid colliding
+with us; holding it hostage to a stub was not reasonable. The test that asserted
+the stub existed now asserts the stronger claim — that OpenSpan does not take the
+chord at all — which cannot be satisfied by re-adding a better-guarded stub.
+
+Suite 931 -> 1111 checks across 18 files.
