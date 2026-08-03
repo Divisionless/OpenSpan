@@ -2201,3 +2201,39 @@ for "no per-object editor is a permanent button" — which is already asserted p
 editor by name. Replaced with what it meant, rather than bumping the number.
 
 Suite 1220 -> 1223 across 19 files.
+
+### W8 — the menu's advertised waits are the wait, not one component of it
+
+The verb menu labels each disruptive action with how long it takes. Three of the
+four named a single call inside the work instead of the work:
+
+    unpair    "a ~25s guest command"   forget-hid IS a 25s ssh -- but
+                                       set_target_advertising (8s) and a
+                                       disconnect (2s) run first. Wait: ~35s.
+    pair      "up to ~1 min"           the ssh alone is 55s, and four
+    connect   "up to ~1 min"           set_target_advertising calls at 8s
+                                       apiece sit on the various exits. ~87s.
+    disconnect "up to ~10s"            correct.
+
+A number that describes part of the wait is worse than no number: it is precise,
+and wrong in the direction that makes you think the app has hung.
+
+`test_device_verbs.py` now re-derives every label from the code's own
+`timeout=` literals and fails if a label is under the worst case its own path
+allows — or more than double it. Writing that check immediately caught the
+number in this very commit: I had counted two `set_target_advertising` calls on
+the pair path and there are four, so my first correction said ~70s against an
+87s path. The labels now read ~90s / ~90s / ~10s / ~35s.
+
+The VM-start retry loop inside `_pair_device_attempt` — 45 × (5s probe + 2s
+wait) ≈ 315s — is deliberately EXCLUDED, and the exclusion is in the test rather
+than left as a silent omission: pair's gate requires `f["vm"]` and connect's
+requires `f["up"]`, so neither verb is offered unless the VM is already
+answering. Folding it in would advertise five minutes for a wait that cannot
+happen.
+
+The old assertion `"25s" in live_rows["unpair"]` was pinning the component
+number, so the test certified the understatement. It now only asserts a wait is
+advertised; section (g) checks the value.
+
+Suite 1223 -> 1236 across 19 files.

@@ -46,6 +46,7 @@ Exit 0 = all pass.
 """
 import ast
 import os
+import re
 import sys
 import textwrap
 import types
@@ -473,8 +474,14 @@ live_rows = dict((key, label) for key, label, ok in
 check("(b) ...but on a live link it still reads Disconnect",
       live_rows["disconnect"].startswith("Disconnect"),
       live_rows["disconnect"])
-check("(b) Unpair names the ~25s guest command (forget-hid is a 25s ssh)",
-      "25s" in live_rows["unpair"], live_rows["unpair"])
+# Was: `"25s" in live_rows["unpair"]`, on the grounds that forget-hid is a 25s
+# ssh. It is -- but the WAIT is 35s, because set_target_advertising (8s) and a
+# disconnect (2s) run before it. Pinning the component number made the test
+# certify the understatement. Section (g) below re-derives every label from the
+# code's own timeouts; this one only asserts a wait is advertised at all.
+check("(b) Unpair advertises a wait, since forget-hid makes it the slow verb",
+      re.search(r"~\d+s", live_rows["unpair"]) is not None,
+      live_rows["unpair"])
 every_label, offered_label = [], []
 for state in STATES.values():
     drive(app, state)
@@ -658,6 +665,82 @@ check("(f) the harness's control -- the same method, recompiled unmutated, "
       "still agrees",
       not agreement_problems(CONTROL()))
 
+
+# ===========================================================================
+# (g) the wait each menu label advertises is the SUM of that verb's timeouts
+# ===========================================================================
+# The labels used to name one component apiece -- unpair said "a ~25s guest
+# command", which is true of the ssh and false of the wait, because the two
+# daemon commands before it cost another 10s. A number that describes part of
+# the wait is the same dishonesty as no number at all: it is precise, and it is
+# wrong in the direction that makes you think the app has hung.
+#
+# So the labels are re-derived here from the real timeouts rather than trusted.
+# This cannot prove the sum is the true wall-clock -- a daemon that answers
+# instantly costs nothing - but it does prove the label is not smaller than the
+# worst case the code allows, which is the claim it makes.
+print("\n---- (g) the advertised waits match the code's own timeouts ----")
+
+VERB_PATHS = {                       # verb -> the methods its work runs through
+    "pair": ("_pair_device_attempt",),
+    "connect": ("_pair_device_attempt",),
+    "disconnect": ("_disconnect_device",),
+    "unpair": ("_unpair_device",),
+}
+# Helpers whose own timeout is spent inside those methods. set_target_advertising
+# is a target_daemon_cmd(timeout=8); a bare target_daemon_cmd defaults to 2.
+HELPER_COST = {"set_target_advertising": 8, "target_daemon_cmd": 2}
+# The VM-start retry loop inside _pair_device_attempt. Unreachable from an
+# offered verb -- pair's gate requires vm, connect's requires up -- so it is
+# excluded deliberately rather than by oversight.
+VM_START_LOOP_TIMEOUT = 5
+
+
+def _path_timeout(method_names):
+    """Worst-case seconds on one verb's path, from the source."""
+    total = 0
+    for method_name in method_names:
+        fn = _method("App", method_name)
+        if fn is None:
+            return None
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            called = _dotted(node.func) or ""
+            leaf = called.rsplit(".", 1)[-1]
+            explicit = None
+            for keyword in node.keywords:
+                if keyword.arg == "timeout" and isinstance(keyword.value,
+                                                           ast.Constant):
+                    explicit = keyword.value.value
+            if explicit == VM_START_LOOP_TIMEOUT:
+                continue             # the unreachable VM-start probe
+            if explicit is not None:
+                total += explicit
+            elif leaf in HELPER_COST:
+                total += HELPER_COST[leaf]
+    return total
+
+
+for _verb, _methods in VERB_PATHS.items():
+    _cost = _path_timeout(_methods)
+    _label = A.DEVICE_VERB_MENU_SUFFIX[_verb]
+    _claimed = [int(n) for n in re.findall(r"~(\d+)s", _label)]
+    check(f"{_verb}: the label carries a number at all",
+          bool(_claimed), _label)
+    if _claimed and _cost is not None:
+        check(f"{_verb}: advertised ~{_claimed[0]}s is not less than the "
+              f"{_cost}s its own timeouts allow",
+              _claimed[0] >= _cost,
+              f"label says {_claimed[0]}s, path allows {_cost}s — {_label}")
+        check(f"{_verb}: ...and is not wildly over-stated either",
+              _claimed[0] <= _cost * 2,
+              f"label says {_claimed[0]}s, path allows {_cost}s")
+
+check("no verb label names a bare component instead of the wait — "
+      "'a ~25s guest command' was the shape that failed",
+      not any("guest command" in A.DEVICE_VERB_MENU_SUFFIX[v]
+              for v in A.DEVICE_VERBS))
 
 print()
 if fails:

@@ -642,11 +642,36 @@ DEVICE_VERB_GATES = _require_verb_coverage({
 # None of them says "restarts input": portal_signature is taken over CONFIG
 # fields, and no verb here writes config. The display entries above them in the
 # same menu DO cost eight seconds and say so.
+# Every number here is the sum of the timeouts on that verb's OWN path, not the
+# largest single call in it. A label naming one component understates the wait
+# by whatever the rest costs, which is the same dishonesty as not labelling it.
+# Derived, and re-derived by test_device_verbs so they cannot drift:
+#
+#   pair / connect  both run _pair_device_attempt:
+#                     ssh_guest(pair command, timeout=55)                    55s
+#                     set_target_advertising x4 -> target_daemon_cmd(8s each) 32s
+#                       (one to start broadcasting, three on the various
+#                        cleanup and failure exits -- not all on one path, but
+#                        the label must cover the worst, not the typical)
+#                                                                    total ~87s
+#     There is also a VM-start branch, 45 x (ssh timeout=5 + 2s wait) = ~315s.
+#     It is UNREACHABLE from an offered verb: pair's gate requires f["vm"] and
+#     connect's requires f["up"], and both mean the VM is already answering. Do
+#     not fold it into the label, and do not "correct" the label to include it.
+#
+#   disconnect      set_target_advertising -> target_daemon_cmd(timeout=8)    8s
+#                   target_daemon_cmd(disconnect, default timeout=2)          2s
+#                                                                    total ~10s
+#
+#   unpair          set_target_advertising -> target_daemon_cmd(timeout=8)    8s
+#                   target_daemon_cmd(disconnect, default timeout=2)          2s
+#                   ssh_guest(forget-hid, timeout=25)                        25s
+#                                                                    total ~35s
 DEVICE_VERB_MENU_SUFFIX = _require_verb_coverage({
-    "pair": "{verb}…   (confirms first — up to ~1 min before it broadcasts)",
-    "connect": "{verb}   (up to ~1 min)",
+    "pair": "{verb}…   (confirms first — up to ~90s before it broadcasts)",
+    "connect": "{verb}   (up to ~90s)",
     "disconnect": "{verb}   (up to ~10s)",
-    "unpair": "{verb}…   (confirms first — a ~25s guest command)",
+    "unpair": "{verb}…   (confirms first — up to ~35s)",
 }, "DEVICE_VERB_MENU_SUFFIX")
 
 # Disconnect's gate is `live or busy`, so mid-pair it is the CANCEL -- and
