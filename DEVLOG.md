@@ -2087,3 +2087,47 @@ the stub existed now asserts the stronger claim — that OpenSpan does not take 
 chord at all — which cannot be satisfied by re-adding a better-guarded stub.
 
 Suite 931 -> 1111 checks across 18 files.
+
+### A second portal button, on the Desk
+
+Doug: *"Duplicate start portal button linked to same backend and place floating
+in field of Desk at bottom"*
+
+W7 put the Start portal button in the System pane, so from the Desk pane — where
+he spends most of his time — the control was two clicks away and the amber alarm
+explaining why nothing is bridging was on a pane he could not see.
+
+It floats over the canvas via `place()`, so it costs the pane **zero height**:
+measured 517px with and without. The canvas is aspect-fit, so the strip below the
+drawing is structurally empty — the button sits in it with 61px of clearance
+above the lowest screen rectangle at this desk's geometry.
+
+**"Linked to same backend" is the whole engineering problem.** A duplicated
+control surface already shipped in this app and broke, because each surface kept
+its own idea of state. So: one builder (`_portal_button`), one registry
+(`_portal_btns`), one writer (`_render_portal_button`, which already called
+itself "the ONE writer"), one command, and one busy helper (`_busy_portal`) that
+parks the wait across every registered button and returns a single restore. The
+guard is now `any(button_is_busy(b) for b in ...)` — a half-busy pair, one saying
+"Stopping portal…" while the other says "Stop portal", IS the bug.
+
+**Both tests protecting this were rubber stamps, and mutation proved it.**
+
+The geometry section re-typed the button's placement into the test file and then
+measured that. Changing the SHIPPED `rely=1.0` to `0.70` put the button over
+three screen rectangles and turned +63px of clearance into −85px, and every check
+still passed — including the one titled *"it clears the bottom-left hint line"*.
+Same escape for `width=64` and for `anchor="sw"`. The kwargs are now lifted out
+of `App.__init__` by AST, so the probe moves when the button moves.
+
+The one-writer proof only recognised `config(text=...)` containing the literal
+"Stop portal". A writer touching only the STYLE, or only the resting label,
+walked past it — and style is half of what the renderer owns. Both mutants now
+fail the suite.
+
+That is three separate occasions in this codebase where a test passed while the
+thing it existed to protect was broken. The pattern each time: the test asserted
+a property of its own copy of the subject rather than binding to the shipped one.
+Mutation is the only thing that has caught it — reading never has.
+
+Suite 1111 -> 1157 checks across 18 files.

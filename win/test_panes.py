@@ -67,6 +67,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -989,6 +990,461 @@ check("if the widest honest row overflows, only a yieldable token is cut",
 check("...and the yielder is the transient one, not a standing fact",
       _casualties in ([], ["bcast"]), str(_casualties))
 probe_root.destroy()
+
+
+# ===========================================================================
+# THE SECOND PORTAL BUTTON — two surfaces, ONE writer
+#
+# Doug: *"Duplicate start portal button linked to same backend and place
+# floating in field of Desk at bottom"*
+#
+# The rail put the ctl grid — and with it the Start portal button and the
+# full-strength amber alarm that explains why nothing is bridging — on the
+# System pane, two clicks from the Desk where the work happens.
+#
+# A duplicate control surface has already broken this app once: the old global
+# device row kept its own paired-state, so acting through one left the other
+# still showing the device as paired. The rule that came out of that is ONE
+# WRITER and one builder feeding every surface, and everything below is that
+# rule asserted rather than asserted-in-a-comment.
+# ===========================================================================
+print("\n---- the portal control, twice, with one writer behind both ----")
+
+APP_CLASS = next(n for n in ast.walk(MODULE)
+                 if isinstance(n, ast.ClassDef) and n.name == "App")
+
+
+PORTAL_LABELS = {"Start portal", "Stop portal"}
+PORTAL_STYLES = {"TButton", "Warn.TButton"}
+
+
+def _writes_portal_text(fn):
+    """Does this method write a portal button's LABEL OR ITS STYLE?
+
+    The first version of this predicate only recognised config(text=...) whose
+    value contained the literal "Stop portal", and two mutants walked straight
+    past it with the whole suite green:
+
+        self.desk_portal_btn.config(text="Start portal")      # resting label
+        self.desk_portal_btn.configure(style="Warn.TButton")  # style only
+
+    Either one leaves the two buttons permanently disagreeing, which is exactly
+    the two-surfaces-one-state failure this app has already shipped once. Style
+    is half of what _render_portal_button owns, so a predicate that ignores it
+    is asserting half the claim while reading like the whole one.
+
+    Both label spellings count too: matching only "Stop portal" missed a writer
+    that could pin the pair to "Start portal" forever.
+    """
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("config", "configure")):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "text":
+                if any(isinstance(c, ast.Constant) and c.value in PORTAL_LABELS
+                       for c in ast.walk(keyword.value)):
+                    return True
+            elif keyword.arg == "style":
+                if any(isinstance(c, ast.Constant) and c.value in PORTAL_STYLES
+                       for c in ast.walk(keyword.value)):
+                    return True
+    return False
+
+
+_writers = [f.name for f in APP_CLASS.body
+            if isinstance(f, ast.FunctionDef) and _writes_portal_text(f)]
+check("EXACTLY ONE method in App writes a portal button's label — a second "
+      "writer is the whole failure mode a duplicated surface risks",
+      _writers == ["_render_portal_button"], str(_writers))
+
+RENDER = _method("App", "_render_portal_button")
+FACTORY = _method("App", "_portal_button")
+BUSY = _method("App", "_busy_portal")
+check("App._portal_button exists — the ONE builder", FACTORY is not None)
+check("App._busy_portal exists — the ONE way to park a wait on the pair",
+      BUSY is not None)
+render_src = ast.unparse(RENDER) if RENDER else ""
+factory_src = ast.unparse(FACTORY) if FACTORY else ""
+busy_src = ast.unparse(BUSY) if BUSY else ""
+
+_render_loops = [
+    node for node in ast.walk(RENDER or ast.Module(body=[], type_ignores=[]))
+    if isinstance(node, ast.For) and _name(node.iter) == "self._portal_btns"
+]
+check("the writer ITERATES the registry — it does not name a hardcoded pair",
+      len(_render_loops) == 1, f"{len(_render_loops)} loops over the registry")
+check("...and the loop body is what does the writing, so every registered "
+      "button gets the same text and the same style",
+      bool(_render_loops)
+      and _writes_portal_text(_render_loops[0])
+      and any(isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute)
+              and n.func.attr in ("config", "configure")
+              and any(k.arg == "style" for k in n.keywords)
+              for n in ast.walk(_render_loops[0])),
+      render_src)
+check("the writer names NEITHER button — nothing in it survives adding a third",
+      "self.portal_btn" not in render_src
+      and "desk_portal_btn" not in render_src, render_src)
+_guards = []
+for _node in ast.walk(RENDER or ast.Module(body=[], type_ignores=[])):
+    if not (isinstance(_node, ast.Call) and _name(_node.func) == "any"):
+        continue
+    if any(isinstance(_g, ast.GeneratorExp)
+           and any(_name(_c.iter) == "self._portal_btns"
+                   for _c in _g.generators)
+           for _g in ast.walk(_node)):
+        _guards.append(_node)
+check("the busy guard is ANY over the registry, not the first button's — a "
+      "pair where one says 'Stopping portal…' and the other still offers "
+      "'Stop portal' IS the two-surfaces-one-state bug",
+      len(_guards) == 1 and "button_is_busy" in ast.unparse(_guards[0]),
+      render_src[:300])
+
+check("both buttons are built by the factory, so neither can skip registration",
+      "self.portal_btn = self._portal_button(" in init_src
+      and "self.desk_portal_btn = self._portal_button(" in init_src,
+      "not built through _portal_button")
+check("__init__ never wires a portal button to the backend itself — the "
+      "command is bound in ONE place",
+      "command=self.toggle_portal" not in init_src)
+check("...and that one place is the factory, which registers what it builds",
+      "command=self.toggle_portal" in factory_src
+      and "self._portal_btns.append(" in factory_src, factory_src)
+check("the wait is parked across the whole registry, from the factory's list",
+      "self._portal_btns" in busy_src and "self.busy(" in busy_src, busy_src)
+TOGGLE = _method("App", "toggle_portal")
+toggle_src = ast.unparse(TOGGLE) if TOGGLE else ""
+check("toggle_portal parks its ~8s stop through _busy_portal, not on one "
+      "button",
+      "self._busy_portal(" in toggle_src
+      and "self.busy(self.portal_btn" not in toggle_src, toggle_src[:400])
+check("the floating copy is PLACED, never packed or gridded — the placer does "
+      "not propagate a size, which is how it costs the Desk pane no height",
+      "self.desk_portal_btn.place(" in init_src
+      and "self.desk_portal_btn.pack(" not in init_src
+      and "self.desk_portal_btn.grid(" not in init_src)
+check("...and it is a child of the canvas, so redraw()'s delete('all') — which "
+      "removes canvas ITEMS — cannot take it, and it travels with the canvas",
+      "self._portal_button(self.canvas" in init_src)
+
+# ---- live: build the pair through the SHIPPED factory ----------------------
+_recorded = []
+
+
+def _recorder():
+    _recorded.append(id(_recorder))
+
+
+# THE GEOMETRY MUST COME OUT OF THE SOURCE, NOT OUT OF THIS FILE.
+#
+# The first version re-typed the placement into this file -- width=17, relx=0.5,
+# rely=1.0, anchor="s", y=-8 -- and then measured that. Which measures this
+# file, not the app. Proven by mutation: changing the SHIPPED rely to 0.70 puts
+# the button over three screen rectangles and turns +63px of clearance into
+# -85px, and every geometry check still passed, including the one titled "it
+# clears the bottom-left hint line". Same escape for width=64 and anchor="sw".
+#
+# So the kwargs are lifted out of App.__init__ by AST. Move the button in the
+# app and this probe moves with it, and the clearance is re-measured for real.
+def _portal_geometry_from_source():
+    factory_kw, place_kw = None, None
+    for node in ast.walk(INIT):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)):
+            continue
+        if (node.func.attr == "_portal_button" and node.args
+                and getattr(node.args[0], "attr", None) == "canvas"):
+            factory_kw = {k.arg: ast.literal_eval(k.value)
+                          for k in node.keywords}
+        if (node.func.attr == "place"
+                and getattr(node.func.value, "attr", None)
+                == "desk_portal_btn"):
+            place_kw = {k.arg: ast.literal_eval(k.value) for k in node.keywords}
+    return factory_kw, place_kw
+
+
+_factory_kw, _place_kw = _portal_geometry_from_source()
+check("the shipped Desk button's geometry was read out of App.__init__ — "
+      "re-typing it here would measure this file instead of the app",
+      _factory_kw is not None and _place_kw is not None,
+      f"factory={_factory_kw} place={_place_kw}")
+
+app.toggle_portal = _recorder        # never the real one: it spawns the portal
+app._ui_thread = threading.get_ident()
+app._portal_btns = []
+desk_btn = A.App._portal_button(app, app.canvas, **(_factory_kw or {}))
+desk_btn.place(**(_place_kw or {}))
+sys_btn = A.App._portal_button(app, pane_system)
+sys_btn.pack()
+app.desk_portal_btn, app.portal_btn = desk_btn, sys_btn
+
+# ---- (a) both exist, and both are in the registry the writer drives ---------
+check("(a) the factory registered BOTH buttons, in build order",
+      app._portal_btns == [desk_btn, sys_btn],
+      str([str(b) for b in app._portal_btns]))
+
+# ---- (b) both agree on text AND style, in each state ------------------------
+for _on, _text, _style in ((False, "Start portal", "Warn.TButton"),
+                           (True, "Stop portal", "TButton")):
+    A.App._render_portal_button(app, _on)
+    _got = [(b.cget("text"), str(b.cget("style"))) for b in app._portal_btns]
+    check(f"(b) portal {'up' if _on else 'down'}: BOTH buttons read "
+          f"{_text!r} in {_style}",
+          _got == [(_text, _style)] * 2, str(_got))
+
+# ---- (c) a parked wait covers the pair, and the tick cannot paint over it ---
+# One busy button must freeze the OTHER one too. Half-busy is the bug.
+for _parked, _other, _which in ((desk_btn, sys_btn, "the floating Desk copy"),
+                                (sys_btn, desk_btn, "the System pane copy")):
+    A.App._render_portal_button(app, False)
+    A.set_button_busy(_parked, "Stopping portal…")
+    A.App._render_portal_button(app, True)      # the 3-second tick, mid-stop
+    check(f"(c) a wait parked on {_which} freezes the WHOLE pair — the tick "
+          f"repaints neither",
+          _parked.cget("text") == "Stopping portal…"
+          and _other.cget("text") == "Start portal",
+          f"{_parked.cget('text')!r} / {_other.cget('text')!r}")
+    A.clear_button_busy(_parked)
+
+# ...and the shipped path parks it on both at once.
+A.App._render_portal_button(app, True)
+_done = A.App._busy_portal(app, "Stopping portal…")
+check("(c) _busy_portal parks the wait on BOTH buttons and disables both",
+      all(b.cget("text") == "Stopping portal…" and "disabled" in b.state()
+          for b in app._portal_btns),
+      str([(b.cget("text"), str(b.state())) for b in app._portal_btns]))
+A.App._render_portal_button(app, False)
+check("(c) ...and the tick cannot paint over either of them",
+      all(b.cget("text") == "Stopping portal…" for b in app._portal_btns),
+      str([b.cget("text") for b in app._portal_btns]))
+_done()
+check("(c) ...and one restore hands BOTH back to the renderer, re-enabled",
+      all(b.cget("text") == "Stop portal" and "disabled" not in b.state()
+          for b in app._portal_btns),
+      str([(b.cget("text"), str(b.state())) for b in app._portal_btns]))
+
+# ---- (d) one command, one backend -------------------------------------------
+desk_btn.invoke()
+sys_btn.invoke()
+check("(d) both buttons invoke the SAME callable — no second code path to the "
+      "backend and no second liveness check",
+      _recorded == [id(_recorder), id(_recorder)], str(_recorded))
+
+# ---- the pair survives pane switches ----------------------------------------
+# A place()d child of a pack_forget'd master goes with it, so the floating copy
+# has to come back when the Desk does — and the tick writes to it while it is
+# hidden, which a hidden Tk widget accepts.
+for key in A.PANE_KEYS:
+    app.select_pane(key)
+    root.update_idletasks()
+    tree = managed_tree(full)
+    check(f"'{key}': the floating Desk button is on screen iff the Desk is",
+          (desk_btn in tree) == (key == "desk"),
+          f"in tree: {desk_btn in tree}")
+    check(f"'{key}': the System pane button is on screen iff System is",
+          (sys_btn in tree) == (key == "system"), f"in tree: {sys_btn in tree}")
+app.select_pane("console")
+try:
+    A.App._render_portal_button(app, False)
+    _hidden_ok, _hidden_err = True, ""
+except Exception as exc:  # noqa: BLE001
+    _hidden_ok, _hidden_err = False, repr(exc)
+check("writing to BOTH buttons while both panes are hidden raises nothing",
+      _hidden_ok, _hidden_err)
+app.select_pane("desk")
+root.update_idletasks()
+check("...and the Desk copy comes back carrying what the tick wrote while it "
+      "was away, still placed on the canvas",
+      desk_btn.cget("text") == "Start portal"
+      and desk_btn.winfo_manager() == "place"
+      and desk_btn in app.canvas.place_slaves(),
+      f"{desk_btn.cget('text')!r} / {desk_btn.winfo_manager()}")
+
+# ===========================================================================
+# (e) THE FLOATING BUTTON COSTS THE DESK PANE NO HEIGHT — and covers nothing
+#
+# Measured, not reasoned, and at the REAL desk: the whole question is whether a
+# button parked at the bottom of the canvas sits in the letterbox strip the
+# aspect fit leaves, or on top of a screen rectangle the user drags.
+#
+# Same trick as the header measurement above: a withdrawn toplevel propagates
+# no size through a packed chain, so the chain is rebuilt under a frame PLACED
+# at the app's default window width and its own packer then runs for real.
+# ===========================================================================
+print("\n---- (e) the Desk pane at 1120px, with and without the button ----")
+
+WIN_W = 1120                 # App.__init__: root.geometry("1120x930")
+LIVE_CFG = os.path.join(os.path.dirname(HERE), "openspan_config.json")
+_kept_cfg = A.CONFIG
+if os.path.exists(LIVE_CFG):
+    # A COPY, read-only against the original. The canvas persists on
+    # construction and nothing here may touch what the running app owns.
+    A.CONFIG = os.path.join(SCRATCH, "deskprobe.json")
+    shutil.copyfile(LIVE_CFG, A.CONFIG)
+    _real_desk = True
+else:
+    _real_desk = False
+
+p_win = tk.Frame(root, bg=A.BG)
+p_win.place(x=0, y=0, width=WIN_W, height=760)
+p_win.pack_propagate(False)
+p_main = tk.Frame(p_win, bg=A.BG)
+p_main.pack(fill="both", expand=True, padx=10, pady=A.PAD_SM)
+p_rail = tk.Frame(p_main, bg=A.PANEL)
+p_rail.pack(side="left", fill="y", padx=(0, A.PAD_LG))
+for _key, _label in A.PANE_SPEC:      # faithful: the rail's width is real
+    _row = tk.Frame(p_rail, bg=A.RAIL_REST)
+    _row.pack(fill="x")
+    tk.Frame(_row, bg=A.RAIL_REST, width=3).pack(side="left", fill="y")
+    tk.Button(_row, text=_label, bg=A.RAIL_REST, fg=A.MUTED, bd=0,
+              relief="flat", anchor="w", width=13, padx=10, pady=6,
+              font=("Segoe UI", 10), highlightthickness=0).pack(
+        side="left", fill="x", expand=True)
+p_col = tk.Frame(p_main, bg=A.BG)
+p_col.pack(side="left", fill="both", expand=True)
+p_bridge = tk.Frame(p_col, bg=A.BG)
+p_bridge.pack(fill="both", expand=True)
+p_desk = tk.Frame(p_bridge, bg=A.BG)
+p_desk.pack(fill="both", expand=False)
+p_arr = tk.Frame(p_desk, bg=A.CARD, bd=0)
+p_arr.pack(fill="both", expand=False, padx=8, pady=A.PAD_MD)
+p_canvas = A.MultiArrangeCanvas(p_arr, on_change=None, height=270)
+p_canvas.pack(fill="both", expand=False, padx=8, pady=A.PAD_MD)
+
+
+def _settle(limit=40):
+    """Fit to a FIXED POINT before measuring anything. Returns the passes used.
+
+    This is not belt-and-braces, it is the measurement. _fit_height sizes the
+    canvas from the width it has been ALLOCATED, and under a withdrawn root a
+    freshly built seven-deep chain does not reach its final width in one
+    update_idletasks: the canvas reads winfo_width() == 1 for several passes,
+    fits to FIT_MIN_H, and a measurement taken there is of a 1px-wide canvas
+    rather than of the desk. Measured that way the pane appeared to grow 253px
+    when the button was added — an artefact of comparing a settled layout
+    against an unsettled one, in a direction that would have looked exactly
+    like the bug this check exists to catch.
+
+    The shipped app gets this convergence for free: <Configure> fires as the
+    real window is mapped and resized, and _fit_height's own re-entry guard and
+    2px tolerance stop it chasing itself. Here it has to be asked for.
+    """
+    last = None
+    for passes in range(1, limit + 1):
+        root.update_idletasks()
+        p_canvas._fit_height()
+        now = (p_canvas.winfo_width(), p_canvas.winfo_reqheight())
+        if now == last and now[0] > 1:
+            break
+        last = now
+    root.update_idletasks()
+    p_canvas.redraw()
+    return passes
+
+
+# FORCE THE DEEP END OF THE CHAIN TO EXIST BEFORE MEASURING ANYTHING.
+#
+# Tk creates windows lazily, and under a withdrawn toplevel update_idletasks
+# does not finish the job however many times it is called: measured here, the
+# arrangement propagated three levels (p_win 1120 -> p_main 1100 -> p_col 972)
+# and then stopped dead — p_bridge, p_desk, p_arr and the canvas all sat at 1px
+# through forty passes of update_idletasks AND update().
+#
+# That matters because the FIRST thing to touch the canvas resolves the whole
+# chain, and placing the button is such a touch (the placer asks its new master
+# for real dimensions). Measure "without" on the lazy chain and "with" on the
+# resolved one and the button appears to cost the pane 253px — a fabricated
+# failure, in the exact direction of the bug this check exists to catch.
+# winfo_id() realises the window on demand, so both measurements are taken on
+# the same resolved layout and the only variable left is the button.
+p_canvas.winfo_id()
+_passes = _settle()
+h_without = p_desk.winfo_reqheight()
+check(f"the probe layout reached a fixed point ({_passes} passes) — an "
+      f"unsettled first measurement is what makes a zero-cost button look "
+      f"like a 253px one",
+      _passes < 40 and p_canvas.winfo_width() > 1,
+      f"{_passes} passes, canvas {p_canvas.winfo_width()}px wide")
+
+_kept_registry = app._portal_btns
+app._portal_btns = []
+p_btn = A.App._portal_button(app, p_canvas, **(_factory_kw or {}))
+p_btn.place(**(_place_kw or {}))
+A.App._render_portal_button(app, False)      # the widest resting label + amber
+app._portal_btns = _kept_registry
+_settle()
+h_with = p_desk.winfo_reqheight()
+
+cw, chh = p_canvas.winfo_width(), p_canvas.winfo_height()
+check(f"the probe canvas really got a window-sized width ({cw}px) — without "
+      f"this every measurement below is meaningless",
+      cw > 600 and chh > 200, f"{cw}x{chh}")
+print(f"      Desk pane reqheight: without {h_without}px, with {h_with}px")
+check("(e) the floating button costs the Desk pane ZERO height — place() never "
+      "propagates a size to its master, which is the whole reason it is not "
+      "packed",
+      h_with == h_without, f"{h_without}px -> {h_with}px")
+
+bx0, by0 = p_btn.winfo_x(), p_btn.winfo_y()
+bx1 = bx0 + p_btn.winfo_width()
+by1 = by0 + p_btn.winfo_height()
+check("the button really is bottom-centred inside the canvas",
+      abs(((bx0 + bx1) / 2) - cw / 2) <= 2 and 0 < (chh - by1) <= 10,
+      f"button {bx0},{by0}-{bx1},{by1} in a {cw}x{chh} canvas")
+
+_rects = []
+for _key, _item in p_canvas._items():
+    _x, _y, _w, _h = p_canvas._rect(_key, _item)
+    _x0, _y0 = p_canvas.w2c(_x, _y)
+    _x1, _y1 = p_canvas.w2c(_x + _w, _y + _h)
+    _rects.append((_key, _x0, _y0, _x1, _y1))
+_hits = [k for k, x0, y0, x1, y1 in _rects
+         if x0 < bx1 and x1 > bx0 and y0 < by1 and y1 > by0]
+_lowest = max((y1 for _k, _x0, _y0, _x1, y1 in _rects), default=0.0)
+print(f"      {len(_rects)} screen rectangles"
+      + ("" if not _real_desk else " (the LIVE desk)")
+      + f"; lowest drawn edge y={_lowest:.0f}, button top y={by0}, "
+        f"clearance {by0 - _lowest:.0f}px")
+check("(5) the button overlaps NO screen rectangle at this desk's geometry — "
+      "it sits in the letterbox strip the aspect fit leaves below the drawing",
+      not _hits, f"overlaps: {_hits}")
+
+_hint = p_canvas.bbox("hint")
+check("...and it clears the bottom-left hint line the canvas draws for itself",
+      _hint is None or not (_hint[0] < bx1 and _hint[2] > bx0
+                            and _hint[1] < by1 and _hint[3] > by0),
+      f"hint {_hint} vs button {bx0},{by0}-{bx1},{by1}")
+
+# ...and taking it away again returns the pane to the same height, which is the
+# other half of "costs nothing": a number that matched by luck at one width
+# would not survive the round trip.
+p_btn.place_forget()
+_settle()
+h_removed = p_desk.winfo_reqheight()
+check("(e) removing it returns the pane to exactly the same height — the "
+      "measurement is a round trip, not a coincidence",
+      h_removed == h_without, f"{h_without}px -> {h_with}px -> {h_removed}px")
+
+# The canvas's own bindings are untouched: the button intercepts clicks in its
+# own footprint and nowhere else, and drag-to-arrange / hover / the W2
+# right-click menu all hang off these three.
+check("the canvas still answers drag-to-arrange and hover everywhere the "
+      "button is not",
+      all(p_canvas.bind(seq) for seq in ("<ButtonPress-1>", "<B1-Motion>",
+                                         "<ButtonRelease-1>", "<Motion>")),
+      str([seq for seq in ("<ButtonPress-1>", "<B1-Motion>",
+                           "<ButtonRelease-1>", "<Motion>")
+           if not p_canvas.bind(seq)]))
+check("...and App binds the W2 right-click menu to the canvas, not to anything "
+      "the button now sits on top of",
+      "self.canvas.bind('<Button-3>', self._canvas_menu)" in init_src
+      or 'self.canvas.bind("<Button-3>", self._canvas_menu)' in init_src)
+
+p_win.destroy()
+A.CONFIG = _kept_cfg
 
 root.destroy()
 shutil.rmtree(SCRATCH, ignore_errors=True)

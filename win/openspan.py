@@ -5618,6 +5618,11 @@ class App:
         self._prev_pane = None       # where the Console button returns to
         self._panes = {}             # pane key -> its frame; ALL are built
         self._rail = {}              # pane key -> (accent bar, rail button)
+        # Every portal control in the window, in build order. There is more than
+        # one of them now -- see _portal_button -- and this list is the ONLY
+        # thing _render_portal_button and _busy_portal iterate, so a surface
+        # cannot exist that the single writer does not reach.
+        self._portal_btns = []
         self._clip_warned = set()    # panes already reported as screen-clipped
         self._ready_state = None
         self._ipad_conn = None
@@ -5901,6 +5906,45 @@ class App:
         # exactly the drawing it can actually render there.
         self.canvas.pack(fill="both", expand=False, padx=8, pady=PAD_MD)
 
+        # ---- the portal control, a SECOND time, floating on the Desk ---------
+        # Doug: *"Duplicate start portal button linked to same backend and place
+        # floating in field of Desk at bottom"*
+        #
+        # The Desk is where he actually works -- dragging screens and
+        # right-clicking them -- and W7 moved the ctl grid that owns the original
+        # button into the System pane. So both the control AND the full-strength
+        # amber that explains why nothing is bridging (see _render_portal_button)
+        # went two clicks away from the work.
+        #
+        # A duplicate control surface has broken this app before: the old global
+        # device row kept its own paired-state, so acting through one left the
+        # other showing the device as still paired (the comment on the ctl frame
+        # below records it). The rule that came out of that is ONE WRITER and one
+        # builder feeding every surface -- which is exactly what _portal_button
+        # and _render_portal_button are. This button forms no opinion of its own
+        # about anything: not its text, not its style, not the backend.
+        #
+        # place(), not pack(): the placer never propagates a size to its master,
+        # so this costs the Desk pane -- and therefore the W1 height budget --
+        # exactly zero pixels. It lands in the letterbox strip the aspect fit
+        # leaves below the drawing: _fit_height asks for the height the picture
+        # occupies, _scale then insets the drawing a further 6%, and _world_bounds
+        # carries a >=180-unit pad on every side on top of that. MEASURED on
+        # this desk at the default 1120px window: a 940x493 canvas whose lowest
+        # screen rectangle ends at y=393, against a button occupying y=454..485.
+        # 61px of clearance, and no rectangle overlapped at all. test_panes.py
+        # re-measures it against the live arrangement rather than trusting this
+        # paragraph, and asserts the pane's height is unchanged either way.
+        #
+        # It is a CHILD of the canvas so it travels with it, and it is a widget
+        # rather than a create_window item so redraw()'s delete("all") -- which
+        # removes canvas items only -- cannot take it. The hint line
+        # ("drag to arrange · right-click a screen to edit it") is anchored at
+        # the bottom-LEFT corner; this is centred, and stays clear of it at every
+        # width the window can have.
+        self.desk_portal_btn = self._portal_button(self.canvas, width=17)
+        self.desk_portal_btn.place(relx=0.5, rely=1.0, anchor="s", y=-8)
+
         # The global row that stood here -- "iPad: [model]  Rotate  Configure
         # Mac displays...  Screen sizes..." -- is DELETED, and two standing bugs
         # went with it rather than moving somewhere else:
@@ -5927,8 +5971,9 @@ class App:
         ctl.pack(fill="x", padx=16, pady=(PAD_XS, PAD_SM))
         self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
         self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=PAD_XS)
-        self.portal_btn = ttk.Button(ctl, text="Start portal",
-                                     command=self.toggle_portal)
+        # Built through the same factory as the floating Desk copy, so both are
+        # registered with the one writer and both carry the one command.
+        self.portal_btn = self._portal_button(ctl)
         self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=PAD_XS)
         ttk.Button(ctl, text="Edit keymap",
                    command=lambda: os.startfile(KEYMAP)).grid(
@@ -7431,29 +7476,78 @@ class App:
                     done()
             threading.Thread(target=start, daemon=True).start()
 
+    def _portal_button(self, master, **kw):
+        """Build a portal control AND register it with the one writer.
+
+        Every portal button in this window is made here, so there is no way to
+        add a surface the renderer does not drive and no way to give one of them
+        a second route to the backend: the command is bound once, in this
+        method, to the same toggle_portal every other copy calls.
+
+        There are two of them today -- the ctl grid's, in the System pane, and
+        the floating one over the Desk arrangement. The list is what
+        _render_portal_button and _busy_portal iterate; with a single element
+        their behaviour is identical to what shipped before the second button
+        existed.
+        """
+        button = ttk.Button(master, text="Start portal",
+                            command=self.toggle_portal, **kw)
+        self._portal_btns.append(button)
+        return button
+
+    def _busy_portal(self, label):
+        """Park one wait across EVERY portal button. Returns the single restore.
+
+        Stopping the portal is a real wait -- _terminate_role_process runs
+        taskkill /T /F and then waits on the handle, two 4-second timeouts, so
+        up to ~8s -- and the 3-second tick calls _render_portal_button the whole
+        way through. With more than one button on screen the wait has to land on
+        ALL of them: one reading "Stopping portal…" while the other still offers
+        "Stop portal" is precisely the two-surfaces-one-state failure this app
+        has already shipped once.
+        """
+        dones = [self.busy(button, label) for button in self._portal_btns]
+
+        def restore():
+            for done in dones:
+                done()
+        return restore
+
     def _render_portal_button(self, on):
-        """Text AND register for the portal button. The ONE writer.
+        """Text AND register for EVERY portal button. The ONE writer.
 
         Doug: *"when the portal is not going, all that orange color let's just
         put it around the Start Portal button and make that thing prominent
         that that is why nothing is happening."*
 
-        So while the portal is down this button carries the full-strength amber
+        So while the portal is down these buttons carry the full-strength amber
         that the device area has given up (see ACCENT_SUPPRESSED /
-        WARN_SUPPRESSED), and while it is running it is an ordinary button
+        WARN_SUPPRESSED), and while it is running they are ordinary buttons
         again. Every caller passes the boolean from _portal_live(); nothing here
         forms a second opinion about whether the portal is up.
 
+        It writes the WHOLE registry, every time, from one text and one style --
+        so the copy floating on the Desk pane and the copy in the System pane's
+        ctl grid cannot drift apart. They are not a hardcoded pair: whatever
+        _portal_button has built is what this drives.
+
         The busy guard is live, not decoration: toggle_portal's stop branch
-        parks "Stopping portal…" on this button while _terminate_role_process
+        parks "Stopping portal…" on the buttons while _terminate_role_process
         runs taskkill /T /F and then waits on the handle -- two 4-second
         timeouts, so up to ~8s -- and the 3-second poll tick calls this method
-        the whole time.
+        the whole time. The guard is ANY, not the first button's: _busy_portal
+        parks the wait on all of them together, and a half-painted pair is the
+        exact bug a second surface exists to avoid.
+
+        Writing to a button whose pane is pack_forget'd is harmless -- a hidden
+        Tk widget still accepts config -- which is what lets the tick keep both
+        copies correct while only one of them is on screen.
         """
-        if button_is_busy(self.portal_btn):
+        if any(button_is_busy(button) for button in self._portal_btns):
             return   # a wait is showing; the tick must not paint over it
-        self.portal_btn.config(text="Stop portal" if on else "Start portal")
-        self.portal_btn.configure(style="TButton" if on else "Warn.TButton")
+        for button in self._portal_btns:
+            button.config(text="Stop portal" if on else "Start portal")
+            button.configure(style="TButton" if on else "Warn.TButton")
 
     def toggle_portal(self):
         if self._portal_live():
@@ -7467,7 +7561,8 @@ class App:
             # so _portal_live() reports the portal down from this instant --
             # the poll tick must not spend eight seconds insisting it is up.
             proc, self.portal_proc = self.portal_proc, None
-            done = self.busy(self.portal_btn, "Stopping portal…")
+            # EVERY portal button, not just the ctl grid's -- see _busy_portal.
+            done = self._busy_portal("Stopping portal…")
 
             def stop():
                 try:

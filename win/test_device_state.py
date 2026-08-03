@@ -867,7 +867,13 @@ check("the portal button switches to Warn.TButton when the portal is down",
 # portal is a genuine wait -- _terminate_role_process runs taskkill /T /F and
 # then waits on the handle, two 4-second timeouts -- so the button is now wired
 # through busy() and the guard is load-bearing.
+#
+# The button is REGISTERED rather than assigned: _render_portal_button drives
+# the registry now, because there is a second portal control floating on the
+# Desk pane. One writer, one builder, one list -- test_panes.py drives the pair
+# and proves they cannot disagree; this file keeps exercising the guard.
 app.portal_btn = ttk.Button(root, text="Start portal")
+app._portal_btns = [app.portal_btn]
 app._render_portal_button(False)
 check("portal down: the button reads Start portal in the alarm style",
       app.portal_btn.cget("text") == "Start portal"
@@ -890,9 +896,15 @@ check("clearing hands the portal button back to the renderer",
       and "disabled" not in app.portal_btn.state())
 
 toggle_src = ast.get_source_segment(SOURCE, _method("App", "toggle_portal")) or ""
-check("toggle_portal really parks a wait on portal_btn -- the guard above is "
-      "REACHABLE, not decoration",
-      "self.busy(self.portal_btn" in toggle_src, "no busy() call site")
+check("toggle_portal really parks a wait on the portal buttons -- the guard "
+      "above is REACHABLE, not decoration",
+      "self._busy_portal(" in toggle_src, "no busy() call site")
+_busy_src = ast.get_source_segment(SOURCE, _method("App", "_busy_portal")) or ""
+check("...and that wait covers EVERY registered portal button, not the first "
+      "one -- a pair where one says 'Stopping portal…' and the other still "
+      "offers 'Stop portal' is the two-surfaces-one-state bug",
+      "self._portal_btns" in _busy_src and "self.busy(" in _busy_src,
+      _busy_src[:200])
 check("...and it stops the portal on a worker, restoring in a finally, rather "
       "than blocking the UI thread under the click",
       "threading.Thread(" in toggle_src and "finally:" in toggle_src
