@@ -4968,12 +4968,18 @@ class BtPanel(tk.Frame):
         self.app = app
         self._refreshing = False
         self._refresh_pending = False  # trailing rerun, never a swallow
+        self._refresh_lock = threading.Lock()
         self._conn_busy = False  # one connect-retry loop at a time
         self._connected = set()
         self._connected_names = []  # display names, for the compact view
         self._seen = {}  # mac -> (name, icon, controller), seen this session
         #                  kept in the list even after BlueZ purges an un-bonded
         #                  device, so a failed Connect never drops it from view.
+        self._audio_levels = {}       # bluez sink levels, MAC -> 0..100
+        self._audio_controls = {}     # live inline controls, keyed by MAC
+        self._audio_level_pending = {}  # last release wins while SSH is busy
+        self._audio_level_workers = set()
+        self._audio_level_lock = threading.Lock()
         self.prefs = load_bt_prefs()
         self._radios = []
         self._device_radios = {}
@@ -5114,6 +5120,13 @@ class BtPanel(tk.Frame):
         self.tree.config(yscrollcommand=sb.set)
         self.tree.bind("<Double-1>", lambda e: self.connect())
         self.tree.bind("<Button-3>", self._popup)
+
+        # A connected Bluetooth sink gets one compact DEVICE-level control.
+        # This is deliberately separate from App.c_vol_var: that existing
+        # slider remains OpenSpan's global Windows-stream gain. Device sliders
+        # change only their exact PipeWire bluez sink, and send on release.
+        self.audio_level_box = tk.Frame(self, bg=BG)
+        self.audio_level_box.pack(fill="x", padx=12)
         # deferred: two VBoxManage calls must not sit in front of the first
         # paint, and the answer is worth having before anything is clicked
         self.after(1200, self._radio_usb_check)
@@ -5281,6 +5294,170 @@ class BtPanel(tk.Frame):
     def _sel_mac(self):
         sel = self.tree.selection()
         return sel[0] if sel else None
+
+    def _preview_audio_level(self, mac, raw):
+        """Paint a slider value locally. Drag motion never performs SSH."""
+        control = self._audio_controls.get(mac)
+        if not control:
+            return
+        try:
+            level = max(0, min(100, int(round(float(raw)))))
+        except (TypeError, ValueError):
+            return
+        control["value_text"].set(f"{level}%")
+
+    def _begin_audio_level_drag(self, mac):
+        control = self._audio_controls.get(mac)
+        if control:
+            control["dragging"] = True
+
+    def _release_audio_level_drag(self, mac):
+        control = self._audio_controls.get(mac)
+        if control:
+            control["dragging"] = False
+        self._commit_audio_level(mac)
+
+    def _release_audio_level_key(self, event, mac):
+        if event.keysym in {
+                "Left", "Right", "Up", "Down", "Home", "End",
+                "Prior", "Next"}:
+            self._commit_audio_level(mac)
+
+    def _sync_audio_controls(self, connected, levels=None):
+        """Make one inline level slider for each visible connected headset."""
+        if levels is not None:
+            self._audio_levels = dict(levels)
+        active = {mac for mac, _name in connected}
+        for mac in list(self._audio_controls):
+            if mac not in active:
+                self._audio_controls.pop(mac)["row"].destroy()
+
+        for mac, name in connected:
+            level = self._audio_levels.get(mac)
+            control = self._audio_controls.get(mac)
+            if control is None:
+                row = tk.Frame(self.audio_level_box, bg=BG)
+                name_var = tk.StringVar()
+                value_var = tk.DoubleVar(value=level if level is not None else 0)
+                value_text = tk.StringVar()
+                tk.Label(row, textvariable=name_var, bg=BG, fg=FG,
+                         font=("Segoe UI", 9), anchor="w", width=22).pack(
+                             side="left")
+                tk.Label(row, text="device volume", bg=BG, fg=MUTED,
+                         font=("Segoe UI", 8)).pack(side="left", padx=(2, 7))
+                value_label = tk.Label(
+                    row, textvariable=value_text, bg=BG, fg=ACCENT,
+                    font=("Consolas", 9), width=4, anchor="e")
+                value_label.pack(side="right")
+                scale = ttk.Scale(
+                    row, from_=0, to=100, variable=value_var,
+                    command=lambda raw, address=mac:
+                        self._preview_audio_level(address, raw))
+                scale.pack(side="right", fill="x", expand=True, padx=(0, 7))
+                scale.bind(
+                    "<ButtonPress-1>",
+                    lambda _event, address=mac:
+                        self._begin_audio_level_drag(address))
+                scale.bind(
+                    "<ButtonRelease-1>",
+                    lambda _event, address=mac:
+                        self._release_audio_level_drag(address))
+                scale.bind(
+                    "<KeyRelease>",
+                    lambda event, address=mac:
+                        self._release_audio_level_key(event, address))
+                control = {
+                    "row": row, "name": name_var, "variable": value_var,
+                    "value_text": value_text, "scale": scale,
+                    "value_label": value_label, "dragging": False,
+                }
+                self._audio_controls[mac] = control
+            control["name"].set(f"🎧 {name}"[:24])
+            with self._audio_level_lock:
+                local_change = control["dragging"] \
+                    or mac in self._audio_level_workers \
+                    or mac in self._audio_level_pending
+            if level is None:
+                if not local_change:
+                    control["value_text"].set("--")
+                    control["scale"].state(["disabled"])
+            else:
+                control["scale"].state(["!disabled"])
+                if not local_change:
+                    control["variable"].set(level)
+                    control["value_text"].set(f"{level}%")
+            # Repacking keeps the controls in the same order as the tree.
+            control["row"].pack_forget()
+            control["row"].pack(fill="x", pady=(2, 0))
+
+    def _commit_audio_level(self, mac):
+        """Queue one exact per-sink write after a slider/key release.
+
+        If another release happens while SSH is in flight, keep only the latest
+        value and send it immediately after the current request completes.
+        """
+        control = self._audio_controls.get(mac)
+        if not control or mac not in self._connected or not re.fullmatch(
+                r"[0-9A-F]{2}(?::[0-9A-F]{2}){5}", mac):
+            return
+        level = max(0, min(100, int(round(control["variable"].get()))))
+        self._preview_audio_level(mac, level)
+        with self._audio_level_lock:
+            self._audio_level_pending[mac] = level
+            if mac in self._audio_level_workers:
+                return
+            self._audio_level_workers.add(mac)
+
+        def work():
+            restart = False
+            try:
+                while True:
+                    with self._audio_level_lock:
+                        value = self._audio_level_pending.pop(mac, None)
+                        if value is None:
+                            return
+                    command = (
+                        "python3 /opt/openspan/openspan_bt.py "
+                        "set-audio-level "
+                        f"--device {mac} --level {value}")
+                    failed = ""
+                    try:
+                        result = ssh_guest(
+                            command, timeout=15, quiet=True,
+                            show_result=False)
+                        if result.returncode:
+                            failed = (result.stderr or result.stdout
+                                      or "").strip() \
+                                or "guest command failed"
+                    except Exception as exc:  # noqa: BLE001
+                        failed = str(exc) or "guest command failed"
+                    if failed:
+                        self._log(f"headset level FAILED for {mac} — "
+                                  + failed[-220:])
+                        # Re-read the real sink level so a rejected write does
+                        # not leave the optimistic preview looking committed.
+                        if self.app:
+                            self.app.ui(lambda: self.refresh(quiet=True))
+                    else:
+                        def remember(address=mac, committed=value):
+                            self._audio_levels[address] = committed
+                        if self.app:
+                            self.app.ui(remember)
+                        else:
+                            remember()
+                        self._log(f"headset level {mac}: {value}%")
+            finally:
+                # Never strand this MAC in the busy set. If anything outside
+                # the expected SSH failure path raised after another release
+                # queued a value, hand that last value to a replacement worker.
+                with self._audio_level_lock:
+                    self._audio_level_workers.discard(mac)
+                    if mac in self._audio_level_pending:
+                        self._audio_level_workers.add(mac)
+                        restart = True
+                if restart:
+                    threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=work, daemon=True).start()
 
     def _multi(self):
         return multi_radio_enabled(self.prefs)
@@ -5596,12 +5773,13 @@ class BtPanel(tk.Frame):
                                         button=self.btn_restart_audio)
 
     def refresh(self, quiet=False):
-        if self._refreshing:
-            # never swallow a refresh: an in-flight pass may carry a
-            # PRE-link snapshot; queue one trailing rerun instead
-            self._refresh_pending = True
-            return
-        self._refreshing = True
+        with self._refresh_lock:
+            if self._refreshing:
+                # Never swallow a refresh: an in-flight pass may carry a
+                # PRE-link snapshot; queue one trailing rerun instead.
+                self._refresh_pending = True
+                return
+            self._refreshing = True
 
         def ui(fn):
             if self.app:
@@ -5622,11 +5800,13 @@ class BtPanel(tk.Frame):
                     def apply_unreachable():
                         self.info.set(msg)
                         self._connected_names = []  # VM down = nothing linked
+                        self._sync_audio_controls([], None)
                         self.after(5000, self.refresh)  # retry until reachable
                     ui(apply_unreachable)
                     return
                 rows = []
                 radios = []
+                audio_levels = {}
                 if self._multi():
                     r = ssh_guest(
                         "python3 /opt/openspan/openspan_bt.py list",
@@ -5676,6 +5856,29 @@ class BtPanel(tk.Frame):
                                 p[0].upper(), p[1], p[2] == "1",
                                 p[3] == "1",
                                 p[4] if len(p) > 4 else "", ""))
+                if any(conn and "audio" in (icon or "").lower()
+                       for _mac, _name, _paired, conn, icon, _ctrl in rows):
+                    level_result = ssh_guest(
+                        "python3 /opt/openspan/openspan_bt.py audio-levels",
+                        timeout=12, quiet=True, show_result=False)
+                    if level_result.returncode == 0:
+                        try:
+                            raw_levels = json.loads(
+                                level_result.stdout or "{}")
+                            if isinstance(raw_levels, dict):
+                                parsed = {}
+                                for address, value in raw_levels.items():
+                                    address = str(address).upper()
+                                    if re.fullmatch(
+                                            r"[0-9A-F]{2}"
+                                            r"(?::[0-9A-F]{2}){5}", address) \
+                                            and isinstance(value, int) \
+                                            and not isinstance(value, bool) \
+                                            and 0 <= value <= 100:
+                                        parsed[address] = value
+                                audio_levels = parsed
+                        except (TypeError, ValueError):
+                            pass
                 # Remember everything BlueZ currently knows, then add back any
                 # device we've seen this session that BlueZ has since purged
                 # (an un-bonded device is dropped the moment discovery stops).
@@ -5690,15 +5893,17 @@ class BtPanel(tk.Frame):
                         rows.append((
                             mac, name, False, False, icon, controller))
                 rows.sort(key=lambda x: (not x[3], not x[2], x[1].lower()))
-                ui(lambda: self._apply_rows(rows, radios))
+                ui(lambda: self._apply_rows(rows, radios, audio_levels))
             finally:
-                self._refreshing = False
-                if self._refresh_pending:
+                with self._refresh_lock:
+                    self._refreshing = False
+                    rerun = self._refresh_pending
                     self._refresh_pending = False
+                if rerun:
                     self.refresh(quiet=True)  # the queued trailing rerun
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_rows(self, rows, radios=None):
+    def _apply_rows(self, rows, radios=None, audio_levels=None):
         """Rebuild the device list. UI thread only."""
         if radios is not None:
             self._radios = radios
@@ -5708,6 +5913,7 @@ class BtPanel(tk.Frame):
         self._connected = set()
         self._device_radios = {}
         names = []
+        connected_audio = []
         nconn = nhidden = 0
         show_blk = self.show_blk.get()
         for mac, name, paired, conn, icon, controller in rows:
@@ -5718,7 +5924,8 @@ class BtPanel(tk.Frame):
             if controller:
                 self._device_radios[mac] = controller
             nm = self.prefs["renames"].get(mac, name)
-            typ = ("🎧 audio" if "audio" in (icon or "")
+            audio = "audio" in (icon or "").lower()
+            typ = ("🎧 audio" if audio
                    else (icon or "device"))
             if blk:
                 status, tag = "⛔ Blacklisted", "blacklisted"
@@ -5727,6 +5934,8 @@ class BtPanel(tk.Frame):
                 nconn += 1
                 self._connected.add(mac)
                 names.append(nm)
+                if audio:
+                    connected_audio.append((mac, nm))
             elif paired:
                 status, tag = "○ Paired (idle)", "paired"
             else:
@@ -5742,6 +5951,7 @@ class BtPanel(tk.Frame):
             if self.tree.exists(k):
                 self.tree.selection_set(k)
         self._connected_names = names
+        self._sync_audio_controls(connected_audio, audio_levels)
         extra = f" · {nhidden} blacklisted hidden" if nhidden else ""
         self.info.set(f"{nconn} connected{extra}  —  right-click a "
                       f"device for actions")
