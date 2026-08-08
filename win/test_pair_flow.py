@@ -572,7 +572,11 @@ drain()
 check("the status row summarises N devices in one token",
       app._ind["mac"].cget("text") == f"devices 0/{len(app._dev_rows)}")
 
-app.canvas.config["devices"][:] = _devices_backup
+# A source-only checkout has no live config to copy, and an empty v3 config is
+# intentionally valid. Keep this test independent of the operator's desk by
+# supplying the one lane its expiry section needs when the backup is empty.
+app.canvas.config["devices"][:] = _devices_backup or [
+    _fake_device("expiry-device", "Expiry", _PORT, "AA:BB:CC:00:00:09")]
 openspan.vm_running = _original_vm_running_for_device
 openspan.ssh_guest = lambda *a, **k: R(0, "", "")
 
