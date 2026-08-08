@@ -109,6 +109,13 @@ check("devices retain their owning controller",
           ("AA:BB:CC:00:00:20", "AA:BB:CC:00:00:02"),
           ("AA:BB:CC:00:00:11", "AA:BB:CC:00:00:01"),
       })
+check("controller rows carry a hardware identity field",
+      all("hardware" in row for row in radios))
+check("HCI manufacturer fallback parses hciconfig output",
+      module.bt_company.__doc__ is not None
+      and module.re.search(r"Manufacturer:\s*(.+?)\s*\(\d+\)",
+                           "\tManufacturer: Intel Corp. (2)").group(1)
+      == "Intel Corp.")
 check("controller lookup accepts current hci name",
       bluez.radio("hci1")["address"] == "AA:BB:CC:00:00:02")
 check("controller lookup accepts stable MAC",

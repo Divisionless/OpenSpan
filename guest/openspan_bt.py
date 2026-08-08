@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -77,6 +78,24 @@ def is_wrong_target_hid(props, target=""):
     return False
 
 
+def bt_company(hci):
+    """The chip's Bluetooth SIG manufacturer name, read from the HCI itself.
+
+    USB string descriptors do not always survive a hypervisor's USB proxy --
+    a passed-through adapter can enumerate with empty product/manufacturer
+    strings while remaining fully functional.  The SIG company identifier
+    comes from the controller over HCI, so it survives any transport.
+    """
+    try:
+        out = subprocess.run(
+            ["hciconfig", hci, "version"],
+            capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = re.search(r"Manufacturer:\s*(.+?)\s*\(\d+\)", out or "")
+    return match.group(1).strip() if match else ""
+
+
 def usb_identity(hci):
     """Best-effort friendly hardware identity from the controller's sysfs."""
     current = os.path.realpath(f"/sys/class/bluetooth/{hci}/device")
@@ -91,11 +110,15 @@ def usb_identity(hci):
                         return handle.read().strip()
                 except OSError:
                     return ""
+            vendor_id = read("idVendor").lower()
+            product_id = read("idProduct").lower()
             return {
-                "vendor_id": read("idVendor").lower(),
-                "product_id": read("idProduct").lower(),
+                "vendor_id": vendor_id,
+                "product_id": product_id,
                 "usb_serial": read("serial"),
-                "hardware": read("product") or read("manufacturer"),
+                "hardware": read("product") or read("manufacturer")
+                or bt_company(hci)
+                or (f"USB {vendor_id}:{product_id}" if vendor_id else ""),
             }
         parent = os.path.dirname(current)
         if parent == current:
@@ -105,7 +128,7 @@ def usb_identity(hci):
         "vendor_id": "",
         "product_id": "",
         "usb_serial": "",
-        "hardware": "",
+        "hardware": bt_company(hci),
     }
 
 

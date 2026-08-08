@@ -424,4 +424,14 @@ check("and neither does a refresh-rate edit",
       after(lambda c: c["devices"][0]["displays"][0].update(
           refresh_hz=144.0)) == sig_base)
 
+app_source = pathlib.Path(__file__).with_name("openspan.py").read_text(
+    encoding="utf-8")
+display_body = app_source.split("def _radio_display", 1)[1].split("def ", 1)[0]
+check("radio dropdown labels come from hardware identity, never lane aliases",
+      'radio.get("hardware")' in display_body
+      and '"alias"' not in display_body
+      and '"name"' not in display_body)
+check("a radio with no hardware string still gets a neutral controller label",
+      '"Bluetooth controller"' in display_body)
+
 print("RESULT: ALL PASS")
