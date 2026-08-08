@@ -12,13 +12,13 @@
 set -u
 
 probe() {
-    timeout "${1:-6}" python3 - <<'PY' >/dev/null 2>&1
-import dbus
-bus = dbus.SystemBus()
-om = dbus.Interface(bus.get_object("org.bluez", "/"),
-                    "org.freedesktop.DBus.ObjectManager")
-om.GetManagedObjects()
-PY
+    # busctl, not python: on a cold-booting I/O-saturated guest, interpreter
+    # startup alone can eat the probe window, and a probe that times out on
+    # its own overhead reads as a dead bluetoothd. busctl is compiled and
+    # starts instantly, so the timeout below measures ONLY whether bluetoothd
+    # answers the same ObjectManager call every real caller makes.
+    timeout "${1:-6}" busctl --system call org.bluez / \
+        org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null 2>&1
 }
 
 # A wedge is PERSISTENT by definition. bluetoothd that is merely BUSY --
