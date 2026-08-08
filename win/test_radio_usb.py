@@ -517,9 +517,10 @@ try:
     check("Captured-but-not-delivered fails closed without usbattach",
           not got and failed and not [c for c in calls if "usbattach" in c],
           str(calls))
-    check("Captured failure tells the operator to restart Windows, not the VM",
-          "Restart Windows" in failed[0][1]
-          and "do not restart the VM" in failed[0][1], failed[0][1])
+    check("Captured failure tells the operator to replug, never restart the VM",
+          "plug it back in" in failed[0][1]
+          and "restart Windows" in failed[0][1]          # built-in radio rung
+          and "Do not restart the VM" in failed[0][1], failed[0][1])
 
     A._USB_ATTACH_BLOCKED.clear()
     absent = [{"name": "MissingRadio", "vendor": "0x1234",
