@@ -2404,7 +2404,8 @@ def radio_status_text(state, config=None, vm_name=None):
         parts.append(
             f"Captured but not delivered: VirtualBox owns {names}, but the "
             f"configured VM \u201c{vm_name}\u201d does not. Repair will not send "
-            "another attach request; restart Windows.")
+            "another attach request; replug the adapter (restart Windows for "
+            "a built-in radio).")
 
     absent = state.get("absent", [])
     if absent:
@@ -2466,7 +2467,8 @@ def why_not_ready(config=None):
         names = ", ".join(usb_label(d, config) for d in state["captured"])
         return False, (
             f"VirtualBox has captured {names} but never delivered it to the "
-            f"configured VM \u201c{VM}\u201d. OpenSpan will not retry; restart Windows.")
+            f"configured VM \u201c{VM}\u201d. OpenSpan will not retry; replug the "
+            f"adapter (restart Windows for a built-in radio).")
     if state["attachable"]:
         names = ", ".join(usb_label(d, config) for d in state["attachable"])
         return False, (
@@ -2653,11 +2655,13 @@ ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronousl
 
 
 REPLUG_ADVICE = (
-    "Unplug it and plug it back in — the VM is running, so its filter catches it "
-    "as it arrives. If that does not take, restart Windows: on a fresh boot "
-    "every radio is captured and delivered normally, which is the one recovery "
-    "that has never failed. Do NOT restart the VM — that spreads the fault to "
-    "radios that are still working."
+    "Unplug it and plug it back in — a fresh arrival is a new device object, "
+    "and the armed filter completes the capture the moment it appears. One "
+    "replug often completes every pending capture, not just its own. This is "
+    "the one recovery that has never failed; a Windows restart merely re-runs "
+    "the same boot-time race and can wedge a different radio. For a built-in "
+    "radio, which has no plug, restart Windows. Do NOT restart the VM — that "
+    "spreads the fault to radios that are still working."
 )
 
 
@@ -2665,15 +2669,18 @@ def _captured_advice():
     return (
         f"VirtualBox has captured it from Windows but the configured VM “{VM}” "
         "does not hold it. OpenSpan sent no attach request because another one "
-        "can only deepen this state. Restart Windows; do not restart the VM."
+        "can only deepen this state. Unplug that adapter and plug it back in "
+        "— a fresh arrival completes the capture. For a built-in radio, "
+        "restart Windows. Do not restart the VM."
     )
 
 
 def _not_landed_advice():
     return (
         f"VirtualBox accepted one attach request, but the configured VM “{VM}” "
-        "still does not hold the device. OpenSpan will not retry. Restart "
-        "Windows; do not restart the VM."
+        "still does not hold the device. OpenSpan will not retry. Unplug that "
+        "adapter and plug it back in — a fresh arrival completes the capture. "
+        "For a built-in radio, restart Windows. Do not restart the VM."
     )
 
 
@@ -5261,9 +5268,9 @@ class BtPanel(tk.Frame):
                     self._radio_usb_apply(f"{name}: {reason}",
                                           outcome["repairable"])
                     self._log("radios: OpenSpan does not retry accepted or "
-                              "Captured requests. Restart Windows for a "
-                              "Captured-but-not-delivered device; do not "
-                              "restart the VM.")
+                              "Captured requests. Replug a Captured-but-not-"
+                              "delivered adapter (restart Windows for a "
+                              "built-in radio); do not restart the VM.")
                 else:
                     self._radio_usb_check()
                 if outcome["recovered"]:
