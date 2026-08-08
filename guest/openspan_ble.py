@@ -494,7 +494,14 @@ class OpenSpanBLE:
         self.bus = dbus.SystemBus()
         self.adapter_address = ""
         self.hid = None
-        self.lock = threading.Lock()
+        # The Windows portal keeps one TCP connection per input lane.  Track
+        # the most recent connection that sent stateful HID input so losing
+        # that connection cannot strand a key, modifier, or mouse button on
+        # the remote device.  Ownership changes and reports share one lock:
+        # an old connection's cleanup can therefore never clear input sent by
+        # a newer connection.
+        self._input_lock = threading.Lock()
+        self._input_owner = None
         self.adv = None
         self.adv_on = False   # broadcasting is OPT-IN -- see register()
         # Advertisement state must reflect BlueZ's callback, not merely that a
@@ -884,6 +891,7 @@ class OpenSpanBLE:
                              daemon=True).start()
 
     def handle_client(self, conn):
+        input_token = object()
         buf = b""
         try:
             while True:
@@ -896,16 +904,55 @@ class OpenSpanBLE:
                     if not line.strip():
                         continue
                     try:
-                        reply = self.dispatch(json.loads(line))
+                        reply = self.dispatch(
+                            json.loads(line), input_token=input_token)
                     except Exception as exc:
                         reply = {"ok": False, "error": str(exc)}
                     conn.send((json.dumps(reply) + "\n").encode())
         except OSError:
             pass
         finally:
+            self._release_input_owner(input_token)
             conn.close()
 
-    def dispatch(self, msg):
+    def _send_owned_input(self, input_token, send):
+        """Serialize a stateful HID report and make its socket the owner."""
+        with self._input_lock:
+            send()
+            # A failed report must not supersede the connection whose prior
+            # state may still be held on the remote device.
+            if input_token is not None:
+                self._input_owner = input_token
+
+    def _release_input_owner(self, input_token):
+        """Release all held input iff ``input_token`` still owns the lane."""
+        with self._input_lock:
+            if self._input_owner is not input_token:
+                return False
+
+            # Mouse first: ending a drag before releasing keyboard modifiers
+            # avoids turning a stuck drag into a modified click/gesture.  Keep
+            # the reports independent so one unavailable characteristic does
+            # not prevent the other from being cleared.
+            release_failed = False
+            try:
+                self.send_mouse(0, 0, 0, 0)
+            except Exception as exc:  # noqa: BLE001
+                release_failed = True
+                print(f"input: mouse release after socket close failed: {exc}")
+            try:
+                self.send_keys(0, [])
+            except Exception as exc:  # noqa: BLE001
+                release_failed = True
+                print(f"input: keyboard release after socket close failed: {exc}")
+            self._input_owner = None
+            if release_failed:
+                print("input: owner socket closed -- neutral release attempted")
+            else:
+                print("input: owner socket closed -- released mouse and keyboard")
+            return True
+
+    def dispatch(self, msg, input_token=None):
         cmd = msg.get("cmd")
         if cmd == "status":
             return {"ok": True,
@@ -960,11 +1007,17 @@ class OpenSpanBLE:
         if cmd == "kbd":
             # Stateful: set the exact modifier + held-keys report, no
             # auto-release (for live keyboard passthrough).
-            self.send_keys(msg.get("mods", 0), msg.get("keys", []))
+            self._send_owned_input(
+                input_token,
+                lambda: self.send_keys(
+                    msg.get("mods", 0), msg.get("keys", [])))
             return {"ok": True}
         if cmd == "mouse":
-            self.send_mouse(msg.get("buttons", 0), msg.get("dx", 0),
-                            msg.get("dy", 0), msg.get("wheel", 0))
+            self._send_owned_input(
+                input_token,
+                lambda: self.send_mouse(
+                    msg.get("buttons", 0), msg.get("dx", 0),
+                    msg.get("dy", 0), msg.get("wheel", 0)))
             return {"ok": True}
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
