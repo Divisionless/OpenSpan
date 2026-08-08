@@ -309,6 +309,12 @@ check("managed Mac lane has an independent name and command port",
       "OPENSPAN_PORT=9956" in mac_service
       and "OpenSpan Mac Control" in mac_service)
 
+agent_unit = pathlib.Path(__file__).with_name(
+    "openspan-agent.service").read_text(encoding="utf-8")
+check("agent stop can never stall a bluetooth restart transaction",
+      "KillSignal=SIGKILL" in agent_unit
+      and "TimeoutStopSec=5" in agent_unit)
+
 set_device = pathlib.Path(__file__).with_name("set-hid-device.sh").read_text(
     encoding="utf-8")
 check("per-device drop-in stores OPENSPAN_CONTROLLER, not OPENSPAN_ADAPTER",

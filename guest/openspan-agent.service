@@ -10,6 +10,14 @@ Requires=bluetooth.service
 ExecStart=/usr/bin/bt-agent -c NoInputNoOutput
 Restart=always
 RestartSec=3
+# bt-agent ignores SIGTERM, and Requires=bluetooth.service means every
+# bluetooth restart (btready does one at boot when radios arrive late) must
+# stop this unit first. With the default 90s stop timeout that hang stalls
+# systemd's whole job queue -- observed twice: lane restarts queued behind it
+# until the app's ssh timeout. The agent is a stateless auto-accept helper;
+# killing it outright loses nothing and Restart=always re-registers it.
+KillSignal=SIGKILL
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target
