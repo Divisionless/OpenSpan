@@ -66,7 +66,7 @@ Port:               4
 USB version/speed:  1/Full
 Manufacturer:
 Product:            TP-Link UB500 Adapter
-SerialNumber:       ACA7F1299FCB
+SerialNumber:       A1B2C3D4E5F6
 Current State:      Busy
 
 UUID:               a21a565a-cd65-4a78-961f-4407a8e9f779
@@ -76,11 +76,11 @@ Port:               3
 USB version/speed:  1/Full
 Manufacturer:
 Product:            TP-Link Bluetooth USB Adapter
-SerialNumber:       3C6AD23CD44E
+SerialNumber:       102030405060
 Current State:      Busy
 """
 
-INFO = """name="OpenSpan-Codex"
+INFO = """name="Configured-Bridge"
 usb="off"
 ehci="off"
 xhci="on"
@@ -90,11 +90,11 @@ USBFilterVendorId1="8087"
 USBFilterProductId1="0aaa"
 USBFilterSerialNumber1=""
 USBFilterActive2="on"
-USBFilterName2="TPLinkBT-Port1"
+USBFilterName2="TwinRadio-A"
 USBFilterVendorId2="2357"
 USBFilterProductId2="0604"
 USBFilterActive3="on"
-USBFilterName3="TPLinkBT-Port2"
+USBFilterName3="TwinRadio-B"
 USBFilterVendorId3="2357"
 USBFilterProductId3="0604"
 USBAttachActive1="f84f64f6-7755-4fd0-b03d-110762dba72c"
@@ -123,7 +123,7 @@ check("nothing is invented from empty input", A.parse_usb_host("") == []
 filters = A.parse_usb_filters(INFO)
 check("every active filter is read, by name",
       sorted(f["name"] for f in filters)
-      == ["IntelBT", "TPLinkBT-Port1", "TPLinkBT-Port2"],
+      == ["IntelBT", "TwinRadio-A", "TwinRadio-B"],
       str([f["name"] for f in filters]))
 check("a bare id is normalised to the form the host reports",
       all(f["vendor"].startswith("0x") for f in filters))
@@ -161,6 +161,24 @@ check("two dongles sharing one vendor:product are handled as two devices",
 check("a device with no Product line is still nameable",
       A.usb_label(next(d for d in report["mine"]
                        if d["uuid"].startswith("f84f64f6"))) == "Intel Corp.")
+check("ownership is split into attached and Busy instead of one lost bucket",
+      len(report["attached"]) == 1 and len(report["busy"]) == 2
+      and not report["captured"] and not report["absent"],
+      str({key: len(report[key]) for key in
+           ("attached", "busy", "captured", "absent")}))
+check("duplicate active VID:PID filters without serials are audited",
+      len(report["ambiguous_filters"]) == 1
+      and len(report["ambiguous_filters"][0]["filters"]) == 2
+      and len(report["ambiguous_filters"][0]["devices"]) == 2,
+      str(report["ambiguous_filters"]))
+
+status, repairable = A.radio_status_text(
+    report, {}, "Configured-Bridge")
+check("the UI names Busy ownership and the configured VM",
+      "Busy on Windows" in status and "Configured-Bridge" in status
+      and repairable == 2, status)
+check("the UI surfaces ambiguous filters without rewriting them",
+      "Filter audit" in status and "omit serial numbers" in status, status)
 
 healthy = INFO + ('USBAttachActive2="ff68aac3-03b2-4f97-818d-93803323a0be"\n'
                   'USBAttachActive3="a21a565a-cd65-4a78-961f-4407a8e9f779"\n')
@@ -179,6 +197,42 @@ vendor_only = 'USBFilterActive1="on"\nUSBFilterName1="AnyTPLink"\n' \
 check("a vendor-only filter claims every device of that vendor",
       len(A.radio_report(USBHOST, vendor_only)["mine"]) == 2)
 
+# Existing serial-specific filters must remain narrow. OpenSpan audits them; it
+# never writes them automatically because VirtualBox cannot always read a
+# stopped adapter's serial.
+serial_info = INFO + ('USBFilterSerialNumber2="A1B2C3D4E5F6"\n'
+                      'USBFilterSerialNumber3="102030405060"\n')
+serial_report = A.radio_report(USBHOST, serial_info)
+check("serial-specific filters match only their physical adapter",
+      len(serial_report["mine"]) == 3
+      and not serial_report["ambiguous_filters"]
+      and {d.get("serial") for d in serial_report["busy"]}
+      == {"A1B2C3D4E5F6", "102030405060"})
+
+missing_serial_info = serial_info.replace(
+    'USBFilterSerialNumber3="102030405060"',
+    'USBFilterSerialNumber3="FFEEDDCCBBAA"')
+missing_serial_report = A.radio_report(USBHOST, missing_serial_info)
+check("a serial-specific filter with no host device is explicitly absent",
+      len(missing_serial_report["absent"]) == 1
+      and missing_serial_report["absent"][0]["serial"] == "FFEEDDCCBBAA",
+      str(missing_serial_report["absent"]))
+
+no_attach_info = "\n".join(
+    line for line in INFO.splitlines()
+    if not line.startswith("USBAttachActive"))
+captured_report = A.radio_report(USBHOST, no_attach_info)
+check("Captured without a VM attachment is its own fail-closed state",
+      len(captured_report["captured"]) == 1
+      and captured_report["captured"][0]["state"] == "Captured")
+captured_status, captured_repairable = A.radio_status_text(
+    captured_report, {}, "Configured-Bridge")
+check("the UI tells Captured from Busy and offers no attach for Captured",
+      "Captured but not delivered" in captured_status
+      and "restart Windows" in captured_status
+      and captured_repairable == 2,
+      captured_status)
+
 # ---- naming a dongle something a human can find -----------------------------
 # "TP-Link Bluetooth USB Adapter" cannot be picked out of two identical dongles
 # behind a machine. It turns out it never had to be: a Bluetooth dongle's USB
@@ -186,23 +240,24 @@ check("a vendor-only filter claims every device of that vendor",
 # the guest unreachable, which is exactly when it matters -- can say which of the
 # user's machines the thing in their hand belongs to.
 CONFIG = {"devices": [
-    {"id": "ipad", "name": "iPad", "radio": "58:A0:23:CD:6A:B7"},
-    {"id": "mac", "name": "Managed Mac", "radio": "AC:A7:F1:29:9F:CB"},
-    {"id": "device-1", "name": "Managed Laptop", "radio": "3C:6A:D2:3C:D4:4E"},
+    {"id": "tablet", "name": "Tablet", "radio": "AA:BB:CC:DD:EE:01"},
+    {"id": "workstation", "name": "Workstation",
+     "radio": "A1:B2:C3:D4:E5:F6"},
+    {"id": "laptop", "name": "Laptop", "radio": "10:20:30:40:50:60"},
 ]}
 
-for serial, expect in (("ACA7F1299FCB", "AC:A7:F1:29:9F:CB"),
-                       ("3c6ad23cd44e", "3C:6A:D2:3C:D4:4E"),
-                       ("AC:A7:F1:29:9F:CB", "AC:A7:F1:29:9F:CB")):
+for serial, expect in (("A1B2C3D4E5F6", "A1:B2:C3:D4:E5:F6"),
+                       ("102030405060", "10:20:30:40:50:60"),
+                       ("A1:B2:C3:D4:E5:F6", "A1:B2:C3:D4:E5:F6")):
     check(f"serial {serial} reads as a radio address",
           A.serial_to_radio(serial) == expect, A.serial_to_radio(serial))
-for junk in ("", None, "abc", "NOTHEX123456", "ACA7F1299FC"):
+for junk in ("", None, "abc", "NOTHEX123456", "A1B2C3D4E5F"):
     check(f"{junk!r} is not mistaken for one", A.serial_to_radio(junk) == "")
 
 lost = A.radio_report(USBHOST, INFO)["lost"]
 named = sorted(A.usb_label(d, CONFIG) for d in lost)
 check("a dongle is named by the machine it serves",
-      named == ["Managed Laptop’s dongle", "Managed Mac’s dongle"],
+      named == ["Laptop’s dongle", "Workstation’s dongle"],
       str(named))
 check("and falls back to its product string when nothing identifies it",
       A.usb_label({"name": "Some Dongle", "serial": "zz"}, CONFIG)
@@ -228,7 +283,7 @@ UUID:               177b501b-a716-4159-8f7a-d856e4c188a6
 VendorId:           0x2357 (2357)
 ProductId:          0x0604 (0604)
 Port:               4
-Address:            usb#vid_80ee&pid_cafe#aca7f1299fcb#{00873fdf}
+Address:            usb#vid_80ee&pid_cafe#a1b2c3d4e5f6#{00873fdf}
 Current State:      Captured
 
 UUID:               41497304-fea3-41d7-bbeb-000fcb969b62
@@ -242,7 +297,7 @@ UUID:               a22b6a7b-339c-4b00-99af-cce5af8dd351
 VendorId:           0x2357 (2357)
 ProductId:          0x0604 (0604)
 Port:               3
-Address:            usb#vid_80ee&pid_cafe#3c6ad23cd44e#{00873fdf}
+Address:            usb#vid_80ee&pid_cafe#102030405060#{00873fdf}
 Current State:      Captured
 
 UUID:               afde3067-061e-4fdd-b198-4602c11f5490
@@ -262,7 +317,7 @@ check("each is kept once, keyed on the port they share",
 check("the serial is recovered from the proxy stub's address, where it "
       "survives even though the device reports no SerialNumber field",
       sorted(d.get("serial") or "-" for d in twins)
-      == ["-", "3C6AD23CD44E", "ACA7F1299FCB"],
+      == ["-", "102030405060", "A1B2C3D4E5F6"],
       str([d.get("serial") for d in twins]))
 check("the uuid kept is the real device's, which is the one usbattach takes",
       {d["uuid"] for d in twins}
@@ -288,6 +343,25 @@ check("a fully healthy machine reports nothing missing",
       f"mine={len(report2['mine'])} lost="
       f"{[A.usb_label(d) for d in report2['lost']]}")
 
+# After a VM stops, Windows can expose the physical twin as Busy while a second
+# same-port shadow remains Captured. The merge must retain the more dangerous
+# owner and fail closed when the configured VM names no attachment.
+MIXED_OWNER = CAPTURED.replace(
+    "Address:            usb#vid_80ee&pid_cafe#a1b2c3d4e5f6#{00873fdf}\n"
+    "Current State:      Captured",
+    "Address:            usb#vid_80ee&pid_cafe#a1b2c3d4e5f6#{00873fdf}\n"
+    "Current State:      Busy").replace(
+        "Address:            usb#vid_80ee&pid_cafe#102030405060#{00873fdf}\n"
+        "Current State:      Captured",
+        "Address:            usb#vid_80ee&pid_cafe#102030405060#{00873fdf}\n"
+        "Current State:      Busy")
+mixed_report = A.radio_report(MIXED_OWNER, no_attach_info)
+check("a Busy physical twin plus Captured shadow is Captured, not repairable",
+      len(mixed_report["captured"]) == 3
+      and not mixed_report["busy"] and not mixed_report["attachable"],
+      str([(d.get("port"), d.get("state"))
+           for d in mixed_report["mine"]]))
+
 check("a dongle with no product string is still named by its USB port",
       A.usb_label({"vendor": "0x2357", "product_id": "0x0604", "port": "4"})
       == "the dongle in USB port 4",
@@ -297,16 +371,10 @@ check("the filter pinning is gone entirely",
       not hasattr(A, "radio_filter_plan")
       and not hasattr(A, "pin_radio_filters"))
 
-# ---- an attach that is accepted but never lands# ---- an attach that is accepted but never lands -----------------------------
-# Doug: "I clicked reclaim, don't think anything happened, take a look."
-#
-# It had happened. VirtualBox accepted both requests and took both dongles off
-# Windows -- and never handed them to the guest. `lsusb` in the guest showed one
-# adapter, its dmesg showed no USB event since boot, and every further attach
-# returned "is busy with a previous request". The app reported success, because it
-# believed the exit code, and an exit code is about whether the REQUEST was
-# accepted. From outside, a success message next to a line still reading "1 of 3"
-# is indistinguishable from nothing happening.
+# ---- fail-closed one-shot ownership transfer -------------------------------
+# A zero exit code says VirtualBox accepted a request. Success means the
+# configured VM's attachment list contains the physical or proxy UUID after the
+# asynchronous handoff. An accepted request that does not land is never retried.
 calls = []
 
 
@@ -332,41 +400,156 @@ def wedged_vbox(*args, **kwargs):
     return R()
 
 
-real_vbox, real_state = A.vbox, A.read_radio_state
-LOST = [{"uuid": "ff68aac3", "name": "TP-Link UB500 Adapter", "state": "Busy",
-         "filter": "TPLinkBT-Port1"}]
+def ownership_state(*, busy=(), captured=(), available=(), unavailable=(),
+                    absent=()):
+    busy, captured = list(busy), list(captured)
+    available, unavailable = list(available), list(unavailable)
+    mine = busy + captured + available + unavailable
+    return {
+        "mine": mine, "attached": [], "busy": busy,
+        "captured": captured, "available": available,
+        "unavailable": unavailable, "attachable": busy + available,
+        "absent": list(absent), "ambiguous_filters": [],
+        "lost": mine, "held": set(), "filters": [],
+    }
+
+
+real_vbox, real_state, real_vm = A.vbox, A.read_radio_state, A.VM
+real_blocked = set(A._USB_ATTACH_BLOCKED)
+LOST = [{"uuid": "busy-radio-1", "name": "Test USB Radio", "state": "Busy",
+         "filter": "RadioFilter"}]
 try:
-    A.read_radio_state = lambda: {"mine": LOST, "lost": list(LOST),
-                                  "held": set(), "filters": []}
+    A._USB_ATTACH_BLOCKED.clear()
+    A.read_radio_state = lambda: ownership_state(busy=LOST)
 
     A.vbox = fake_vbox
     calls.clear()
-    got, failed = A.reclaim_radios(settle=0, attempts=2, verify=lambda: set())
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
     check("an attach VirtualBox accepts but the VM never takes is a FAILURE",
           not got and len(failed) == 1, f"recovered={got} failed={failed}")
-    check("and it says what actually clears it",
-          "plug it back in" in failed[0][1], failed[0][1][:90])
+    check("accepted-but-not-landed sends exactly one attach request",
+          len([c for c in calls if "usbattach" in c]) == 1,
+          str([c for c in calls if "usbattach" in c]))
+    check("and says that it will not retry and names the configured VM",
+          "will not retry" in failed[0][1]
+          and A.VM in failed[0][1], failed[0][1])
 
     calls.clear()
-    got, failed = A.reclaim_radios(settle=0, attempts=2,
-                                   verify=lambda: {"ff68aac3"})
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
+    check("the same accepted-but-not-landed host object stays blocked",
+          not [c for c in calls if "usbattach" in c]
+          and not got and failed, str(calls))
+
+    # The button is disabled promptly, but the state machine itself also owns a
+    # lock: two event-loop deliveries or programmatic callers still cannot race
+    # two attach requests into VirtualBox.
+    import threading
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_vbox(*args, **kwargs):
+        calls.append(args)
+        if args and args[0] == "controlvm":
+            entered.set()
+            release.wait(2)
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    A._USB_ATTACH_BLOCKED.clear()
+    double_click = [dict(LOST[0], uuid="double-click-radio")]
+    A.read_radio_state = lambda: ownership_state(busy=double_click)
+    A.vbox = blocking_vbox
+    calls.clear()
+    results = []
+    first = threading.Thread(target=lambda: results.append(
+        A.reclaim_radios(settle=0, verify=lambda: set())))
+    second = threading.Thread(target=lambda: results.append(
+        A.reclaim_radios(settle=0, verify=lambda: set())))
+    first.start()
+    check("the first concurrent repair reached its one attach request",
+          entered.wait(2))
+    second.start()
+    release.set()
+    first.join(2)
+    second.join(2)
+    check("concurrent repair deliveries still issue only one usbattach",
+          len([c for c in calls if "usbattach" in c]) == 1
+          and len(results) == 2,
+          f"calls={calls} results={results}")
+
+    A._USB_ATTACH_BLOCKED.clear()
+    A.read_radio_state = lambda: ownership_state(busy=LOST)
+    A.vbox = fake_vbox
+    calls.clear()
+    verify_count = {"n": 0}
+
+    def lands_after_request():
+        verify_count["n"] += 1
+        return set() if verify_count["n"] == 1 else {"busy-radio-1"}
+
+    got, failed = A.reclaim_radios(settle=0, verify=lands_after_request)
     check("an attach the VM really took is a success",
-          got == ["TP-Link UB500 Adapter"] and not failed, str(failed))
+          got == ["Test USB Radio"] and not failed, str(failed))
     check("and it stops as soon as it has landed, rather than attaching twice",
           len([c for c in calls if "usbattach" in c]) == 1,
           str([c for c in calls if "usbattach" in c]))
 
+    A._USB_ATTACH_BLOCKED.clear()
     A.vbox = wedged_vbox
     calls.clear()
-    got, failed = A.reclaim_radios(settle=0, attempts=3, verify=lambda: set())
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
     check("“busy with a previous request” is reported as itself",
           not got and failed[0][1].startswith(A.WEDGED_ADVICE),
           str(failed)[:140])
     check("and it is not retried, because retrying provably cannot clear it",
           len([c for c in calls if "usbattach" in c]) == 1,
           f"tried {len([c for c in calls if 'usbattach' in c])} times")
+
+    A._USB_ATTACH_BLOCKED.clear()
+    A.vbox = fake_vbox
+    captured = [dict(LOST[0], uuid="captured-radio-1", state="Captured")]
+    A.read_radio_state = lambda: ownership_state(captured=captured)
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
+    check("Captured-but-not-delivered fails closed without usbattach",
+          not got and failed and not [c for c in calls if "usbattach" in c],
+          str(calls))
+    check("Captured failure tells the operator to restart Windows, not the VM",
+          "Restart Windows" in failed[0][1]
+          and "do not restart the VM" in failed[0][1], failed[0][1])
+
+    A._USB_ATTACH_BLOCKED.clear()
+    absent = [{"name": "MissingRadio", "vendor": "0x1234",
+               "product_id": "0xabcd", "serial": ""}]
+    A.read_radio_state = lambda: ownership_state(absent=absent)
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
+    check("an absent adapter fails closed without usbattach",
+          not got and failed and not [c for c in calls if "usbattach" in c],
+          str(calls))
+
+    # Both the ownership read and every mutation are scoped to the configured
+    # VM. No hardcoded legacy or test VM may receive an attach.
+    A._USB_ATTACH_BLOCKED.clear()
+    A.VM = "Configured-Bridge-Only"
+    scoped = [dict(LOST[0], uuid="scoped-radio-1")]
+    A.read_radio_state = lambda: ownership_state(busy=scoped)
+    A.vbox = fake_vbox
+    calls.clear()
+    got, failed = A.reclaim_radios(settle=0)
+    mutations = [c for c in calls if c and c[0] == "controlvm"]
+    reads = [c for c in calls if c and c[0] == "showvminfo"]
+    check("usbattach targets only the configured VM",
+          len(mutations) == 1 and mutations[0][1] == A.VM, str(mutations))
+    check("attachment verification reads only the configured VM",
+          reads and all(c[1] == A.VM for c in reads), str(reads))
 finally:
-    A.vbox, A.read_radio_state = real_vbox, real_state
+    A.vbox, A.read_radio_state, A.VM = real_vbox, real_state, real_vm
+    A._USB_ATTACH_BLOCKED.clear()
+    A._USB_ATTACH_BLOCKED.update(real_blocked)
 
 # ---- the wiring ------------------------------------------------------------
 import inspect  # noqa: E402
@@ -377,10 +560,20 @@ check("the check runs on a worker thread, never in front of the UI",
 check("and every widget it touches is marshaled to the UI thread",
       "self.app.ui(apply)" in inspect.getsource(A.BtPanel._radio_usb_apply))
 check("repairing is one button, and it says how many radios it covers",
-      "self.reclaim_btn" in src and "Repair {lost} radio" in src)
+      "self.reclaim_btn" in src and "Repair {repairable} radio" in src)
 check("recovery does not scan, pair or connect anything",
       not [word for word in ("bluetoothctl", "openspan_bt.py", "pair ", "trust")
-           if word in inspect.getsource(A.reclaim_radios)])
+           if word in inspect.getsource(A._reclaim_radios_once)])
+one_pass_src = inspect.getsource(A._reclaim_radios_once)
+import ast  # noqa: E402
+import textwrap  # noqa: E402
+one_pass_tree = ast.parse(textwrap.dedent(one_pass_src))
+check("the ownership transfer contains no retry loop or attempts parameter",
+      "attempts" not in inspect.signature(A._reclaim_radios_once).parameters
+      and not any(isinstance(node, ast.While)
+                  for node in ast.walk(one_pass_tree)))
+check("repair clicks are serialized before the one-pass transfer",
+      "with _USB_REPAIR_LOCK" in inspect.getsource(A.reclaim_radios))
 check("the VM being down is reported as itself, not as a missing radio",
       "The VM is not running" in inspect.getsource(A.BtPanel._radio_usb_check))
 

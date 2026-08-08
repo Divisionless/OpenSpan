@@ -2110,7 +2110,7 @@ def _merge_usb_twins(devices):
             key = (device.get("uuid"),)          # nothing to merge it with
         proxy = _VBOX_PROXY in (device.get("address") or "").lower()
         if not device.get("serial") and proxy:
-            # \\?\usb#vid_80ee&pid_cafe#aca7f1299fcb#{...}
+            # \\?\usb#vid_80ee&pid_cafe#a1b2c3d4e5f6#{...}
             parts = (device.get("address") or "").split("#")
             if len(parts) > 2 and len(parts[2]) == 12:
                 device = dict(device, serial=parts[2].upper())
@@ -2183,6 +2183,62 @@ def parse_usb_filters(info, keep_serial=False):
     return filters
 
 
+def _usb_serial_key(value):
+    """Normalise the address-like serials Bluetooth adapters commonly use."""
+    return str(value or "").strip().replace(":", "").replace("-", "").upper()
+
+
+def _usb_filter_matches(spec, device):
+    """Whether one host device satisfies one active VM USB filter.
+
+    Serial-specific filters are deliberately honoured here.  OpenSpan never
+    writes or pins filters automatically -- a stopped device does not always
+    expose its serial to VirtualBox -- but if the configured VM already has an
+    explicit serial filter its ownership audit must not silently broaden that
+    filter back to every identical adapter.
+    """
+    if spec.get("vendor") != device.get("vendor"):
+        return False
+    if spec.get("product_id") \
+            and spec.get("product_id") != device.get("product_id"):
+        return False
+    wanted = _usb_serial_key(spec.get("serial"))
+    return not wanted or wanted == _usb_serial_key(device.get("serial"))
+
+
+def _ambiguous_usb_filters(filters, devices):
+    """Duplicate non-serial filters that match multiple physical adapters.
+
+    This is an audit finding, not an automatic rewrite.  Plain VID:PID filters
+    are known to capture the current multi-radio desk reliably, while pinning a
+    filter at the wrong moment has also made a working adapter disappear.  The
+    safe contribution here is to expose ambiguity and leave the user's VM
+    configuration untouched.
+    """
+    groups = {}
+    for spec in filters:
+        if spec.get("serial"):
+            continue
+        key = (spec.get("vendor", ""), spec.get("product_id", ""))
+        groups.setdefault(key, []).append(spec)
+
+    findings = []
+    for (vendor, product), specs in groups.items():
+        if len(specs) < 2:
+            continue
+        matched = [device for device in devices
+                   if _usb_filter_matches(specs[0], device)]
+        if len(matched) < 2:
+            continue
+        findings.append({
+            "vendor": vendor,
+            "product_id": product,
+            "filters": [spec.get("name", "") for spec in specs],
+            "devices": matched,
+        })
+    return findings
+
+
 def parse_usb_attached(info):
     """The UUIDs the VM currently holds, from `showvminfo --machinereadable`."""
     held = set()
@@ -2203,31 +2259,66 @@ def radio_report(usbhost, info):
     replugged dongle lands in, and precisely the state that used to be
     indistinguishable from a device that just would not connect.
     """
-    filters = parse_usb_filters(info)
+    filters = parse_usb_filters(info, keep_serial=True)
     held = parse_usb_attached(info)
-    mine, lost = [], []
-    for device in parse_usb_host(usbhost):
-        match = next(
-            (f for f in filters
-             if f["vendor"] == device.get("vendor")
-             and (not f["product_id"]
-                  or f["product_id"] == device.get("product_id"))),
-            None)
-        if not match:
+    devices = parse_usb_host(usbhost)
+    # A serial-specific filter is the narrowest statement of ownership, then a
+    # VID:PID filter, then a vendor-wide one.  This only chooses which matching
+    # filter names a device; one VirtualBox filter may legitimately match more
+    # than one device, so filters are not consumed as allocation slots.
+    ordered_filters = sorted(
+        enumerate(filters),
+        key=lambda row: (not bool(row[1].get("serial")),
+                         not bool(row[1].get("product_id")), row[0]))
+    mine, attached, busy, captured, available, unavailable = [], [], [], [], [], []
+    for device in devices:
+        matches = [spec for _, spec in ordered_filters
+                   if _usb_filter_matches(spec, device)]
+        if not matches:
             continue
-        device = dict(device, filter=match["name"])
+        device = dict(device, filter=matches[0]["name"],
+                      matching_filters=[spec.get("name", "")
+                                        for spec in matches])
         mine.append(device)
-        if not (device.get("uuids")
-                or {device["uuid"].lower()}) & held:
-            lost.append(device)
-    return {"mine": mine, "lost": lost, "held": held, "filters": filters}
+        uuids = device.get("uuids") or {device["uuid"].lower()}
+        if uuids & held:
+            attached.append(device)
+            continue
+        state = str(device.get("state") or "").strip().lower()
+        if state == "busy":
+            busy.append(device)
+        elif state == "captured":
+            captured.append(device)
+        elif state == "available":
+            available.append(device)
+        else:
+            unavailable.append(device)
+
+    absent = [spec for spec in filters
+              if not any(_usb_filter_matches(spec, device)
+                         for device in devices)]
+    lost = busy + captured + available + unavailable
+    return {
+        "mine": mine,
+        "attached": attached,
+        "busy": busy,
+        "captured": captured,
+        "available": available,
+        "unavailable": unavailable,
+        "attachable": busy + available,
+        "absent": absent,
+        "ambiguous_filters": _ambiguous_usb_filters(filters, devices),
+        "lost": lost,
+        "held": held,
+        "filters": filters,
+    }
 
 
 def serial_to_radio(serial):
     """A Bluetooth dongle's USB serial number IS its adapter address.
 
-    Both TP-Link dongles on this desk report `ACA7F1299FCB` and `3C6AD23CD44E`,
-    which are exactly the two radio addresses in the config with the colons
+    The two same-model dongles on the reference desk report distinct twelve-hex
+    serials which are exactly their configured radio addresses with the colons
     taken out. That is what makes a dongle identifiable from the HOST, with the
     VM down and the guest unreachable -- the one moment identifying it matters.
 
@@ -2271,6 +2362,86 @@ def usb_label(device, config=None):
     return f"{name} (USB port {port})" if port else name
 
 
+def usb_filter_label(spec):
+    """A VM filter name plus enough identity to diagnose an absent adapter."""
+    name = (spec.get("name") or "unnamed filter").strip()
+    vidpid = f"{spec.get('vendor', '?')}:{spec.get('product_id') or '*'}"
+    serial = (spec.get("serial") or "").strip()
+    return (f"filter \u201c{name}\u201d ({vidpid}, serial {serial})" if serial
+            else f"filter \u201c{name}\u201d ({vidpid})")
+
+
+def radio_status_text(state, config=None, vm_name=None):
+    """One UI sentence that preserves each materially different USB owner.
+
+    Returns ``(text, repairable_count)``. Busy/Available devices permit one
+    attach request. Captured-but-not-delivered, absent, and unknown states are
+    deliberately not counted as repairable.
+    """
+    config, vm_name = config or {}, vm_name or VM
+    parts = []
+    attached = len(state.get("attached", []))
+    total = len(state.get("mine", []))
+    if attached:
+        parts.append(f"{attached} of {total} present radios are attached to "
+                     f"the configured VM \u201c{vm_name}\u201d.")
+
+    busy = state.get("busy", [])
+    if busy:
+        names = ", ".join(usb_label(device, config) for device in busy)
+        parts.append(f"Busy on Windows: {names}. Repair will send exactly one "
+                     "attach request per radio.")
+
+    available = state.get("available", [])
+    if available:
+        names = ", ".join(usb_label(device, config) for device in available)
+        parts.append(f"Available on the host: {names}. Repair will send "
+                     "exactly one attach request per radio.")
+
+    captured = state.get("captured", [])
+    if captured:
+        names = ", ".join(usb_label(device, config) for device in captured)
+        parts.append(
+            f"Captured but not delivered: VirtualBox owns {names}, but the "
+            f"configured VM \u201c{vm_name}\u201d does not. Repair will not send "
+            "another attach request; restart Windows.")
+
+    absent = state.get("absent", [])
+    if absent:
+        names = ", ".join(usb_filter_label(spec) for spec in absent)
+        parts.append(f"Absent: no host adapter matches {names}. Check that the "
+                     "radio is plugged in.")
+
+    unavailable = state.get("unavailable", [])
+    if unavailable:
+        names = ", ".join(
+            f"{usb_label(device, config)} ({device.get('state') or 'unknown'})"
+            for device in unavailable)
+        parts.append(f"No automatic attach is safe for: {names}.")
+
+    ambiguous = state.get("ambiguous_filters", [])
+    if ambiguous:
+        groups = []
+        for finding in ambiguous:
+            names = ", ".join(f"\u201c{name or 'unnamed'}\u201d"
+                              for name in finding["filters"])
+            groups.append(
+                f"{names} all match {len(finding['devices'])} adapters at "
+                f"{finding['vendor']}:{finding['product_id'] or '*'}")
+        parts.append("Filter audit: " + "; ".join(groups)
+                     + ". They omit serial numbers, so the filters are "
+                       "indistinguishable; OpenSpan will not rewrite them.")
+
+    if not parts:
+        if state.get("filters"):
+            parts.append(f"All {total} present radios are attached to the "
+                         f"configured VM \u201c{vm_name}\u201d.")
+        else:
+            parts.append(f"The configured VM \u201c{vm_name}\u201d has no active "
+                         "USB radio filters.")
+    return " ".join(parts), len(busy) + len(available)
+
+
 def why_not_ready(config=None):
     """Why the bridge is not up yet, in one sentence a stranger can use.
 
@@ -2291,19 +2462,26 @@ def why_not_ready(config=None):
         return False, ("The VM is not running. Start it on the Bridge tab.")
 
     state = read_radio_state()
-    if state["lost"]:
-        names = ", ".join(usb_label(d, config) for d in state["lost"])
-        wedged = [d for d in state["lost"]
-                  if d.get("state") == "Captured"]
-        if wedged:
-            return False, (
-                f"VirtualBox has taken {names} from Windows but never handed it "
-                f"to the VM. Nothing can undo that from here — not usbdetach, "
-                f"not restarting the VM, which makes it worse. Restart Windows: "
-                f"on a fresh boot every radio is captured and delivered "
-                f"normally.")
+    if state["captured"]:
+        names = ", ".join(usb_label(d, config) for d in state["captured"])
         return False, (
-            f"The VM does not have {names}. Press Repair radios.")
+            f"VirtualBox has captured {names} but never delivered it to the "
+            f"configured VM \u201c{VM}\u201d. OpenSpan will not retry; restart Windows.")
+    if state["attachable"]:
+        names = ", ".join(usb_label(d, config) for d in state["attachable"])
+        return False, (
+            f"The configured VM \u201c{VM}\u201d does not have {names}. Repair radios "
+            f"will make one attach attempt.")
+    # An unmatched filter can be stale/redundant while every real radio is
+    # healthy. The Bluetooth panel always audits it, but it blocks the global
+    # readiness banner only when no configured-filter device is present at all.
+    if state["absent"] and not state["mine"]:
+        names = ", ".join(usb_filter_label(f) for f in state["absent"])
+        return False, f"No host adapter matches {names}; check that it is plugged in."
+    if state["unavailable"]:
+        names = ", ".join(usb_label(d, config)
+                          for d in state["unavailable"])
+        return False, f"The host USB state for {names} is not safe to repair."
 
     probe = ssh_guest(
         "ls /sys/class/bluetooth/ 2>/dev/null | wc -l; "
@@ -2456,14 +2634,20 @@ def read_radio_state():
 
 
 # What VirtualBox says when its host-side device object still has an unfinished
-# request against it. Retrying cannot clear it -- the device has to be re-created,
-# which means a physical replug or a VM restart.
+# request against it. Retrying cannot clear it -- the host device object has to
+# be re-created by a physical replug or a Windows restart. Restarting only the VM
+# risks spreading the ownership fault to radios that are still healthy.
 _USB_WEDGED = "busy with a previous request"
+# Once VirtualBox accepts a request but does not land it, the same host object
+# must not be offered again during this app run. A physical replug creates a new
+# UUID and is therefore a new object; an unchanged UUID is the same unsafe one.
+_USB_ATTACH_BLOCKED = set()
+_USB_REPAIR_LOCK = threading.Lock()  # a double-click cannot start two attachers
 WEDGED_ADVICE = (
     "VirtualBox still holds an unfinished request for it — what a dongle "
     "unplugged while the VM had it leaves behind. No command can clear it: even "
     "usbdetach refuses, because as far as the VM is concerned the device was "
-    "never attached. "
+    "never attached. OpenSpan will not retry the request. "
 )
 ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronously
 
@@ -2475,6 +2659,22 @@ REPLUG_ADVICE = (
     "that has never failed. Do NOT restart the VM — that spreads the fault to "
     "radios that are still working."
 )
+
+
+def _captured_advice():
+    return (
+        f"VirtualBox has captured it from Windows but the configured VM “{VM}” "
+        "does not hold it. OpenSpan sent no attach request because another one "
+        "can only deepen this state. Restart Windows; do not restart the VM."
+    )
+
+
+def _not_landed_advice():
+    return (
+        f"VirtualBox accepted one attach request, but the configured VM “{VM}” "
+        "still does not hold the device. OpenSpan will not retry. Restart "
+        "Windows; do not restart the VM."
+    )
 
 
 def repair_radios(config=None, settle=None):
@@ -2513,11 +2713,20 @@ def repair_radios(config=None, settle=None):
         "recovered": recovered, "failed": failed,
         "total": len(state["mine"]), "still_lost": [
             usb_label(d, config) for d in state["lost"]],
+        "repairable": len(state["attachable"]),
+        "captured": len(state["captured"]),
+        "absent": len(state["absent"]),
     }
 
 
-def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None, config=None):
-    """Hand every lost radio back to the VM. Returns (recovered, failed).
+def reclaim_radios(settle=ATTACH_SETTLE, verify=None, config=None):
+    """Serialize repair clicks, then run exactly one ownership pass."""
+    with _USB_REPAIR_LOCK:
+        return _reclaim_radios_once(settle=settle, verify=verify, config=config)
+
+
+def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None):
+    """Resolve one ownership report without retrying. Returns two result lists.
 
     **Success is the VM holding the device, not VBoxManage returning zero.**
     The first version of this believed the exit code, and the exit code is about
@@ -2528,7 +2737,9 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None, config=None):
     is "nothing happened". Which is what he said.
 
     The transfer is asynchronous, so it is given time and then checked, and what
-    is checked is the VM's own list of attached devices.
+    is checked is the configured VM's own list of attached devices. There is no
+    retry loop: an accepted request that does not land has transitioned to the
+    exact Captured-but-not-delivered state where another attach is unsafe.
 
     Nothing here scans, pairs or connects. It puts the USB device where the guest
     can see it, and then says to press Connect.
@@ -2536,31 +2747,69 @@ def reclaim_radios(settle=ATTACH_SETTLE, attempts=2, verify=None, config=None):
     verify = verify or (lambda: parse_usb_attached(
         vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout))
     recovered, failed = [], []
-    for device in read_radio_state()["lost"]:
-        label, uuid = usb_label(device, config), device["uuid"].lower()
-        reason = "not attempted"
-        for attempt in range(max(1, attempts)):
-            result = vbox("controlvm", VM, "usbattach", device["uuid"],
-                          quiet=attempt > 0)
-            text = ((result.stderr or "") + " "
-                    + (result.stdout or "")).strip().lower()
-            if _USB_WEDGED in text:
-                reason = WEDGED_ADVICE + REPLUG_ADVICE
-                break                      # retrying provably cannot help
-            if result.returncode:
-                reason = ((result.stderr or result.stdout or "").strip()[-200:]
-                          or "VBoxManage would not attach it")
-                continue
-            time.sleep(settle)
-            if uuid in verify():
-                reason = ""
-                break
-            reason = ("VirtualBox accepted the request but the VM never took "
-                      "the device. " + REPLUG_ADVICE)
-        if reason:
-            failed.append((label, reason))
-        else:
+    state = read_radio_state()
+
+    for spec in state.get("absent", []):
+        failed.append((usb_filter_label(spec),
+                       "No matching host adapter is present. OpenSpan sent no "
+                       "attach request; check that the radio is plugged in."))
+    for device in state.get("captured", []):
+        _USB_ATTACH_BLOCKED.update(
+            str(value).lower() for value in
+            (device.get("uuids") or {device.get("uuid")}) if value)
+        failed.append((usb_label(device, config), _captured_advice()))
+    for device in state.get("unavailable", []):
+        failed.append((
+            usb_label(device, config),
+            f"The host reports USB state {device.get('state') or 'unknown'}; "
+            "OpenSpan sent no attach request because that state is not known "
+            "to be safe."))
+
+    # Busy means Windows owns it; Available means nobody does. Those are the
+    # only two states in which OpenSpan is allowed to ask the configured VM for
+    # the device, once. De-duplicate defensively even if a malformed report puts
+    # the same record in both buckets.
+    attempted = set()
+    for device in state.get("attachable", []):
+        label = usb_label(device, config)
+        uuids = {str(value).lower() for value in
+                 (device.get("uuids") or {device["uuid"]}) if value}
+        identity = tuple(sorted(uuids))
+        if identity in attempted:
+            continue
+        attempted.add(identity)
+
+        # A prior worker or automatic filter capture may have won the race
+        # since read_radio_state(). Do not issue a redundant attach.
+        now_held = {str(value).lower() for value in verify()}
+        if uuids & now_held:
+            _USB_ATTACH_BLOCKED.difference_update(uuids)
             recovered.append(label)
+            continue
+        if uuids & _USB_ATTACH_BLOCKED:
+            failed.append((label, _captured_advice()))
+            continue
+
+        result = vbox("controlvm", VM, "usbattach", device["uuid"])
+        text = ((result.stderr or "") + " "
+                + (result.stdout or "")).strip().lower()
+        if _USB_WEDGED in text:
+            _USB_ATTACH_BLOCKED.update(uuids)
+            failed.append((label, WEDGED_ADVICE + REPLUG_ADVICE))
+            continue
+        if result.returncode:
+            detail = ((result.stderr or result.stdout or "").strip()[-200:]
+                      or "VBoxManage would not attach it")
+            failed.append((label, detail + " OpenSpan did not retry."))
+            continue
+
+        time.sleep(settle)
+        if uuids & {str(value).lower() for value in verify()}:
+            _USB_ATTACH_BLOCKED.difference_update(uuids)
+            recovered.append(label)
+        else:
+            _USB_ATTACH_BLOCKED.update(uuids)
+            failed.append((label, _not_landed_advice()))
     return recovered, failed
 
 
@@ -4896,11 +5145,12 @@ class BtPanel(tk.Frame):
         self.refresh()
 
     # ---- radios the VM has lost ------------------------------------------
-    def _radio_usb_apply(self, text, lost):
+    def _radio_usb_apply(self, text, repairable):
         def apply():
             self.radio_usb.set(text)
-            want = (f"Repair {lost} radio" + ("s" if lost != 1 else "")
-                    if lost else "Repair radios")
+            want = (f"Repair {repairable} radio"
+                    + ("s" if repairable != 1 else "")
+                    if repairable else "Repair radios")
             # A repair in flight owns this button's label. Writing the new
             # count STRAIGHT onto it would clobber "Repairing radios…" from
             # inside the very job that is doing the repairing; parking it
@@ -4924,20 +5174,8 @@ class BtPanel(tk.Frame):
                 return
             state = read_radio_state()
             config = self.app.canvas.config if self.app else {}
-            total, lost = len(state["mine"]), len(state["lost"])
-            if not total:
-                self._radio_usb_apply(
-                    "No Bluetooth adapter on this machine matches one of the "
-                    "VM's USB filters.", 0)
-            elif not lost:
-                self._radio_usb_apply(
-                    f"All {total} radios are attached to the VM.", 0)
-            else:
-                names = ", ".join(usb_label(d, config) for d in state["lost"])
-                self._radio_usb_apply(
-                    f"{total - lost} of {total} radios are attached. The VM "
-                    f"does not have {names}, so that machine cannot connect. "
-                    f"Repair explains what to do.", lost)
+            text, repairable = radio_status_text(state, config, VM)
+            self._radio_usb_apply(text, repairable)
         threading.Thread(target=work, daemon=True).start()
 
     def _reclaim_radios(self):
@@ -4955,25 +5193,44 @@ class BtPanel(tk.Frame):
                     self._radio_usb_check()
                     return
                 state = read_radio_state()
-                if not state["mine"]:
-                    self._log("radios: nothing on this machine matches the "
-                              "VM's USB filters. Check the filters in "
-                              "VirtualBox.")
+                if not state["filters"]:
+                    self._log(f"radios: the configured VM “{VM}” has no "
+                              "active USB filters.")
                     self._radio_usb_check()
                     return
-                if not state["lost"]:
+                if not state["lost"] and not state["absent"]:
                     self._log(f"radios: all {len(state['mine'])} are already "
-                              f"attached to the VM — nothing to reclaim.")
+                              f"attached to the configured VM “{VM}” — "
+                              "nothing to reclaim.")
                     self._radio_usb_check()
                     return
                 config = self.app.canvas.config if self.app else {}
-                for device in state["lost"]:
+                for spec in state["absent"]:
+                    self._log(f"radios: ABSENT — no host adapter matches "
+                              f"{usb_filter_label(spec)}; no attach will be sent.")
+                for device in state["captured"]:
+                    self._log(
+                        f"radios: CAPTURED but not delivered — "
+                        f"{usb_label(device, config)}; no attach will be sent.")
+                for device in state["unavailable"]:
+                    self._log(
+                        f"radios: {usb_label(device, config)} has unsupported "
+                        f"host state {device.get('state') or 'unknown'}; no "
+                        "attach will be sent.")
+                for device in state["attachable"]:
                     self._log(f"radios: {usb_label(device, config)} is "
                               f"{device.get('state', '?')} on the host "
                               f"(filter “{device.get('filter', '?')}”, serial "
-                              f"{device.get('serial') or 'none'}) — repairing")
+                              f"{device.get('serial') or 'none'}) — one attach "
+                              "attempt allowed")
+                for finding in state["ambiguous_filters"]:
+                    names = ", ".join(finding["filters"])
+                    self._log(
+                        f"radios: FILTER AUDIT — {names} are identical active "
+                        "filters without serials; reporting only, not rewriting.")
                 self._radio_usb_apply(
-                    f"Repairing {len(state['lost'])} radio(s)…", 0)
+                    f"Auditing ownership; {len(state['attachable'])} radio(s) "
+                    "permit one attach attempt…", 0)
                 outcome = repair_radios(config)
                 for line in outcome["pinned"]:
                     self._log(f"radios: pinned filter {line} — that filter now "
@@ -4989,11 +5246,11 @@ class BtPanel(tk.Frame):
                 if outcome["failed"]:
                     name, reason = outcome["failed"][0]
                     self._radio_usb_apply(f"{name}: {reason}",
-                                          len(outcome["failed"]))
-                    self._log("radios: if a replug does not take, restart the "
-                              "VM — that rebuilds its USB state from scratch. "
-                              "Note the iPad needs re-pairing after a VM "
-                              "power-off.")
+                                          outcome["repairable"])
+                    self._log("radios: OpenSpan does not retry accepted or "
+                              "Captured requests. Restart Windows for a "
+                              "Captured-but-not-delivered device; do not "
+                              "restart the VM.")
                 else:
                     self._radio_usb_check()
                 if outcome["recovered"]:
