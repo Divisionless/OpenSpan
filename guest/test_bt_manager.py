@@ -156,11 +156,15 @@ check("iPad unpair removes only iPad identities on its controller",
 
 btready = pathlib.Path(__file__).with_name("btready.sh").read_text(
     encoding="utf-8")
-check("boot helper follows the persisted multi-radio HID controller",
+check("boot helper resolves OPENSPAN_CONTROLLER from the drop-in",
       "20-radio.conf" in btready
+      and "OPENSPAN_CONTROLLER=" in btready
+      and "openspan_bt.py resolve --controller" in btready
       and 'export OPENSPAN_ADAPTER="$HCI"' in btready
       and 'bluetooth/$HCI/conn_min_interval' in btready
       and 'bluetooth/$HCI/conn_max_interval' in btready)
+check("boot helper falls back to legacy OPENSPAN_ADAPTER drop-ins",
+      'OPENSPAN_ADAPTER=' in btready)
 
 set_hid = pathlib.Path(__file__).with_name("set-hid-radio.sh").read_text(
     encoding="utf-8")
@@ -169,6 +173,11 @@ check("radio apply tunes the resolved HID controller",
       and 'bluetooth/$hci"' in set_hid
       and '$base/conn_min_interval' in set_hid
       and '$base/conn_max_interval' in set_hid)
+check("radio apply writes OPENSPAN_CONTROLLER, not OPENSPAN_ADAPTER",
+      "OPENSPAN_CONTROLLER=$CTRL_UPPER" in set_hid
+      and "Environment=OPENSPAN_ADAPTER=" not in set_hid)
+check("radio apply checks for duplicate lanes by stable MAC",
+      "OPENSPAN_CONTROLLER=$CTRL_UPPER" in set_hid)
 
 set_target = pathlib.Path(__file__).with_name(
     "set-hid-target.sh").read_text(encoding="utf-8")
@@ -177,6 +186,37 @@ mac_service = pathlib.Path(__file__).with_name("system").joinpath(
 check("managed Mac lane resolves a stable controller independently",
       'openspan_bt.py resolve --controller "$CTRL"' in set_target
       and "openspanble-mac.service" in set_target)
+check("managed Mac drop-in stores OPENSPAN_CONTROLLER, not OPENSPAN_ADAPTER",
+      "OPENSPAN_CONTROLLER=$CTRL_UPPER" in set_target
+      and "Environment=OPENSPAN_ADAPTER=" not in set_target)
 check("managed Mac lane has an independent name and command port",
       "OPENSPAN_PORT=9956" in mac_service
       and "OpenSpan Mac Control" in mac_service)
+
+set_device = pathlib.Path(__file__).with_name("set-hid-device.sh").read_text(
+    encoding="utf-8")
+check("per-device drop-in stores OPENSPAN_CONTROLLER, not OPENSPAN_ADAPTER",
+      "OPENSPAN_CONTROLLER=$CTRL_UPPER" in set_device
+      and "Environment=OPENSPAN_ADAPTER=" not in set_device)
+check("per-device duplicate check compares stable MACs",
+      'grep -qx "Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER"' in set_device)
+
+start_lane = pathlib.Path(__file__).with_name("start-ble-lane.sh").read_text(
+    encoding="utf-8")
+check("lane wrapper resolves OPENSPAN_CONTROLLER to OPENSPAN_ADAPTER",
+      "OPENSPAN_CONTROLLER" in start_lane
+      and "openspan_bt.py resolve" in start_lane
+      and "export OPENSPAN_ADAPTER" in start_lane)
+check("lane wrapper falls back when OPENSPAN_CONTROLLER is unset",
+      'OPENSPAN_CONTROLLER:-}' in start_lane)
+check("lane wrapper runs wait-hci0 and ensure-dualmode before the daemon",
+      "wait-hci0.sh" in start_lane
+      and "ensure-dualmode.sh" in start_lane
+      and "exec" in start_lane
+      and "openspan_ble.py" in start_lane)
+
+template = pathlib.Path(__file__).with_name("system").joinpath(
+    "openspanble@.service").read_text(encoding="utf-8")
+check("template service delegates to start-ble-lane.sh",
+      "start-ble-lane.sh" in template
+      and "ExecStartPre" not in template)

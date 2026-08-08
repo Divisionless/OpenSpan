@@ -9,12 +9,19 @@
 source /opt/openspan/env.sh
 
 # Single-radio installs have no override and remain hci0. Multi-radio installs
-# persist the chosen HID lane in the openspanble drop-in; resolve that hciN
-# before waiting, powering, or applying mouse latency bounds.
+# persist the stable controller MAC in the openspanble drop-in; resolve it to
+# the current hciN before waiting, powering, or applying mouse latency bounds.
 HCI="${OPENSPAN_ADAPTER:-}"
 RADIO_CONF=/etc/systemd/system/openspanble.service.d/20-radio.conf
 if [ -z "$HCI" ] && [ -f "$RADIO_CONF" ]; then
-  HCI=$(sed -n 's/^Environment=OPENSPAN_ADAPTER=//p' "$RADIO_CONF" | tail -n 1)
+  CTRL=$(sed -n 's/^Environment=OPENSPAN_CONTROLLER=//p' "$RADIO_CONF" | tail -n 1)
+  if [ -n "$CTRL" ]; then
+    HCI=$(python3 /opt/openspan/openspan_bt.py resolve --controller "$CTRL" 2>/dev/null) || true
+  fi
+  # fall back to legacy OPENSPAN_ADAPTER= for pre-migration drop-ins
+  if [ -z "$HCI" ]; then
+    HCI=$(sed -n 's/^Environment=OPENSPAN_ADAPTER=//p' "$RADIO_CONF" | tail -n 1)
+  fi
 fi
 HCI="${HCI:-hci0}"
 case "$HCI" in hci[0-9]*) ;; *) echo "invalid adapter $HCI" >&2; exit 1;; esac

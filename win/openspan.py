@@ -7831,6 +7831,8 @@ class App:
                 # openspanble@<id> enable/restart fails and the lane can't pair
                 (os.path.join("..", "guest", "system", "openspanble@.service"),
                  "/etc/systemd/system/openspanble@.service"),
+                (os.path.join("..", "guest", "start-ble-lane.sh"),
+                 "/opt/openspan/start-ble-lane.sh"),
                 (os.path.join("..", "guest", "ensure-dualmode.sh"),
                  "/opt/openspan/ensure-dualmode.sh"),
                 (os.path.join("..", "guest", "wait-hci0.sh"),

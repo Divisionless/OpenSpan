@@ -35,16 +35,17 @@ fi
 
 HCI=$(python3 /opt/openspan/openspan_bt.py resolve --controller "$CTRL")
 case "$HCI" in hci[0-9]*) ;; *) echo "invalid resolved adapter: $HCI" >&2; exit 2;; esac
+CTRL_UPPER=$(echo "$CTRL" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
 MAC_CONF=/etc/systemd/system/openspanble-mac.service.d/20-radio.conf
 if [ -f "$MAC_CONF" ] && \
-   grep -qx "Environment=OPENSPAN_ADAPTER=$HCI" "$MAC_CONF"; then
-  echo "$HCI is already assigned to the managed Mac HID lane" >&2
+   grep -qx "Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER" "$MAC_CONF"; then
+  echo "$CTRL_UPPER is already assigned to the managed Mac HID lane" >&2
   exit 3
 fi
 apply_latency "$HCI"
 
 NEW="[Service]
-Environment=OPENSPAN_ADAPTER=$HCI
+Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER
 "
 if [ -f "$CONF" ] && printf '%s' "$NEW" | cmp -s - "$CONF"; then
   systemctl is-active --quiet openspanble || systemctl restart openspanble
