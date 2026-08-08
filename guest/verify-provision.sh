@@ -64,7 +64,8 @@ for f in /opt/openspan/set-hid-device.sh \
          /opt/openspan/set-hid-target.sh \
          /opt/openspan/bt-preflight.sh \
          /opt/openspan/ensure-dualmode.sh \
-         /opt/openspan/wait-hci0.sh; do
+         /opt/openspan/wait-hci0.sh \
+         /opt/openspan/start-ble-lane.sh; do
   [ -x "$f" ] && ok "$f executable" || bad "$f MISSING or not executable"
 done
 grep -q 'suspend-timeout-seconds"\] = 0' \

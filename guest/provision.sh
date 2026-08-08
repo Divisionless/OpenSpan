@@ -80,7 +80,7 @@ stage1_base() {
   for s in bt-connect.sh bt-list.sh btready.sh openspan_bt.py \
            set-hid-device.sh set-hid-radio.sh set-hid-target.sh \
            bt-preflight.sh ensure-dualmode.sh wait-hci0.sh \
-           install-authorized-key.sh; do
+           start-ble-lane.sh install-authorized-key.sh; do
     install -m 755 "$HERE/$s" "$OPT/$s"
   done
   install -m 644 "$HERE/rebuild/env.sh"          "$OPT/env.sh"
