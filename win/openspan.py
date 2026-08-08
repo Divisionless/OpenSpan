@@ -5466,9 +5466,11 @@ class BtPanel(tk.Frame):
         address = radio.get("address", "")
         label = self.prefs["radio_labels"].get(address)
         if not label:
-            label = radio.get("hardware") or radio.get("alias") \
-                or radio.get("name") \
-                or radio.get("hci") or "Bluetooth radio"
+            # Hardware identity only -- never the BlueZ alias. The alias is
+            # the lane name the last assignment stamped onto the controller
+            # ("OpenSpan iPad"), and this list is where lanes get picked, so
+            # an alias here labels a radio with the job it happens to hold.
+            label = radio.get("hardware") or "Bluetooth controller"
         suffix = address[-5:] if address else radio.get("hci", "")
         return f"{label} ({suffix})"
 
