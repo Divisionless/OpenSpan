@@ -355,7 +355,7 @@ check("a second device lane has an independent daemon identity and port",
       and "openspanble-mac" in script)
 check("radio assignment resolves a stable controller MAC to the current hci",
       "openspan_bt.py resolve --controller" in script
-      and "OPENSPAN_ADAPTER=$HCI" in script)
+      and "OPENSPAN_CONTROLLER=$CTRL_UPPER" in script)
 
 template = (guest / "system" / "openspanble@.service").read_text(
     encoding="utf-8")
@@ -364,10 +364,17 @@ check("the guest lane is a template: no port, radio or name is hardcoded",
       "OPENSPAN_DEVICE_ID=%i" in template
       and "Environment=OPENSPAN_PORT=" not in template
       and "Environment=OPENSPAN_ADAPTER=" not in template
+      and "Environment=OPENSPAN_CONTROLLER=" not in template
       and "openspanble@%i.service.d" in template)
+check("the template delegates to start-ble-lane.sh for boot-time resolve",
+      "start-ble-lane.sh" in template
+      and "ExecStartPre" not in template)
 check("a lane takes its id, radio, port and name from the caller",
       "DEVICE_ID CONTROLLER_MAC PORT NAME" in generic
       and "--remove" in generic)
+check("per-device drop-in stores the stable MAC, not a volatile hciN",
+      "OPENSPAN_CONTROLLER=$CTRL_UPPER" in generic
+      and "Environment=OPENSPAN_ADAPTER=" not in generic)
 
 
 # --- the portal must be restarted whenever what it READS changes -----------

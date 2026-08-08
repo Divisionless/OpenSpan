@@ -9,9 +9,7 @@ Type=simple
 Environment=PYTHONUNBUFFERED=1
 Environment=OPENSPAN_PORT=9956
 Environment="OPENSPAN_DEVICE_NAME=OpenSpan Mac Control"
-ExecStartPre=/opt/openspan/wait-hci0.sh
-ExecStartPre=/opt/openspan/ensure-dualmode.sh
-ExecStart=/usr/bin/python3 /opt/openspan/openspan_ble.py
+ExecStart=/opt/openspan/start-ble-lane.sh
 Restart=always
 RestartSec=2
 

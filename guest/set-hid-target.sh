@@ -23,10 +23,11 @@ esac
 [ -n "$CTRL" ] || { echo "controller address required" >&2; exit 2; }
 HCI=$(python3 /opt/openspan/openspan_bt.py resolve --controller "$CTRL")
 case "$HCI" in hci[0-9]*) ;; *) echo "invalid resolved adapter: $HCI" >&2; exit 2;; esac
+CTRL_UPPER=$(echo "$CTRL" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
 IPAD_CONF=/etc/systemd/system/openspanble.service.d/20-radio.conf
 if [ -f "$IPAD_CONF" ] && \
-   grep -qx "Environment=OPENSPAN_ADAPTER=$HCI" "$IPAD_CONF"; then
-  echo "$HCI is already assigned to the iPad HID lane" >&2
+   grep -qx "Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER" "$IPAD_CONF"; then
+  echo "$CTRL_UPPER is already assigned to the iPad HID lane" >&2
   exit 3
 fi
 
@@ -34,7 +35,7 @@ DIR=/etc/systemd/system/openspanble-mac.service.d
 CONF="$DIR/20-radio.conf"
 mkdir -p "$DIR"
 NEW="[Service]
-Environment=OPENSPAN_ADAPTER=$HCI
+Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER
 "
 
 changed=0

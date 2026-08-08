@@ -74,16 +74,19 @@ case "$HCI" in hci[0-9]*) ;; *) echo "invalid resolved adapter: $HCI" >&2; exit 
 CONF_DIR="$(dropin_dir "$ID")"
 CONF="$CONF_DIR/20-device.conf"
 
+# Normalize the controller MAC for stable comparison.
+CTRL_UPPER=$(echo "$CTRL" | tr '[:lower:]' '[:upper:]' | tr '-' ':')
+
 # One radio, one lane -- two daemons on one adapter fight over advertisement
-# and bonds. Refuse a controller any OTHER instance (or a legacy ipad/mac unit)
-# already owns.
+# and bonds. Refuse a controller any OTHER instance (or a legacy unit) already
+# owns. Compare the stable MAC, not the volatile hciN.
 for other in "$SD"/openspanble@*.service.d/20-device.conf \
              "$SD"/openspanble.service.d/20-radio.conf \
              "$SD"/openspanble-mac.service.d/20-radio.conf; do
   [ -f "$other" ] || continue
   [ "$other" != "$CONF" ] || continue
-  if grep -qx "Environment=OPENSPAN_ADAPTER=$HCI" "$other"; then
-    echo "$HCI is already assigned to another HID lane ($other)" >&2
+  if grep -qx "Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER" "$other"; then
+    echo "$CTRL_UPPER is already assigned to another HID lane ($other)" >&2
     exit 3
   fi
 done
@@ -91,7 +94,7 @@ done
 # --- write the per-instance drop-in (idempotent) ----------------------------
 mkdir -p "$CONF_DIR"
 NEW="[Service]
-Environment=OPENSPAN_ADAPTER=$HCI
+Environment=OPENSPAN_CONTROLLER=$CTRL_UPPER
 Environment=OPENSPAN_PORT=$PORT
 Environment=\"OPENSPAN_DEVICE_NAME=$NAME\"
 "

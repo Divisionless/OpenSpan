@@ -14,11 +14,10 @@ Environment=PYTHONUNBUFFERED=1
 # Deliberately NO port/adapter/name here: every value that identifies this lane
 # comes from 20-device.conf. Only the instance id is known statically.
 Environment=OPENSPAN_DEVICE_ID=%i
-# wait-hci0.sh / ensure-dualmode.sh both read OPENSPAN_ADAPTER, so they act on
-# this instance's radio and never power-cycle another lane's.
-ExecStartPre=/opt/openspan/wait-hci0.sh
-ExecStartPre=/opt/openspan/ensure-dualmode.sh
-ExecStart=/usr/bin/python3 /opt/openspan/openspan_ble.py
+# start-ble-lane.sh resolves OPENSPAN_CONTROLLER (the stable MAC from the
+# drop-in) to the current hciN, then runs wait-hci0 + ensure-dualmode + exec
+# openspan_ble.py in one process tree so the resolved adapter propagates.
+ExecStart=/opt/openspan/start-ble-lane.sh
 Restart=always
 RestartSec=2
 
