@@ -262,6 +262,14 @@ check("iPad unpair removes only iPad identities on its controller",
       bluez.forget_hid("hci0", target="ipad") == 1
       and removed == ["/org/bluez/hci0/dev_60_8B_0E_05_72_82"])
 
+preflight = pathlib.Path(__file__).with_name("bt-preflight.sh").read_text(
+    encoding="utf-8")
+check("preflight retries with escalating patience before declaring a wedge",
+      "for probe_timeout in 6 8 10" in preflight
+      and 'probe "$probe_timeout"' in preflight)
+check("a healthy first probe still exits immediately",
+      preflight.index('echo "BT_OK"') < preflight.index("BT_WEDGED"))
+
 btready = pathlib.Path(__file__).with_name("btready.sh").read_text(
     encoding="utf-8")
 check("boot helper resolves OPENSPAN_CONTROLLER from the drop-in",

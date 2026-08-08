@@ -12,7 +12,7 @@
 set -u
 
 probe() {
-    timeout 6 python3 - <<'PY' >/dev/null 2>&1
+    timeout "${1:-6}" python3 - <<'PY' >/dev/null 2>&1
 import dbus
 bus = dbus.SystemBus()
 om = dbus.Interface(bus.get_object("org.bluez", "/"),
@@ -21,10 +21,19 @@ om.GetManagedObjects()
 PY
 }
 
-if probe; then
-    echo "BT_OK"
-    exit 0
-fi
+# A wedge is PERSISTENT by definition. bluetoothd that is merely BUSY --
+# three adapters, a GATT tree per lane, live HID traffic to marshal into one
+# GetManagedObjects reply -- can miss a single 6-second window and answer the
+# next probe fine. The remedy below drops every live peer on every radio, so
+# one slow reply must never trigger it: diagnose only on repeated, spaced
+# failures, with more patience each time.
+for probe_timeout in 6 8 10; do
+    if probe "$probe_timeout"; then
+        echo "BT_OK"
+        exit 0
+    fi
+    [ "$probe_timeout" -lt 10 ] && sleep 2
+done
 
 echo "BT_WEDGED -- bluetoothd is not answering D-Bus; recovering" >&2
 
