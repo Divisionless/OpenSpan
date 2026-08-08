@@ -124,6 +124,107 @@ check("multi-radio audio pins preserve controller ownership",
 check("audio classification is icon-scoped",
       module.is_audio({"Icon": "audio-card"})
       and not module.is_audio({"Icon": "input-keyboard"}))
+
+sink = {
+    "name": "bluez_output.AA_BB_CC_00_00_20.1",
+    "properties": {
+        "api.bluez5.address": "AA:BB:CC:00:00:20",
+        "device.bus": "bluetooth",
+    },
+    "volume": {
+        "front-left": {"value": 32768, "value_percent": "50%"},
+        "front-right": {"value": 32768, "value_percent": "50%"},
+    },
+}
+check("a bluez sink maps to its exact Bluetooth address",
+      module.sink_bluetooth_address(sink) == "AA:BB:CC:00:00:20")
+check("non-Bluetooth and conflicting sinks are never addressable",
+      module.sink_bluetooth_address({
+          "name": "alsa_output.pci-card",
+          "properties": {"api.bluez5.address": "AA:BB:CC:00:00:20"},
+      }) == ""
+      and module.sink_bluetooth_address({
+          "name": "bluez_output.AA_BB_CC_00_00_21.1",
+          "properties": {"device.string": "AA:BB:CC:00:00:20"},
+      }) == "")
+
+original_run = module.subprocess.run
+run_calls = []
+
+
+def fake_run(command, **kwargs):
+    run_calls.append((command, kwargs))
+    return types.SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+
+module.subprocess.run = fake_run
+poisoned_env = {
+    "PULSE_COOKIE": "/tmp/wrong-cookie",
+    "PULSE_SINK": "wrong-sink",
+    "PULSE_SOURCE": "wrong-source",
+    "PULSE_CLIENTCONFIG": "/tmp/wrong-client.conf",
+}
+saved_env = {key: module.os.environ.get(key) for key in poisoned_env}
+module.os.environ.update(poisoned_env)
+try:
+    module._run_pactl(["list", "sinks"], json_output=True)
+finally:
+    for key, value in saved_env.items():
+        if value is None:
+            module.os.environ.pop(key, None)
+        else:
+            module.os.environ[key] = value
+check("pactl uses argv and the dedicated root PipeWire session",
+      run_calls[0][0] == ["pactl", "--format=json", "list", "sinks"]
+      and not run_calls[0][1].get("shell", False)
+      and run_calls[0][1]["env"]["XDG_RUNTIME_DIR"] == "/run/user/0"
+      and run_calls[0][1]["env"]["DBUS_SESSION_BUS_ADDRESS"]
+      == "unix:path=/run/user/0/bus"
+      and run_calls[0][1]["env"]["PULSE_SERVER"]
+      == "unix:/run/user/0/pulse/native"
+      and not any(key in run_calls[0][1]["env"] for key in poisoned_env))
+module.subprocess.run = original_run
+
+original_sinks = module._pactl_sinks
+original_pactl = module._run_pactl
+module._pactl_sinks = lambda: [sink]
+check("audio-levels reports a clamped integer level by MAC",
+      module.audio_levels() == {"AA:BB:CC:00:00:20": 50})
+pactl_calls = []
+module._run_pactl = lambda args, json_output=False: pactl_calls.append(
+    (list(args), json_output)) or ""
+check("set-audio-level targets only the mapped sink with argv, not a shell",
+      module.set_audio_level("aa-bb-cc-00-00-20", 37) == 37
+      and pactl_calls == [([
+          "set-sink-volume", "bluez_output.AA_BB_CC_00_00_20.1", "37%"],
+          False)])
+
+pactl_calls.clear()
+try:
+    module.set_audio_level("AA:BB:CC:00:00:99", 37)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("accepted an address with no unique live sink")
+check("a missing device is refused without falling back to another sink",
+      pactl_calls == [])
+
+duplicate = dict(sink)
+duplicate["name"] = "bluez_output.AA_BB_CC_00_00_20.a2dp-sink"
+module._pactl_sinks = lambda: [sink, duplicate]
+check("ambiguous duplicate sinks are refused instead of guessed",
+      module.audio_levels() == {})
+for invalid_level in (-1, 101, 1.5, True):
+    try:
+        module.set_audio_level("AA:BB:CC:00:00:20", invalid_level)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"accepted invalid audio level {invalid_level!r}")
+check("set-audio-level accepts integers from 0 through 100 only", True)
+module._pactl_sinks = original_sinks
+module._run_pactl = original_pactl
+
 check("Mac lane rejects Apple mobile-device bonds",
       module.is_wrong_target_hid(
           {"name": "Apple's iPad (2)", "alias": ""}, "mac")

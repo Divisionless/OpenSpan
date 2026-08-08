@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Controller-scoped BlueZ operations for OpenSpan multi-radio mode.
+"""Controller-scoped BlueZ and per-device audio operations for OpenSpan.
 
 The original shell/bluetoothctl path remains the single-radio default.  This
-helper is used only after the user opts into multi-radio mode, where every
-operation must name a controller explicitly so one device cannot disturb a
-different radio.
+helper owns operations that require an explicit controller in multi-radio mode,
+plus safe address-to-PipeWire-sink volume operations used in either mode.
 """
 
 import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -25,6 +25,14 @@ DEVICE = "org.bluez.Device1"
 AUDIO_PIN = "/opt/openspan/audio-device.txt"
 MAC_RE = re.compile(r"^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$")
 HCI_RE = re.compile(r"^hci[0-9]+$")
+BLUEZ_SINK_RE = re.compile(r"^bluez_output\.[A-Za-z0-9_.-]+$")
+BLUEZ_SINK_ADDRESS_RE = re.compile(
+    r"^bluez_output\.([0-9A-Fa-f]{2}(?:_[0-9A-Fa-f]{2}){5})(?:\.|$)")
+AUDIO_RUNTIME_ENV = {
+    "XDG_RUNTIME_DIR": "/run/user/0",
+    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/0/bus",
+    "PULSE_SERVER": "unix:/run/user/0/pulse/native",
+}
 
 
 def normalize_mac(value):
@@ -58,6 +66,140 @@ def format_audio_pin(controller, device):
 def is_audio(props):
     return str(
         props.get("icon", props.get("Icon", ""))).lower().startswith("audio")
+
+
+def _run_pactl(arguments, json_output=False):
+    """Run pactl against OpenSpan's root PipeWire-Pulse session, never a
+    caller's login session. Arguments are always an argv list (no shell)."""
+    command = ["pactl"]
+    if json_output:
+        command.append("--format=json")
+    command.extend(str(arg) for arg in arguments)
+    env = os.environ.copy()
+    # Do not inherit a caller-selected sink, auth cookie, or client config.
+    # PULSE_SERVER below pins the one server this helper is allowed to touch.
+    for key in ("PULSE_COOKIE", "PULSE_SINK", "PULSE_SOURCE",
+                "PULSE_CLIENTCONFIG"):
+        env.pop(key, None)
+    env.update(AUDIO_RUNTIME_ENV)
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=10, env=env,
+        check=False)
+    if result.returncode:
+        detail = (result.stderr or result.stdout or "pactl failed").strip()
+        raise RuntimeError(detail[-300:])
+    return result.stdout or ""
+
+
+def _pactl_sinks():
+    try:
+        rows = json.loads(_run_pactl(["list", "sinks"], json_output=True))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("pactl returned invalid sink JSON") from exc
+    if not isinstance(rows, list):
+        raise RuntimeError("pactl returned an invalid sink list")
+    return rows
+
+
+def sink_bluetooth_address(sink):
+    """Return the exact Bluetooth MAC owned by a bluez_output sink.
+
+    PipeWire exposes the address both in the sink name and, depending on its
+    version, one of several exact properties. Conflicting evidence is rejected
+    instead of allowing a level command to land on the wrong device.
+    """
+    if not isinstance(sink, dict):
+        return ""
+    name = str(sink.get("name") or "")
+    if not BLUEZ_SINK_RE.fullmatch(name):
+        return ""
+
+    candidates = set()
+    match = BLUEZ_SINK_ADDRESS_RE.match(name)
+    if match:
+        try:
+            candidates.add(normalize_mac(match.group(1).replace("_", ":")))
+        except ValueError:
+            pass
+
+    properties = sink.get("properties") or {}
+    if isinstance(properties, dict):
+        for key in ("api.bluez5.address", "bluez5.address",
+                    "device.string", "device.serial"):
+            raw = properties.get(key)
+            try:
+                candidates.add(normalize_mac(raw))
+            except ValueError:
+                pass
+    return next(iter(candidates)) if len(candidates) == 1 else ""
+
+
+def audio_sink_map(sinks):
+    """Map MAC -> unique bluez sink; ambiguous duplicate profiles are omitted."""
+    mapped = {}
+    ambiguous = set()
+    for sink in sinks:
+        address = sink_bluetooth_address(sink)
+        if not address:
+            continue
+        old = mapped.get(address)
+        if old is not None and old.get("name") != sink.get("name"):
+            ambiguous.add(address)
+            continue
+        mapped[address] = sink
+    for address in ambiguous:
+        mapped.pop(address, None)
+    return mapped
+
+
+def sink_level(sink):
+    """Return a sink's mean channel level as a clamped integer percentage."""
+    volume = sink.get("volume") if isinstance(sink, dict) else None
+    channels = list(volume.values()) if isinstance(volume, dict) \
+        else list(volume) if isinstance(volume, list) else []
+    levels = []
+    for channel in channels:
+        if not isinstance(channel, dict):
+            continue
+        percent = str(channel.get("value_percent") or "").strip()
+        match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)%", percent)
+        if match:
+            levels.append(float(match.group(1)))
+            continue
+        try:
+            levels.append(float(channel["value"]) * 100.0 / 65536.0)
+        except (KeyError, TypeError, ValueError):
+            pass
+    if not levels:
+        return None
+    return max(0, min(100, int(round(sum(levels) / len(levels)))))
+
+
+def audio_levels():
+    """Return {Bluetooth MAC: 0..100} for uniquely mapped live bluez sinks."""
+    result = {}
+    for address, sink in audio_sink_map(_pactl_sinks()).items():
+        level = sink_level(sink)
+        if level is not None:
+            result[address] = level
+    return dict(sorted(result.items()))
+
+
+def set_audio_level(address, level):
+    """Set one Bluetooth sink only; never fall back to the default sink."""
+    address = normalize_mac(address)
+    if isinstance(level, bool) or not isinstance(level, int) \
+            or not 0 <= level <= 100:
+        raise ValueError("audio level must be an integer from 0 to 100")
+    sink = audio_sink_map(_pactl_sinks()).get(address)
+    if not sink:
+        raise RuntimeError(
+            f"no unique connected Bluetooth sink for {address}")
+    sink_name = str(sink.get("name") or "")
+    if not BLUEZ_SINK_RE.fullmatch(sink_name):
+        raise RuntimeError("refusing unsafe Bluetooth sink name")
+    _run_pactl(["set-sink-volume", sink_name, f"{level}%"])
+    return level
 
 
 def is_apple_mobile(props):
@@ -437,11 +579,23 @@ def build_parser():
     forget_hid.add_argument(
         "--target", default="")
     sub.add_parser("reconnect-audio")
+    sub.add_parser("audio-levels")
+    set_level = sub.add_parser("set-audio-level")
+    set_level.add_argument("--device", required=True)
+    set_level.add_argument("--level", required=True, type=int)
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command == "audio-levels":
+        print(json.dumps(audio_levels(), sort_keys=True))
+        return 0
+    if args.command == "set-audio-level":
+        level = set_audio_level(args.device, args.level)
+        print(f"LEVEL|{normalize_mac(args.device)}|{level}")
+        return 0
+
     bluez = Bluez()
     if args.command == "list":
         print(json.dumps({
