@@ -118,8 +118,8 @@ check("clicking the dimmed area does not discard the dialog",
 tall = A.FrameModal(root)
 tall.geometry("900x420")
 for i in range(24):                      # a device with a lot of screens
-    tk.Label(tall, text=f"row {i}", bg="#101014", fg="#ddd").pack(fill="x")
-foot = tk.Frame(tall, bg="#101014", height=39)
+    tk.Label(tall, text=f"row {i}", bg="#070A0F", fg="#ddd").pack(fill="x")
+foot = tk.Frame(tall, bg="#070A0F", height=39)
 foot.pack(side="bottom", fill="x")
 tall.grab_set()                          # every dialog grabs last; that fits it
 root.update_idletasks()

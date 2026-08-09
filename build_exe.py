@@ -17,7 +17,9 @@ import PyInstaller.__main__
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WIN = os.path.join(ROOT, "win")
-ICON = os.path.join(ROOT, "openspan.ico")
+ICON = os.path.join(ROOT, "brand", "esotericos-app.ico")
+if not os.path.isfile(ICON):
+    ICON = os.path.join(ROOT, "openspan.ico")
 DIST = os.path.join(ROOT, "dist")
 BUILD = os.path.join(ROOT, "build")
 NAME = os.environ.get("OPENSPAN_BUILD_NAME", "OpenSpan").strip() or "OpenSpan"

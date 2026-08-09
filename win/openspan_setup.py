@@ -176,10 +176,10 @@ class SetupApp:
                    command=self._rotate).pack(side="left", padx=4)
         ttk.Button(top, text="Save",
                    command=self._save).pack(side="right")
-        self.status = ttk.Label(top, text="", foreground="#1a7f37")
+        self.status = ttk.Label(top, text="", foreground="#B28DFF")
         self.status.pack(side="right", padx=10)
 
-        self.canvas = tk.Canvas(root, width=960, height=600, bg="#12141a",
+        self.canvas = tk.Canvas(root, width=960, height=600, bg="#070A10",
                                 highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self._redraw())
@@ -191,7 +191,7 @@ class SetupApp:
                 "sits next to — it snaps flush. That shared border is the "
                 "portal your mouse crosses.")
         ttk.Label(root, text=hint, padding=6,
-                  wraplength=940, foreground="#8b93a7").pack(fill="x")
+                  wraplength=940, foreground="#A6A1B0").pack(fill="x")
 
         self.dragging = False
         self.drag_off = (0, 0)
@@ -265,21 +265,21 @@ class SetupApp:
         for m in self.monitors:
             x0, y0 = self.w2c(m["x"], m["y"])
             x1, y1 = self.w2c(m["x"] + m["w"], m["y"] + m["h"])
-            c.create_rectangle(x0, y0, x1, y1, fill="#243049",
-                               outline="#4a6ea8", width=2)
+            c.create_rectangle(x0, y0, x1, y1, fill="#1C182E",
+                               outline="#6B5CA8", width=2)
             tag = "PRIMARY\n" if m["primary"] else ""
             c.create_text((x0 + x1) / 2, (y0 + y1) / 2,
                           text=f"{tag}{m['w']}x{m['h']}",
-                          fill="#c9d4ec", justify="center",
+                          fill="#F5F5F8", justify="center",
                           font=("Segoe UI", 10, "bold"))
         ix0, iy0 = self.w2c(self.ipad["x"], self.ipad["y"])
         ix1, iy1 = self.w2c(self.ipad["x"] + self.ipad["w"],
                             self.ipad["y"] + self.ipad["h"])
         self.ipad_rect = c.create_rectangle(
-            ix0, iy0, ix1, iy1, fill="#1f6f43", outline="#3fdc8a", width=3)
+            ix0, iy0, ix1, iy1, fill="#5F3DC4", outline="#8A5CFF", width=3)
         c.create_text((ix0 + ix1) / 2, (iy0 + iy1) / 2,
                       text=f"iPad\n{self.ipad['w']}x{self.ipad['h']}",
-                      fill="#d6ffe9", justify="center",
+                      fill="#D8C8FF", justify="center",
                       font=("Segoe UI", 10, "bold"))
         self._show_portals()
 
@@ -327,11 +327,11 @@ class SetupApp:
         if portals:
             self.status.config(
                 text=f"Portal set ({len(portals)} edge)",
-                foreground="#1a7f37")
+                foreground="#B28DFF")
         else:
             self.status.config(
                 text="Not touching any monitor — drag iPad to an edge",
-                foreground="#c9433f")
+                foreground="#E04A92")
 
     # ---- dragging with snap ----
     def _press(self, e):
@@ -411,7 +411,7 @@ class SetupApp:
         with open(CONFIG_PATH, "w") as f:
             json.dump(cfg, f, indent=2)
         self.status.config(text=f"Saved → {os.path.basename(CONFIG_PATH)}",
-                           foreground="#1a7f37")
+                           foreground="#B28DFF")
         from openspan import dark_alert
         dark_alert(self.root, "Saved",
                    f"Arrangement saved to:\n{CONFIG_PATH}\n\n"

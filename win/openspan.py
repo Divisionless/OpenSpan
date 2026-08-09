@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenSpan — one dark-mode window that runs the whole PC → iPad bridge.
+"""EsotericOS (Astral Compass) — one dark window that runs the whole desk.
 
 Everything in one place: the live screen arrangement (drag the iPad to
 where it sits), start/stop the bridge VM and input portal, broadcast for
@@ -63,8 +63,11 @@ def _load_boot_settings():
 
 _BOOT_SETTINGS = _load_boot_settings()
 VM = str(_BOOT_SETTINGS.get("vm_name", "OpenSpan")).strip() or "OpenSpan"
-APP_LABEL = (str(_BOOT_SETTINGS.get("app_label", "OpenSpan")).strip()
-             or "OpenSpan")
+# The product is EsotericOS (Astral Compass identity). The VM name and every
+# guest-side path stay "OpenSpan" -- that is plumbing, not brand, and renaming
+# plumbing breaks bonds, units, and deploys for zero user-visible gain.
+APP_LABEL = (str(_BOOT_SETTINGS.get("app_label", "EsotericOS")).strip()
+             or "EsotericOS")
 DAEMON = (
     str(_BOOT_SETTINGS.get("daemon_host", "127.0.0.1")).strip()
     or "127.0.0.1",
@@ -126,7 +129,13 @@ LOG = os.path.join(ROOT, "portal.log")
 AUDIO_SEND = os.path.join(HERE, "win_audio_send.py")
 AUDIO_LOG = os.path.join(ROOT, "audio_send.log")
 BT_PREFS = os.path.join(ROOT, "bt_prefs.json")
-ICON = os.path.join(ROOT, "openspan.ico")
+# Astral Compass app icon (brand kit export). The legacy openspan.ico is the
+# fallback so a stray copy of the exe without brand/ still shows an icon.
+ICON = os.path.join(ROOT, "brand", "esotericos-app.ico")
+if not os.path.isfile(ICON):
+    ICON = os.path.join(ROOT, "openspan.ico")
+TRAY_ICON = os.path.join(ROOT, "brand", "esotericos-tray.ico")  # for the
+# tray's return: size-specific kit frames, never rescaled masters.
 
 PYW = sys.executable
 if PYW.lower().endswith("python.exe"):
@@ -143,29 +152,51 @@ else:
     AUDIO_CMD = [PYW, AUDIO_SEND]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# ---- dark theme palette ----
-BG = "#14161c"
-PANEL = "#1d212b"
-CARD = "#232936"
-FG = "#dfe4ee"
-MUTED = "#8b93a7"
-ACCENT = "#3fdc8a"
-ACCENT_DIM = "#1f6f43"
+# ---- Astral Compass typography ---------------------------------------------
+# Interface face per the brand kit: Inter, falling back to Segoe when Inter is
+# not installed. Tk substitutes unknown families SILENTLY with something that
+# is not "Inter SemiBold", so the weights are resolved once against the real
+# installed-family list the moment a Tk root exists -- before any widget.
+FONT_UI = "Segoe UI"
+FONT_UI_SEMI = "Segoe UI Semibold"
+
+
+def _resolve_brand_fonts(root):
+    global FONT_UI, FONT_UI_SEMI
+    try:
+        import tkinter.font as tkfont
+        families = set(tkfont.families(root))
+        if "Inter" in families:
+            FONT_UI = "Inter"
+            FONT_UI_SEMI = ("Inter SemiBold" if "Inter SemiBold" in families
+                            else "Inter")
+    except Exception:  # noqa: BLE001 -- fonts are cosmetic, never fatal
+        pass
+
+
+# ---- Astral Compass palette (brand kit tokens/brand-tokens.json) ----
+BG = "#080B10"
+PANEL = "#0D0D12"
+CARD = "#17161C"
+FG = "#E6E6F0"
+MUTED = "#A6A1B0"
+ACCENT = "#8A5CFF"
+ACCENT_DIM = "#5F3DC4"
 WARN = "#f5c451"   # amber: connected but idle (portal off)
-MON_FILL = "#26324c"
-MON_LINE = "#4a6ea8"
-IPAD_FILL = "#1f6f43"
-IPAD_LINE = "#3fdc8a"
-IPAD_OFF_FILL = "#2b313d"   # iPad box when NOT connected -> muted grey
-IPAD_OFF_LINE = "#4a5468"
+MON_FILL = "#1D1930"
+MON_LINE = "#6B5CA8"
+IPAD_FILL = "#5F3DC4"
+IPAD_LINE = "#8A5CFF"
+IPAD_OFF_FILL = "#17161C"   # iPad box when NOT connected -> muted grey
+IPAD_OFF_LINE = "#3E3A4A"
 IPAD_IDLE_FILL = "#413615"  # connected but portal OFF -> amber (idle/paused)
 IPAD_IDLE_LINE = "#f5c451"
-PORTAL = "#a78bfa"       # crossing edges -- violet, so they read as routes
-HOVER_FILL = "#1b1f2b"   # the detail card that appears on mouseover
-HOVER_LINE = "#3a4358"
-DANGER = "#e06c68"
-SCRIM = "#0a0b0e"   # near-black overlay behind an in-frame modal
-BORDER = "#39435a"  # card edge for the in-frame modal
+PORTAL = "#B28DFF"       # crossing edges -- violet, so they read as routes
+HOVER_FILL = "#0B0B11"   # the detail card that appears on mouseover
+HOVER_LINE = "#4A4556"
+DANGER = "#FF5CA8"
+SCRIM = "#05070C"   # near-black overlay behind an in-frame modal
+BORDER = "#3A3346"  # card edge for the in-frame modal
 
 # ---- pressed feedback -------------------------------------------------------
 # ttk's "active" state is HOVER, not pressed. Every button map in this file used
@@ -177,9 +208,9 @@ BORDER = "#39435a"  # card edge for the in-frame modal
 #
 # These are one step further along each button's own hover ramp, so a press
 # always reads as more of what hover already started.
-PRESS = "#3d4860"         # TButton        : CARD -> #2d3444 hover -> this
-PRESS_ACCENT = "#35ad70"  # Accent.TButton : #1f6f43 -> #2a8f5c hover -> this
-PRESS_DANGER = "#8b4043"  # Danger.TButton : #53292a -> #6e3335 hover -> this
+PRESS = "#2A203B"         # TButton        : CARD -> #2d3444 hover -> this
+PRESS_ACCENT = "#8A5CFF"  # Accent.TButton : arcane700 -> #764BE2 hover -> this
+PRESS_DANGER = "#8A3566"  # Danger.TButton : #53292a -> #6e3335 hover -> this
 PRESS_WARN = "#fbe09b"    # Warn.TButton   : #f5c451 -> #f8d276 hover -> this
 
 # ---- the navigation rail's four values --------------------------------------
@@ -199,7 +230,7 @@ PRESS_WARN = "#fbe09b"    # Warn.TButton   : #f5c451 -> #f8d276 hover -> this
 # not by being the brightest thing in the column.
 RAIL_REST = PANEL         # #1d212b -- an inactive item
 RAIL_LIVE = CARD          # #232936 -- the pane you are on
-RAIL_HOVER = "#2d3444"    # the same hover step TButton's "active" uses
+RAIL_HOVER = "#221F2A"    # the same hover step TButton's "active" uses
 RAIL_PRESS = PRESS        # #3d4860 -- one further along, as everywhere else
 
 # ---- suppressed register: a global CAUSE vs a local STATE -------------------
@@ -219,7 +250,7 @@ RAIL_PRESS = PRESS        # #3d4860 -- one further along, as everywhere else
 # Both stay CHROMATIC on purpose. Rendering a suppressed device in MUTED
 # (#8b93a7, a blue-grey) would read as "dead", and a bonded, connected device
 # with the portal stopped is not dead: it is waiting for one button.
-ACCENT_SUPPRESSED = "#6f9e83"  # green, drained -- connected, portal not running
+ACCENT_SUPPRESSED = "#8F7BC4"  # green, drained -- connected, portal not running
 WARN_SUPPRESSED = "#a8925f"    # amber, drained -- paired/idle, portal not running
 
 
@@ -314,10 +345,10 @@ TARGET_STATE_BY_COLOUR = {
 }
 TARGET_BOX_COLOURS = {
     # state             (fill, outline, label)
-    "live": (IPAD_FILL, IPAD_LINE, "#d6ffe9"),
+    "live": (IPAD_FILL, IPAD_LINE, "#D8C8FF"),
     "idle": (IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"),
     "live-suppressed": (_dim(ACCENT_SUPPRESSED, 0.50), ACCENT_SUPPRESSED,
-                        _dim("#d6ffe9", 0.72)),
+                        _dim("#D8C8FF", 0.72)),
     "idle-suppressed": (_dim(WARN_SUPPRESSED, 0.27), WARN_SUPPRESSED,
                         _dim("#ffe9b0", 0.72)),
     "off": (IPAD_OFF_FILL, IPAD_OFF_LINE, MUTED),
@@ -780,7 +811,7 @@ def rebase_button_busy(button, label):
 # and Tk's default disabled grey is very nearly invisible on this background.
 MENU_STYLE = {
     "bg": CARD, "fg": FG, "activebackground": ACCENT_DIM,
-    "activeforeground": "#eafff3", "disabledforeground": MUTED, "bd": 0,
+    "activeforeground": "#F1EBFF", "disabledforeground": MUTED, "bd": 0,
 }
 
 # ---- what a screen may be offered, per KIND of screen ----------------------
@@ -901,9 +932,9 @@ def _section(parent, title, pady=(PAD_MD, PAD_XS), padx=16):
     block.pack(fill="x", padx=padx, pady=pady)
     # bd=0/padx=0/pady=0: a tk.Label's DEFAULTS are a 1px border and 1px of
     # internal pad on each side, which is 4px of nothing per caption.
-    tk.Label(block, text=title, bg=BG, fg=MUTED, font=("Segoe UI", 9, "bold"),
+    tk.Label(block, text=title, bg=BG, fg=MUTED, font=(FONT_UI, 9, "bold"),
              anchor="w", bd=0, padx=0, pady=0).pack(fill="x")
-    tk.Frame(block, bg="#2d3444", height=1).pack(fill="x", pady=(1, PAD_XS))
+    tk.Frame(block, bg="#221F2A", height=1).pack(fill="x", pady=(1, PAD_XS))
     body = tk.Frame(block, bg=BG)
     body.pack(fill="x")
     return body
@@ -1376,14 +1407,14 @@ def _dialog(parent, title, message, buttons):
     inner = tk.Frame(card, bg=BG)
     inner.pack(padx=26, pady=22)
     tk.Label(inner, text=title, bg=BG, fg=FG, justify="left",
-             font=("Segoe UI Semibold", 13)).pack(anchor="w")
+             font=(FONT_UI_SEMI, 13)).pack(anchor="w")
     if message:
         try:  # wrap to the window so a small/compact window still fits
             wl = max(240, min(400, top.winfo_width() - 80))
         except tk.TclError:
             wl = 360
         tk.Label(inner, text=message, bg=BG, fg=MUTED, justify="left",
-                 wraplength=wl, font=("Segoe UI", 10)).pack(anchor="w",
+                 wraplength=wl, font=(FONT_UI, 10)).pack(anchor="w",
                                                             pady=(10, 0))
     bar = tk.Frame(inner, bg=BG)
     bar.pack(anchor="e", pady=(20, 0))
@@ -1725,9 +1756,9 @@ def dark_prompt(parent, title, message, default=""):
     win.resizable(False, False)
 
     tk.Label(win, text=title, bg=CARD, fg=FG,
-             font=("Segoe UI Semibold", 11)).pack(
+             font=(FONT_UI_SEMI, 11)).pack(
         anchor="w", padx=18, pady=(16, 2))
-    tk.Label(win, text=message, bg=CARD, fg=MUTED, font=("Segoe UI", 9),
+    tk.Label(win, text=message, bg=CARD, fg=MUTED, font=(FONT_UI, 9),
              wraplength=380, justify="left").pack(anchor="w", padx=18)
     var = tk.StringVar(value=str(default or ""))
     entry = ttk.Entry(win, textvariable=var, width=40)
@@ -1766,24 +1797,25 @@ def _theme_startup_buttons():
         pass
     st.configure("TButton", background=CARD, foreground=FG,
                  bordercolor=CARD, focuscolor=CARD, relief="flat",
-                 padding=8, font=("Segoe UI", 10))
+                 padding=8, font=(FONT_UI, 10))
     # "pressed" BEFORE "active": ttk takes the first matching state, and a held
     # button is both pressed and hovered at once. Active-first would mean the
     # press never showed.
-    st.map("TButton", background=[("pressed", PRESS), ("active", "#2d3444")])
+    st.map("TButton", background=[("pressed", PRESS), ("active", "#221F2A")])
     st.configure("Accent.TButton", background=ACCENT_DIM,
-                 foreground="#eafff3", font=("Segoe UI Semibold", 10))
+                 foreground="#F1EBFF", font=(FONT_UI_SEMI, 10))
     st.map("Accent.TButton",
-           background=[("pressed", PRESS_ACCENT), ("active", "#2a8f5c")])
-    st.configure("Danger.TButton", background="#53292a",
-                 foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
+           background=[("pressed", PRESS_ACCENT), ("active", "#764BE2")])
+    st.configure("Danger.TButton", background="#4A1F38",
+                 foreground="#FFD9EC", font=(FONT_UI_SEMI, 10))
     st.map("Danger.TButton",
-           background=[("pressed", PRESS_DANGER), ("active", "#6e3335")])
+           background=[("pressed", PRESS_DANGER), ("active", "#66294C")])
 
 
 def _elevation_gate():
     """Ask what to do before keys, Bluetooth, audio, or the VM are touched."""
     root = tk.Tk()
+    _resolve_brand_fonts(root)
     try:
         root.title(f"{APP_LABEL} — startup choice")
         root.geometry("700x320")
@@ -1802,7 +1834,7 @@ def _elevation_gate():
         # be fail-closed and must never count as permission to boot the bridge.
         return _dialog(
             root,
-            "OpenSpan is not running as administrator",
+            f"{APP_LABEL} is not running as administrator",
             "Administrator mode keeps keyboard and mouse bridging alive while "
             "an elevated window is focused.\n\n"
             "Choose Restart as administrator to continue normally. Close "
@@ -1976,7 +2008,7 @@ def _show_elevation_launch_failed():
         import ctypes
         ctypes.windll.user32.MessageBoxW(
             None,
-            "OpenSpan was not started. The administrator request was cancelled "
+            f"{APP_LABEL} was not started. The administrator request was cancelled "
             "or could not be opened.",
             APP_LABEL,
             0x10)
@@ -2467,7 +2499,7 @@ def why_not_ready(config=None):
         names = ", ".join(usb_label(d, config) for d in state["captured"])
         return False, (
             f"VirtualBox has captured {names} but never delivered it to the "
-            f"configured VM \u201c{VM}\u201d. OpenSpan will not retry; replug the "
+            f"configured VM \u201c{VM}\u201d. the app will not retry; replug the "
             f"adapter (restart Windows for a built-in radio).")
     if state["attachable"]:
         names = ", ".join(usb_label(d, config) for d in state["attachable"])
@@ -2649,7 +2681,7 @@ WEDGED_ADVICE = (
     "VirtualBox still holds an unfinished request for it — what a dongle "
     "unplugged while the VM had it leaves behind. No command can clear it: even "
     "usbdetach refuses, because as far as the VM is concerned the device was "
-    "never attached. OpenSpan will not retry the request. "
+    "never attached. The app will not retry the request. "
 )
 ATTACH_SETTLE = 1.5     # VirtualBox moves a device between owners asynchronously
 
@@ -2668,7 +2700,7 @@ REPLUG_ADVICE = (
 def _captured_advice():
     return (
         f"VirtualBox has captured it from Windows but the configured VM “{VM}” "
-        "does not hold it. OpenSpan sent no attach request because another one "
+        "does not hold it. the app sent no attach request because another one "
         "can only deepen this state. Unplug that adapter and plug it back in "
         "— a fresh arrival completes the capture. For a built-in radio, "
         "restart Windows. Do not restart the VM."
@@ -2678,7 +2710,7 @@ def _captured_advice():
 def _not_landed_advice():
     return (
         f"VirtualBox accepted one attach request, but the configured VM “{VM}” "
-        "still does not hold the device. OpenSpan will not retry. Unplug that "
+        "still does not hold the device. The app will not retry. Unplug that "
         "adapter and plug it back in — a fresh arrival completes the capture. "
         "For a built-in radio, restart Windows. Do not restart the VM."
     )
@@ -2900,7 +2932,7 @@ def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None,
         failed.append((
             usb_label(device, config),
             f"The host reports USB state {device.get('state') or 'unknown'}; "
-            "OpenSpan sent no attach request because that state is not known "
+            "the app sent no attach request because that state is not known "
             "to be safe."))
 
     # Busy means Windows owns it; Available means nobody does. Those are the
@@ -2938,7 +2970,7 @@ def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None,
         if result.returncode:
             detail = ((result.stderr or result.stdout or "").strip()[-200:]
                       or "VBoxManage would not attach it")
-            failed.append((label, detail + " OpenSpan did not retry."))
+            failed.append((label, detail + " Not retried."))
             continue
 
         time.sleep(settle)
@@ -4105,8 +4137,8 @@ class ArrangeCanvas(tk.Canvas):
                                   outline=MON_LINE, width=2)
             tag = "PRIMARY\n" if m["primary"] else ""
             self.create_text((x0 + x1) / 2, (y0 + y1) / 2,
-                             text=f"{tag}{m['w']}x{m['h']}", fill="#c9d4ec",
-                             justify="center", font=("Segoe UI", 9, "bold"))
+                             text=f"{tag}{m['w']}x{m['h']}", fill="#F5F5F8",
+                             justify="center", font=(FONT_UI, 9, "bold"))
         ix0, iy0 = self.w2c(self.ipad["x"], self.ipad["y"])
         ix1, iy1 = self.w2c(self.ipad["x"] + self.ipad["w"],
                             self.ipad["y"] + self.ipad["h"])
@@ -4114,7 +4146,7 @@ class ArrangeCanvas(tk.Canvas):
         # AMBER when paired but not driving, GREY when not paired. Kept in sync
         # by _apply_poll -> set_ipad_state.
         if self.ipad_state == "live":
-            _fill, _line, _txt = IPAD_FILL, IPAD_LINE, "#d6ffe9"
+            _fill, _line, _txt = IPAD_FILL, IPAD_LINE, "#D8C8FF"
         elif self.ipad_state == "idle":
             _fill, _line, _txt = IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"
         else:
@@ -4124,7 +4156,7 @@ class ArrangeCanvas(tk.Canvas):
         self.create_text((ix0 + ix1) / 2, (iy0 + iy1) / 2,
                          text=f"iPad\n{self.ipad['w']}x{self.ipad['h']}",
                          fill=_txt, justify="center",
-                         font=("Segoe UI", 9, "bold"))
+                         font=(FONT_UI, 9, "bold"))
         for edge, m, lo, hi in self._portals():
             if edge in ("ipad-left", "ipad-right"):
                 wx = self.ipad["x"] if edge == "ipad-left" \
@@ -4594,13 +4626,13 @@ class MultiArrangeCanvas(tk.Canvas):
         any state.
         """
         if key[0] == "local":
-            return MON_FILL, MON_LINE, "#c9d4ec"
+            return MON_FILL, MON_LINE, "#F5F5F8"
         state = self.target_states.get(key[1], "off")
         box = TARGET_BOX_COLOURS.get(state)
         if box is not None and state != "off":
             return box
         if key[1] == "mac":
-            return "#2b2940", "#756bb1", "#c8c1ef"
+            return "#262038", "#8A5CFF", "#D8C8FF"
         return TARGET_BOX_COLOURS["off"]
 
     def redraw(self):
@@ -4623,7 +4655,7 @@ class MultiArrangeCanvas(tk.Canvas):
             self.create_text(
                 (x0 + x1) / 2, (y0 + y1) / 2, text=self._short_label(key, item),
                 fill=text_color, justify="center", width=max(40, x1 - x0 - 10),
-                font=("Segoe UI", 9, "bold"))
+                font=(FONT_UI, 9, "bold"))
             if chosen:
                 self.create_rectangle(
                     x1 - 10, y1 - 10, x1 + 2, y1 + 2,
@@ -4719,7 +4751,7 @@ class MultiArrangeCanvas(tk.Canvas):
         text_id = self.create_text(
             0, 0, anchor="nw", justify="left",
             text=title + "\n" + "\n".join(lines),
-            fill=FG, font=("Segoe UI", 8), tags="hovercard")
+            fill=FG, font=(FONT_UI, 8), tags="hovercard")
         bx0, by0, bx1, by1 = self.bbox(text_id)
         card_w = (bx1 - bx0) + 2 * pad
         card_h = (by1 - by0) + 2 * pad
@@ -4752,7 +4784,7 @@ class MultiArrangeCanvas(tk.Canvas):
         self.create_text(
             8, max(12, int(self.winfo_height()) - 6), anchor="sw",
             text="drag to arrange  ·  right-click a screen to edit it",
-            fill=MUTED, font=("Segoe UI", 8), tags="hint")
+            fill=MUTED, font=(FONT_UI, 8), tags="hint")
 
     def _draw_portals(self):
         for portal in compute_portals(self.config):
@@ -4966,13 +4998,13 @@ class MacDisplayEditor:
             self.top,
             text=f"{self._device_label(canvas, device_id)} "
                  f"display configuration",
-            bg=BG, fg=FG, font=("Segoe UI Semibold", 15)).pack(
+            bg=BG, fg=FG, font=(FONT_UI_SEMI, 15)).pack(
                 anchor="w", padx=18, pady=(16, 2))
         tk.Label(
             self.top,
             text="Resolution, rotation, and refresh rate are independent from "
                  "the physical width used on the drag canvas.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
+            bg=BG, fg=MUTED, font=(FONT_UI, 9)).pack(
                 anchor="w", padx=18, pady=(0, 12))
         # The button bar is packed BEFORE the table and anchored to the
         # bottom. pack hands out space in the order it is asked for, so a device
@@ -4992,7 +5024,7 @@ class MacDisplayEditor:
         for text, width in headers:
             tk.Label(head, text=text, width=width, anchor="w",
                      bg=BG, fg=MUTED,
-                     font=("Segoe UI", 8, "bold")).pack(
+                     font=(FONT_UI, 8, "bold")).pack(
                          side="left", padx=(0, 5))
         for display in canvas.mac_displays(device_id):
             self._add_row(display)
@@ -5048,7 +5080,7 @@ class MacDisplayEditor:
             tk.Entry(
                 frame, textvariable=variable, width=width, bg=CARD, fg=FG,
                 insertbackground=FG, relief="flat",
-                font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+                font=(FONT_UI, 9)).pack(side="left", padx=(0, 5), ipady=5)
         ttk.Combobox(
             frame, textvariable=values["rotation"], width=7,
             values=("0°", "90°", "180°", "270°"),
@@ -5056,11 +5088,11 @@ class MacDisplayEditor:
         tk.Entry(
             frame, textvariable=values["refresh_hz"], width=10,
             bg=CARD, fg=FG, insertbackground=FG, relief="flat",
-            font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+            font=(FONT_UI, 9)).pack(side="left", padx=(0, 5), ipady=5)
         tk.Entry(
             frame, textvariable=values["physical_width"], width=13,
             bg=CARD, fg=FG, insertbackground=FG, relief="flat",
-            font=("Segoe UI", 9)).pack(side="left", padx=(0, 5), ipady=5)
+            font=(FONT_UI, 9)).pack(side="left", padx=(0, 5), ipady=5)
         tk.Label(frame, text="in", bg=BG, fg=MUTED).pack(side="left")
         ttk.Button(
             frame, text="Remove",
@@ -5138,7 +5170,7 @@ class BtPanel(tk.Frame):
                        "RIGHT-CLICK a device: Connect, Rename, Blacklist, "
                        "Forget. Renames + blacklist are saved and survive "
                        "re-pairing.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9), justify="left")
+            bg=BG, fg=MUTED, font=(FONT_UI, 9), justify="left")
         _scan_help.pack(anchor="w", fill="x", padx=12, pady=(10, 0))
         bind_wraplength(_scan_help)
 
@@ -5147,7 +5179,7 @@ class BtPanel(tk.Frame):
         mode_row = tk.Frame(options, bg=BG)
         mode_row.pack(fill="x")
         tk.Label(mode_row, text="Setup", bg=BG, fg=FG,
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=(FONT_UI, 9)).pack(side="left")
         self.mode_combo = ttk.Combobox(
             mode_row, textvariable=self.radio_mode, state="readonly",
             values=("Single radio (recommended)", "Multiple radios"),
@@ -5158,7 +5190,7 @@ class BtPanel(tk.Frame):
         assign_row = tk.Frame(options, bg=BG)
         assign_row.pack(fill="x", pady=(6, 0))
         tk.Label(assign_row, text="iPad keyboard", bg=BG, fg=FG,
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=(FONT_UI, 9)).pack(side="left")
         self.hid_combo = ttk.Combobox(
             assign_row, textvariable=self.hid_radio, state="disabled",
             width=25)
@@ -5168,7 +5200,7 @@ class BtPanel(tk.Frame):
         mac_row = tk.Frame(options, bg=BG)
         mac_row.pack(fill="x", pady=(4, 0))
         tk.Label(mac_row, text="Managed Mac", bg=BG, fg=FG,
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=(FONT_UI, 9)).pack(side="left")
         self.mac_combo = ttk.Combobox(
             mac_row, textvariable=self.mac_radio, state="disabled",
             width=25)
@@ -5178,7 +5210,7 @@ class BtPanel(tk.Frame):
         scan_row = tk.Frame(options, bg=BG)
         scan_row.pack(fill="x", pady=(4, 0))
         tk.Label(scan_row, text="Scan from", bg=BG, fg=FG,
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=(FONT_UI, 9)).pack(side="left")
         self.scan_combo = ttk.Combobox(
             scan_row, textvariable=self.scan_radio, state="disabled",
             width=25)
@@ -5187,7 +5219,7 @@ class BtPanel(tk.Frame):
         self.radio_note = tk.StringVar(
             value="Single-radio compatibility is active.")
         _note_lbl = tk.Label(options, textvariable=self.radio_note, bg=BG,
-                             fg=MUTED, font=("Segoe UI", 8), anchor="w",
+                             fg=MUTED, font=(FONT_UI, 8), anchor="w",
                              justify="left")
         _note_lbl.pack(fill="x", pady=(5, 0))
         bind_wraplength(_note_lbl)
@@ -5201,7 +5233,7 @@ class BtPanel(tk.Frame):
         self.radio_usb = tk.StringVar(value="Checking which radios the VM "
                                             "holds…")
         _usb_lbl = tk.Label(options, textvariable=self.radio_usb, bg=BG,
-                            fg=MUTED, font=("Segoe UI", 8), anchor="w",
+                            fg=MUTED, font=(FONT_UI, 8), anchor="w",
                             justify="left")
         _usb_lbl.pack(fill="x", pady=(6, 0))
         bind_wraplength(_usb_lbl)
@@ -5271,7 +5303,7 @@ class BtPanel(tk.Frame):
 
         self.menu = tk.Menu(self, tearoff=0, bg=CARD, fg=FG,
                             activebackground=ACCENT_DIM,
-                            activeforeground="#eafff3", bd=0)
+                            activeforeground="#F1EBFF", bd=0)
 
         bar = tk.Frame(self, bg=BG)
         bar.pack(fill="x", padx=12, pady=(0, 4))
@@ -5287,7 +5319,7 @@ class BtPanel(tk.Frame):
                                             command=self._restart_all)
         self.btn_restart_audio.pack(side="right")
 
-        self.out = tk.Text(self, bg="#0e1015", fg="#b7c0d4", height=5, bd=0,
+        self.out = tk.Text(self, bg="#06090E", fg="#B8B3C2", height=5, bd=0,
                            font=("Consolas", 9), wrap="word",
                            insertbackground=FG)
         self.out.pack(fill="both", expand=False, padx=12, pady=(4, 10))
@@ -5398,8 +5430,8 @@ class BtPanel(tk.Frame):
                     name, reason = outcome["failed"][0]
                     self._radio_usb_apply(f"{name}: {reason}",
                                           outcome["repairable"])
-                    self._log("radios: OpenSpan does not retry accepted or "
-                              "Captured requests. Replug a Captured-but-not-"
+                    self._log("radios: accepted and Captured requests are "
+                              "never retried. Replug a Captured-but-not-"
                               "delivered adapter (restart Windows for a "
                               "built-in radio); do not restart the VM.")
                 else:
@@ -5479,10 +5511,10 @@ class BtPanel(tk.Frame):
                 value_var = tk.DoubleVar(value=level if level is not None else 0)
                 value_text = tk.StringVar()
                 tk.Label(row, textvariable=name_var, bg=BG, fg=FG,
-                         font=("Segoe UI", 9), anchor="w", width=22).pack(
+                         font=(FONT_UI, 9), anchor="w", width=22).pack(
                              side="left")
                 tk.Label(row, text="device volume", bg=BG, fg=MUTED,
-                         font=("Segoe UI", 8)).pack(side="left", padx=(2, 7))
+                         font=(FONT_UI, 8)).pack(side="left", padx=(2, 7))
                 value_label = tk.Label(
                     row, textvariable=value_text, bg=BG, fg=ACCENT,
                     font=("Consolas", 9), width=4, anchor="e")
@@ -5875,7 +5907,7 @@ class BtPanel(tk.Frame):
                 assign = tk.Menu(
                     m, tearoff=0, bg=CARD, fg=FG,
                     activebackground=ACCENT_DIM,
-                    activeforeground="#eafff3", bd=0)
+                    activeforeground="#F1EBFF", bd=0)
                 current = self.prefs["radio_assignments"].get(mac, "")
                 assign.add_command(
                     label=("✓ Automatic" if not current else "Automatic"),
@@ -6287,7 +6319,7 @@ class BtPanel(tk.Frame):
             vals = self.tree.item(mac, "values")
             cur = vals[0] if vals else ""
         ed = tk.Entry(self.tree, bg=CARD, fg=FG, insertbackground=FG,
-                      relief="flat", font=("Segoe UI", 10))
+                      relief="flat", font=(FONT_UI, 10))
         ed.insert(0, cur)
         ed.select_range(0, "end")
         ed.place(x=x, y=y, width=w, height=h)
@@ -6432,25 +6464,36 @@ class App:
         # ipady=7 stays a literal on purpose: it is the frameless window's drag
         # band, deliberately oversized, and not part of the vertical rhythm.
         head.pack(fill="x", padx=16, pady=(0, PAD_SM), ipady=7)
-        _t1 = tk.Label(head, text=APP_LABEL, bg=BG, fg=FG,
-                       font=("Segoe UI Semibold", 18))
-        _t1.pack(side="left")
+        # The wordmark lockup: "Esoteric" in Lunar, "OS" in Arcane (the kit's
+        # gradient rendered as its light stop -- Tk has no text gradients).
+        # A custom app_label in settings still renders as one plain label.
+        if APP_LABEL == "EsotericOS":
+            _t1 = tk.Label(head, text="Esoteric", bg=BG, fg=FG,
+                           font=(FONT_UI_SEMI, 18))
+            _t1.pack(side="left")
+            _t1b = tk.Label(head, text="OS", bg=BG, fg=PORTAL,
+                            font=(FONT_UI_SEMI, 18))
+            _t1b.pack(side="left")
+        else:
+            _t1 = tk.Label(head, text=APP_LABEL, bg=BG, fg=FG,
+                           font=(FONT_UI_SEMI, 18))
+            _t1.pack(side="left")
         _t2 = tk.Label(head, text="PC → iPad + Mac bridge", bg=BG, fg=MUTED,
-                       font=("Segoe UI", 10))
+                       font=(FONT_UI, 10))
         _t2.pack(side="left", padx=(10, 0), pady=(8, 0))
         # window controls: the caption is stripped (frameless), so THIS row is
         # the title bar. Tk buttons -> commands on the Tk thread (R1-safe); the
         # drag is the SetWindowPos header binding below (callback-free).
         _cl = tk.Button(head, text="✕", command=self._confirm_close, bg=BG,
                         fg=MUTED, bd=0, relief="flat", width=3, cursor="hand2",
-                        font=("Segoe UI", 12), activebackground=DANGER,
+                        font=(FONT_UI, 12), activebackground=DANGER,
                         activeforeground="#ffffff")
         _cl.pack(side="right", padx=(6, 0))
         _cl.bind("<Enter>", lambda e: _cl.config(bg=DANGER, fg="#ffffff"))
         _cl.bind("<Leave>", lambda e: _cl.config(bg=BG, fg=MUTED))
         _mn = tk.Button(head, text="—", command=self._minimize, bg=BG, fg=MUTED,
                         bd=0, relief="flat", width=3, cursor="hand2",
-                        font=("Segoe UI", 11), activebackground=PANEL,
+                        font=(FONT_UI, 11), activebackground=PANEL,
                         activeforeground=FG)
         _mn.pack(side="right")
         _mn.bind("<Enter>", lambda e: _mn.config(bg=PANEL, fg=FG))
@@ -6507,7 +6550,7 @@ class App:
         # where it goes, and the ~26px it costs is paid once rather than by the
         # pane that happens to be tallest.
         self.ready_lbl = tk.Label(full, text="◌  Starting…", bg=BG, fg=MUTED,
-                                  font=("Segoe UI Semibold", 11), anchor="w")
+                                  font=(FONT_UI_SEMI, 11), anchor="w")
         self.ready_lbl.pack(fill="x", padx=16, pady=(0, PAD_XS))
         # transient / call-to-action line (Broadcasting…, errors, hints)
         self.status = tk.StringVar(value="Checking…")
@@ -6545,7 +6588,7 @@ class App:
             # like the pane you were already on.
             _btn = tk.Button(_row, text=_label, bg=RAIL_REST, fg=MUTED, bd=0,
                              relief="flat", anchor="w", width=13, padx=10,
-                             pady=6, cursor="hand2", font=("Segoe UI", 10),
+                             pady=6, cursor="hand2", font=(FONT_UI, 10),
                              highlightthickness=0, activebackground=RAIL_HOVER,
                              activeforeground=FG,
                              command=lambda k=_key: self.select_pane(k))
@@ -6588,28 +6631,28 @@ class App:
         chead = tk.Frame(pane_console, bg=PANEL)
         chead.pack(fill="x", padx=10, pady=(PAD_MD, 0))
         tk.Label(chead, text="Console — every command the app runs", bg=PANEL,
-                 fg=MUTED, font=("Segoe UI", 9, "bold")).pack(
+                 fg=MUTED, font=(FONT_UI, 9, "bold")).pack(
             side="left", pady=(0, 4))
         ttk.Button(chead, text="Clear", width=6,
                    command=self._console_clear).pack(side="right")
         cwrap = tk.Frame(pane_console, bg=PANEL)
         cwrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
-        self.console = tk.Text(cwrap, bg="#0b0d12", fg="#b7c0d4", bd=0,
+        self.console = tk.Text(cwrap, bg="#05080D", fg="#B8B3C2", bd=0,
                                font=("Consolas", 9), wrap="word",
                                state="disabled", insertbackground=FG)
         csb = ttk.Scrollbar(cwrap, command=self.console.yview)
         csb.pack(side="right", fill="y")
         self.console.config(yscrollcommand=csb.set)
         self.console.pack(side="left", fill="both", expand=True)
-        self.console.tag_config("ts", foreground="#5b6172")
-        self.console.tag_config("cmd", foreground="#6cc6ff")
+        self.console.tag_config("ts", foreground="#6E687A")
+        self.console.tag_config("cmd", foreground="#B28DFF")
         self.console.tag_config("ok", foreground=ACCENT)
         self.console.tag_config("err", foreground=DANGER)
         self.console.tag_config("bt", foreground=PORTAL)
         self.console.tag_config("event", foreground=FG)
         self.console.tag_config("info", foreground=MUTED)
         set_log_sink(self._log_sink)
-        self.log("event", "OpenSpan started.")
+        self.log("event", f"{APP_LABEL} started.")
 
         # ---- Bluetooth pane ------------------------------------------------
         # Built BEFORE the canvas, exactly as it was: BtPanel.__init__ ends in
@@ -6648,9 +6691,9 @@ class App:
         # from under a posted menu; BtPanel keeps `self.assign_menu` for exactly
         # this reason.
         self._surface_menu = tk.Menu(self.root, tearoff=0,
-                                     font=("Segoe UI", 10), **MENU_STYLE)
+                                     font=(FONT_UI, 10), **MENU_STYLE)
         self._desk_menu = tk.Menu(self.root, tearoff=0,
-                                  font=("Segoe UI", 10), **MENU_STYLE)
+                                  font=(FONT_UI, 10), **MENU_STYLE)
         # The three cascades are built ONCE here too, and repopulated in place.
         # tkinter's Menu.delete deletes the entries' Tcl command objects but
         # NOT a cascaded submenu widget, and the submenu stays in its master's
@@ -6667,7 +6710,7 @@ class App:
         # A menu whose master is destroyed underneath a posted menu is a crash,
         # not a cosmetic glitch. Built once and kept, like the two above.
         self._card_menu = tk.Menu(self.root, tearoff=0,
-                                  font=("Segoe UI", 10), **MENU_STYLE)
+                                  font=(FONT_UI, 10), **MENU_STYLE)
 
         # ---- arrangements -------------------------------------------------
         # A screen's resolution really does change -- the managed Mac's
@@ -6815,7 +6858,7 @@ class App:
         tk.Label(addrow,
                  text="Each device gets its own radio, its own advertisement "
                       "and its own bonds. No software is installed on it.",
-                 bg=BG, fg=MUTED, font=("Segoe UI", 8)).pack(
+                 bg=BG, fg=MUTED, font=(FONT_UI, 8)).pack(
             side="left", padx=(10, 0))
         self._rebuild_device_rows()
 
@@ -6849,7 +6892,7 @@ class App:
 
         # ---- Radio ownership mode (switched via a clean reboot) ----
         mode = _section(pane_system, "Bluetooth radio")
-        self.mode_lbl = tk.Label(mode, bg=BG, fg=FG, font=("Segoe UI", 10),
+        self.mode_lbl = tk.Label(mode, bg=BG, fg=FG, font=(FONT_UI, 10),
                                  anchor="w")
         self.mode_lbl.pack(fill="x")
         # ONE line. The two-line version spent 32px to say in 152 characters
@@ -6857,7 +6900,7 @@ class App:
         # was the parenthesis doing the spending. The label right above already
         # names whichever mode is active; this only has to name the other one.
         _mode_note = tk.Label(
-            mode, bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w",
+            mode, bg=BG, fg=MUTED, font=(FONT_UI, 8), anchor="w",
             justify="left",
             text="Station = the app owns the radio. Windows = Bluetooth + "
                  "audio. Switching reboots.")
@@ -6894,7 +6937,7 @@ class App:
         self.select_pane(load_last_pane(), rederive=False, remember=False)
 
         tk.Label(full, text="open source · MIT · nothing phones home",
-                 bg=BG, fg="#5b6172", font=("Segoe UI", 8)).pack(
+                 bg=BG, fg="#6E687A", font=(FONT_UI, 8)).pack(
             side="bottom", pady=PAD_MD)
 
         # clipboard relay for the iPad shortcuts (CLIPBOARD_DESIGN.md);
@@ -7163,7 +7206,7 @@ class App:
         p.pack(fill="x", padx=12, pady=(0, 6))
 
         self.c_buds = tk.Label(p, text="🎧  —", bg=BG, fg=MUTED,
-                               font=("Segoe UI", 10), anchor="w")
+                               font=(FONT_UI, 10), anchor="w")
         self.c_buds.pack(fill="x", pady=(0, 0))
 
         self._vol_drag = False
@@ -7171,7 +7214,7 @@ class App:
         vr = tk.Frame(p, bg=BG)
         vr.pack(fill="x", pady=(8, 0))
         tk.Label(vr, text="Volume", bg=BG, fg=MUTED, width=9, anchor="w",
-                 font=("Segoe UI", 9, "bold")).pack(side="left")
+                 font=(FONT_UI, 9, "bold")).pack(side="left")
         self.c_vol_var = tk.DoubleVar(value=self._load_audio_gain() * 100.0)
         self.c_vol = ttk.Scale(vr, from_=0, to=100, variable=self.c_vol_var,
                                command=self._vol_changed)
@@ -7185,14 +7228,14 @@ class App:
         br = tk.Frame(p, bg=BG)
         br.pack(fill="x", pady=(6, 0))
         tk.Label(br, text="L ↔ R", bg=BG, fg=MUTED, width=9, anchor="w",
-                 font=("Segoe UI", 9, "bold")).pack(side="left")
+                 font=(FONT_UI, 9, "bold")).pack(side="left")
         self.c_bal_var = tk.DoubleVar(value=self._load_balance() * 100)
         self.c_bal = ttk.Scale(br, from_=-100, to=100, variable=self.c_bal_var,
                                command=self._bal_changed)
         self.c_bal.pack(side="left", fill="x", expand=True)
         self.c_bal.bind("<Double-1>", self._bal_center)
         tk.Label(p, text="double-click balance to center", bg=BG,
-                 fg="#5b6172", font=("Segoe UI", 8), anchor="w").pack(
+                 fg="#6E687A", font=(FONT_UI, 8), anchor="w").pack(
             fill="x", pady=(2, 0))
 
     def _toggle_console(self):
@@ -7322,20 +7365,20 @@ class App:
         # with the horizontal pad slightly widened so the labels do not tighten.
         st.configure("TButton", background=CARD, foreground=FG,
                      bordercolor=CARD, focuscolor=CARD, relief="flat",
-                     padding=(10, 3), font=("Segoe UI", 10))
+                     padding=(10, 3), font=(FONT_UI, 10))
         # NOTE: the TButton map here is superseded a few lines down, where the
         # disabled colours are added. Both carry "pressed" so neither can be the
         # one that silently drops it.
         st.map("TButton",
-               background=[("pressed", PRESS), ("active", "#2d3444")])
+               background=[("pressed", PRESS), ("active", "#221F2A")])
         st.configure("Accent.TButton", background=ACCENT_DIM,
-                     foreground="#eafff3", font=("Segoe UI Semibold", 10))
+                     foreground="#F1EBFF", font=(FONT_UI_SEMI, 10))
         st.map("Accent.TButton",
-               background=[("pressed", PRESS_ACCENT), ("active", "#2a8f5c")])
-        st.configure("Danger.TButton", background="#53292a",
-                     foreground="#ffd9d6", font=("Segoe UI Semibold", 10))
+               background=[("pressed", PRESS_ACCENT), ("active", "#764BE2")])
+        st.configure("Danger.TButton", background="#4A1F38",
+                     foreground="#FFD9EC", font=(FONT_UI_SEMI, 10))
         st.map("Danger.TButton",
-               background=[("pressed", PRESS_DANGER), ("active", "#6e3335")])
+               background=[("pressed", PRESS_DANGER), ("active", "#66294C")])
         # THE ALARM, and the only place full-strength amber is allowed while the
         # portal is down. A stopped portal is the CAUSE of every idle device in
         # this window, so the alarm sits on the control that fixes it and the
@@ -7345,9 +7388,9 @@ class App:
         # disabled button must never look pressed), then pressed, then hover --
         # ttk takes the FIRST match and a held button is pressed AND active.
         st.configure("Warn.TButton", background=WARN, foreground="#2a2205",
-                     font=("Segoe UI Semibold", 10))
+                     font=(FONT_UI_SEMI, 10))
         st.map("Warn.TButton",
-               foreground=[("disabled", "#5b6172")],
+               foreground=[("disabled", "#6E687A")],
                background=[("disabled", PANEL), ("pressed", PRESS_WARN),
                            ("active", "#f8d276")])
         # sliders (compact mode's volume/balance)
@@ -7359,14 +7402,14 @@ class App:
         # load-bearing -- disabled first (a disabled button must never look
         # pressed), then pressed, then hover.
         st.map("TButton",
-               foreground=[("disabled", "#5b6172")],
+               foreground=[("disabled", "#6E687A")],
                background=[("disabled", PANEL), ("pressed", PRESS),
-                           ("active", "#2d3444")])
+                           ("active", "#221F2A")])
         # LabelFrame (the panel that was glaringly light)
-        st.configure("TLabelframe", background=BG, bordercolor="#2d3444",
+        st.configure("TLabelframe", background=BG, bordercolor="#221F2A",
                      relief="solid", borderwidth=1)
         st.configure("TLabelframe.Label", background=BG, foreground=MUTED,
-                     font=("Segoe UI", 9, "bold"))
+                     font=(FONT_UI, 9, "bold"))
         st.configure("TFrame", background=BG)
         st.configure("TCheckbutton", background=BG, foreground=FG)
         st.map("TCheckbutton", background=[("active", BG)])
@@ -7378,23 +7421,23 @@ class App:
                foreground=[("selected", FG)])
         # Combobox + its drop-down list
         st.configure("TCombobox", fieldbackground=CARD, background=CARD,
-                     foreground=FG, arrowcolor=FG, bordercolor="#2d3444",
+                     foreground=FG, arrowcolor=FG, bordercolor="#221F2A",
                      selectbackground=CARD, selectforeground=FG)
         st.map("TCombobox", fieldbackground=[("readonly", CARD)],
                foreground=[("readonly", FG)])
         self.root.option_add("*TCombobox*Listbox.background", CARD)
         self.root.option_add("*TCombobox*Listbox.foreground", FG)
         self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT_DIM)
-        self.root.option_add("*TCombobox*Listbox.selectForeground", "#eafff3")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#F1EBFF")
         # Treeview (the Bluetooth device list)
         st.configure("Treeview", background=CARD, foreground=FG,
                      fieldbackground=CARD, bordercolor=CARD, borderwidth=0,
-                     rowheight=26, font=("Segoe UI", 10))
+                     rowheight=26, font=(FONT_UI, 10))
         st.configure("Treeview.Heading", background=PANEL, foreground=MUTED,
-                     relief="flat", font=("Segoe UI", 9, "bold"))
-        st.map("Treeview.Heading", background=[("active", "#2d3444")])
+                     relief="flat", font=(FONT_UI, 9, "bold"))
+        st.map("Treeview.Heading", background=[("active", "#221F2A")])
         st.map("Treeview", background=[("selected", ACCENT_DIM)],
-               foreground=[("selected", "#eafff3")])
+               foreground=[("selected", "#F1EBFF")])
 
     def _minimize(self):
         # normal window -> native minimize to the taskbar; always restorable.
@@ -8195,8 +8238,8 @@ class App:
             c = getattr(self, "_cache", {})
             run = bool(c.get("running"))
             m = tk.Menu(self.root, tearoff=0, bg=CARD, fg=FG, bd=0,
-                        activebackground=ACCENT_DIM, activeforeground="#eafff3",
-                        font=("Segoe UI", 10))
+                        activebackground=ACCENT_DIM, activeforeground="#F1EBFF",
+                        font=(FONT_UI, 10))
             m.add_command(label=f"Open {APP_LABEL}", command=self._from_tray)
             m.add_separator()
             # One Connect/Disconnect per DEVICE, driven by the same per-device
@@ -9101,7 +9144,7 @@ class App:
             tk.Label(self._dev_body,
                      text="No devices yet — add the machines you want to "
                           "drive from this PC.",
-                     bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
+                     bg=BG, fg=MUTED, font=(FONT_UI, 9)).pack(
                 anchor="w", pady=4)
             return
         for device in devices:
@@ -9131,9 +9174,9 @@ class App:
         device_id = device["id"]
         head = tk.Frame(self._dev_body, bg=BG)
         head.pack(fill="x", pady=(PAD_XS, PAD_XS))
-        dot = tk.Label(head, text="●", bg=BG, fg=MUTED, font=("Segoe UI", 11))
+        dot = tk.Label(head, text="●", bg=BG, fg=MUTED, font=(FONT_UI, 11))
         name = tk.Label(head, text=device.get("name", device_id), bg=BG, fg=FG,
-                        font=("Segoe UI Semibold", 10))
+                        font=(FONT_UI_SEMI, 10))
         radio = tk.Label(head, text="", bg=BG, fg=MUTED, font=("Consolas", 8))
         # The verbs are packed FIRST, from the right, so the packer allocates
         # their natural widths before the labels take what is left. In a single
@@ -9284,14 +9327,14 @@ class App:
         win.resizable(False, False)
 
         tk.Label(win, text="Screen sizes", bg=CARD, fg=FG,
-                 font=("Segoe UI Semibold", 12)).pack(
+                 font=(FONT_UI_SEMI, 12)).pack(
             anchor="w", padx=18, pady=(16, 2))
         tk.Label(win,
                  text="Enter each screen's diagonal in inches. Everything is "
                       "drawn to the same physical scale, so a 32\" really is "
                       "about twice the width of a 17\". Resolution is not "
                       "changed.",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 9), wraplength=440,
+                 bg=CARD, fg=MUTED, font=(FONT_UI, 9), wraplength=440,
                  justify="left").pack(anchor="w", padx=18, pady=(0, 10))
         rows = []
 
@@ -9299,18 +9342,18 @@ class App:
             box = tk.Frame(parent, bg=CARD)
             box.pack(fill="x", padx=18, pady=2)
             tk.Label(box, text=label, bg=CARD, fg=FG, width=22, anchor="w",
-                     font=("Segoe UI", 10)).pack(side="left")
+                     font=(FONT_UI, 10)).pack(side="left")
             var = tk.StringVar(value=f"{float(current or 0):g}"
                                if current else "")
             ttk.Entry(box, textvariable=var, width=7).pack(side="left")
             tk.Label(box, text="in", bg=CARD, fg=MUTED,
-                     font=("Segoe UI", 9)).pack(side="left", padx=(4, 10))
+                     font=(FONT_UI, 9)).pack(side="left", padx=(4, 10))
             tk.Label(box, text=detail, bg=CARD, fg=MUTED,
                      font=("Consolas", 8)).pack(side="left")
             return var
 
         tk.Label(win, text="This PC", bg=CARD, fg=ACCENT,
-                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=18,
+                 font=(FONT_UI_SEMI, 10)).pack(anchor="w", padx=18,
                                                       pady=(6, 2))
         for monitor in self.canvas.monitors:
             var = add_row(win, monitor["name"].replace("\\\\.\\", ""),
@@ -9319,7 +9362,7 @@ class App:
             rows.append(("monitor", monitor, var))
         for device in self.canvas.devices():
             tk.Label(win, text=device.get("name", device["id"]), bg=CARD,
-                     fg=ACCENT, font=("Segoe UI Semibold", 10)).pack(
+                     fg=ACCENT, font=(FONT_UI_SEMI, 10)).pack(
                 anchor="w", padx=18, pady=(8, 2))
             for display in device.get("displays", []):
                 var = add_row(
@@ -9877,13 +9920,13 @@ class App:
         win.resizable(False, False)
 
         tk.Label(win, text=f"Input settings — {label}", bg=CARD, fg=FG,
-                 font=("Segoe UI Semibold", 12)).pack(
+                 font=(FONT_UI_SEMI, 12)).pack(
             anchor="w", padx=18, pady=(16, 2))
         tk.Label(win,
                  text="Applied by OpenSpan, not by the device — so the "
                       "device keeps its own settings and stays usable on its "
                       "own.",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 9), wraplength=430,
+                 bg=CARD, fg=MUTED, font=(FONT_UI, 9), wraplength=430,
                  justify="left").pack(anchor="w", padx=18, pady=(0, 10))
 
         state = {}
@@ -9894,7 +9937,7 @@ class App:
             head = tk.Frame(box, bg=CARD)
             head.pack(fill="x")
             tk.Label(head, text=title, bg=CARD, fg=FG,
-                     font=("Segoe UI", 10)).pack(side="left")
+                     font=(FONT_UI, 10)).pack(side="left")
             val = tk.Label(head, text="", bg=CARD, fg=ACCENT,
                            font=("Consolas", 10))
             val.pack(side="right")
@@ -9912,7 +9955,7 @@ class App:
                                   orient="horizontal")
             scale.pack(fill="x", pady=(2, 0))
             tk.Label(box, text=hint, bg=CARD, fg=MUTED,
-                     font=("Segoe UI", 8), wraplength=430,
+                     font=(FONT_UI, 8), wraplength=430,
                      justify="left").pack(anchor="w")
             on_move()
             state[key] = var
@@ -9936,7 +9979,7 @@ class App:
                       "inverts its curve — asking for a distance and sending "
                       "the exact report that produces it — so the pointer "
                       "stays accurate without changing anything on the device.",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 8), wraplength=430,
+                 bg=CARD, fg=MUTED, font=(FONT_UI, 8), wraplength=430,
                  justify="left").pack(anchor="w", padx=38)
 
         verbatim = tk.BooleanVar(
@@ -9950,7 +9993,7 @@ class App:
                       "for example. OpenSpan then sends exactly what you press "
                       "and lets the device do the mapping, instead of "
                       "translating twice and fighting itself.",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 8), wraplength=430,
+                 bg=CARD, fg=MUTED, font=(FONT_UI, 8), wraplength=430,
                  justify="left").pack(anchor="w", padx=38)
 
         inv = tk.BooleanVar(value=bool(record.get("scroll_invert", False)))
@@ -9964,12 +10007,12 @@ class App:
         altbox = tk.Frame(win, bg=CARD)
         altbox.pack(fill="x", padx=18, pady=(10, 0))
         tk.Label(altbox, text="Send physical Alt as", bg=CARD, fg=FG,
-                 font=("Segoe UI", 10)).pack(side="left")
+                 font=(FONT_UI, 10)).pack(side="left")
         ttk.Combobox(altbox, textvariable=alt_var, width=12, state="readonly",
                      values=("option", "command", "inherit")).pack(
             side="left", padx=(10, 0))
         tk.Label(win, text="option = macOS Option  ·  command = iPad Command",
-                 bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(
+                 bg=CARD, fg=MUTED, font=(FONT_UI, 8)).pack(
             anchor="w", padx=18)
 
         def apply_and_close():
@@ -10572,6 +10615,7 @@ def run_app():
 
     key_ok = ensure_ssh_key()  # make + secure it before any guest operation
     root = tk.Tk()
+    _resolve_brand_fonts(root)
     app = App(root)
     if not key_ok:
         _emit("err", "Bridge SSH key setup failed. Guest actions are disabled; "

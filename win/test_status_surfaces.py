@@ -669,7 +669,7 @@ check("the ttk TLabelframe theming therefore still has a consumer and must "
 # body, so the difference is frame and nothing else. The TLabelframe styling is
 # App._theme's own -- measuring the LabelFrame under the default clam theme
 # would compare against a frame this app never drew.
-style.configure("TLabelframe", background=A.BG, bordercolor="#2d3444",
+style.configure("TLabelframe", background=A.BG, bordercolor="#221F2A",
                 relief="solid", borderwidth=1)
 style.configure("TLabelframe.Label", background=A.BG, foreground=A.MUTED,
                 font=("Segoe UI", 9, "bold"))

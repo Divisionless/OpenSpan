@@ -309,7 +309,7 @@ style.configure("TButton", background=A.CARD, foreground=A.FG,
 # the real app, and this test needs it to exist before any button uses it
 style.configure("Warn.TButton", background=A.WARN, foreground="#2a2205")
 style.map("Warn.TButton",
-          foreground=[("disabled", "#5b6172")],
+          foreground=[("disabled", "#6E687A")],
           background=[("disabled", A.PANEL), ("pressed", A.PRESS_WARN),
                       ("active", "#f8d276")])
 

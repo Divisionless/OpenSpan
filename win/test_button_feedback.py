@@ -63,8 +63,8 @@ def check(name, cond, detail=""):
 BUTTON_STYLES = ("TButton", "Accent.TButton", "Danger.TButton")
 
 # ---- the colours are real, and distinct from hover --------------------------
-for const, hover in (("PRESS", "#2d3444"), ("PRESS_ACCENT", "#2a8f5c"),
-                     ("PRESS_DANGER", "#6e3335")):
+for const, hover in (("PRESS", "#221F2A"), ("PRESS_ACCENT", "#764BE2"),
+                     ("PRESS_DANGER", "#66294C")):
     value = getattr(A, const, None)
     check(f"{const} exists and is a colour",
           isinstance(value, str) and value.startswith("#") and len(value) == 7,
