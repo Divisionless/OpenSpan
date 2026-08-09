@@ -1299,8 +1299,10 @@ function wireGlobal() {
     const hh = hdr.getBoundingClientRect().height;
     const mh = ms.getBoundingClientRect().height;
     document.documentElement.style.setProperty("--hdr-h", hh + "px");
+    // Flush: any gap between the milestones bar and the docked column row
+    // is transparent, and rows scrolling behind it read as bleed-through.
     document.documentElement.style.setProperty(
-      "--frozen-h", (hh + mh + 12) + "px");
+      "--frozen-h", (hh + mh) + "px");
   };
   new ResizeObserver(remeasure).observe(hdr);
   new ResizeObserver(remeasure).observe(ms);
