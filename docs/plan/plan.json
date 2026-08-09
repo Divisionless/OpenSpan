@@ -5,7 +5,7 @@
   "anchor": "git:7b6f1a7",
   "created": "2026-08-09",
   "updated": "2026-08-09",
-  "nextSid": 102,
+  "nextSid": 103,
   "nextMilestoneSid": 9,
   "milestones": [
     {
@@ -1777,6 +1777,21 @@
       "status": "todo",
       "actualTokens": null,
       "actualTime": null
+    },
+    {
+      "sid": "v2.102",
+      "hcidx": 102,
+      "milestone": "v2.M3",
+      "deps": [],
+      "title": "Hotkey host \u2014 chords in, window actions out  [hotkey-host]",
+      "why": "makes window control live",
+      "estTokens": "100k-200k",
+      "costDrivers": "ties router+tiling+tracker; ships DISABLED by default",
+      "estTime": "30m",
+      "model": "Codex exec + Claude review",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null
     }
   ],
   "history": [
@@ -3495,8 +3510,12 @@
     {
       "date": "2026-08-09",
       "entry": "Wave B landed: v1.62 settings (18 checks), v1.74 tiling (30 checks), v1.30 display profiles (29 checks, read-only probe confirmed on the live 3-display desk). 36 suites green."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v2.102 open: hotkey host \u2014 the harness turning ported geometry into live window control. Ships disabled; the portal and Input Director already hold this keyboard."
     }
   ],
   "extraCols": [],
-  "rev": 14
+  "rev": 15
 }
