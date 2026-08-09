@@ -13,7 +13,7 @@
       "hcidx": 1,
       "title": "Foundations \u2014 platform services",
       "deps": [],
-      "status": "doing"
+      "status": "done"
     },
     {
       "sid": "v2.M2",
@@ -85,10 +85,10 @@
       "estTokens": "250k\u2013400k",
       "costDrivers": "hook edge cases; Win-release masking",
       "estTime": "3h",
-      "model": "Opus subagent",
-      "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "model": "Codex exec + Claude review",
+      "status": "done",
+      "actualTokens": "~120k Codex + ~35k Claude review",
+      "actualTime": "~20m",
       "extra": {}
     },
     {
@@ -3392,8 +3392,12 @@
     {
       "date": "2026-08-09",
       "entry": "v1.02 done: window tracker ported (22 checks); enumeration verified on the live desktop (7 eligible, 291 invisible excluded); WinEvent hook proven with a synthetic off-screen window (30 events)."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.01 done: keyboard interception + router ported (17 checks); LL hook proven live by an injected F15 tap (2 events, injected flag seen). M1 Foundations CLOSED \u2014 all four platform services landed."
     }
   ],
   "extraCols": [],
-  "rev": 7
+  "rev": 8
 }
