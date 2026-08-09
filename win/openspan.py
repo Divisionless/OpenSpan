@@ -699,8 +699,8 @@ DEVICE_VERB_GATES = _require_verb_coverage({
 #                   ssh_guest(forget-hid, timeout=25)                        25s
 #                                                                    total ~35s
 DEVICE_VERB_MENU_SUFFIX = _require_verb_coverage({
-    "pair": "{verb}…   (confirms first — up to ~90s before it broadcasts)",
-    "connect": "{verb}   (up to ~90s)",
+    "pair": "{verb}…   (confirms first — up to ~125s before it broadcasts)",
+    "connect": "{verb}   (up to ~125s)",
     "disconnect": "{verb}   (up to ~10s)",
     "unpair": "{verb}…   (confirms first — up to ~35s)",
 }, "DEVICE_VERB_MENU_SUFFIX")
