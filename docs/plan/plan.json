@@ -5,7 +5,7 @@
   "anchor": "git:df8afa6",
   "created": "2026-08-09",
   "updated": "2026-08-09",
-  "nextSid": 86,
+  "nextSid": 87,
   "nextMilestoneSid": 18,
   "milestones": [
     {
@@ -1622,6 +1622,21 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
+    },
+    {
+      "sid": "v2.86",
+      "hcidx": 86,
+      "milestone": "v2.M2",
+      "deps": [],
+      "title": "Usage monitor \u2014 Claude + Codex meters in the app  [usage-monitor]",
+      "why": "steer work by real budgets",
+      "estTokens": "80k-150k",
+      "costDrivers": "verified local sources; two slices: readers then panel",
+      "estTime": "1h",
+      "model": "Codex exec + Claude review",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null
     }
   ],
   "history": [],
@@ -1645,6 +1660,14 @@
     {
       "date": "2026-08-09",
       "entry": "v1.04 done: tray V4 + NIF_SHOWTIP upgraded in place by Codex (pilot), reviewed + probe-verified on the interactive desktop. Pattern proven: Codex writes, Claude briefs/reviews/commits. NOTE: running EsotericOS.exe predates this \u2014 lands in the next staged build."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v2.86 open: combined usage monitor. Recon (2 Sonnet agents) proved: Codex weekly-window % + resets_at in rollout JSONL (no 5h window on this plan, 75/75 files); Claude plan-% absent from disk (server-side only) but exact token burn computable from transcripts. Slice 1 = reader module via Codex exec."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v2.86 slice 1 done: win/usage_monitor.py readers + 12 fixture checks, probe verified live (Codex 2.0% weekly, resets 08-16; Claude week: ~28M fresh+out vs 7.3B cache). One review loop via codex exec resume (component split). Codex ~113k (48k+64k), Claude review ~35k. Slice 2 = panel UI."
     }
   ],
   "extraCols": []
