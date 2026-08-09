@@ -5,8 +5,8 @@
   "anchor": "git:7b6f1a7",
   "created": "2026-08-09",
   "updated": "2026-08-09",
-  "nextSid": 87,
-  "nextMilestoneSid": 8,
+  "nextSid": 97,
+  "nextMilestoneSid": 9,
   "milestones": [
     {
       "sid": "v2.M1",
@@ -61,10 +61,17 @@
     },
     {
       "sid": "v2.M7",
-      "hcidx": 7,
+      "hcidx": 8,
       "title": "Deferred catalog",
       "deps": [],
       "status": "todo"
+    },
+    {
+      "sid": "v2.M8",
+      "hcidx": 7,
+      "title": "OpenSpan suite \u2014 multidevice control",
+      "deps": [],
+      "status": "doing"
     }
   ],
   "items": [
@@ -1545,6 +1552,156 @@
       "actualTokens": "~177k Codex + ~70k Claude review",
       "actualTime": "~50m",
       "extra": {}
+    },
+    {
+      "sid": "v2.87",
+      "hcidx": 87,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Peer-keyed device identity \u2014 kill positional identity",
+      "why": "devices are who, not where",
+      "estTokens": "150k-300k",
+      "costDrivers": "every lane/bond keyed by peer; live re-resolution",
+      "estTime": "2h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.88",
+      "hcidx": 88,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Portable installer \u2014 provision a fresh Windows machine",
+      "why": "shippable beyond this desk",
+      "estTokens": "200k-400k",
+      "costDrivers": "VM import, tasks, drivers, first-run wizard",
+      "estTime": "3h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.89",
+      "hcidx": 89,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Second laptop controls iPad #2 \u2014 first multi-node deploy",
+      "why": "prove the multi-node story",
+      "estTokens": "150k-300k",
+      "costDrivers": "needs the personal laptop + Doug's hands",
+      "estTime": "2h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.90",
+      "hcidx": 90,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Replace Input Director on this PC",
+      "why": "one tool owns the desk",
+      "estTokens": "200k-400k",
+      "costDrivers": "likely a 4th dongle; laptop hoisted in BT range",
+      "estTime": "3h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.91",
+      "hcidx": 91,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Full workspace capture \u2014 one continuous desk",
+      "why": "the whole desk, one map",
+      "estTokens": "150k-300k",
+      "costDrivers": "arrangement model beyond current capture",
+      "estTime": "2h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.92",
+      "hcidx": 92,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Remove portal edge-hop on Mac lanes",
+      "why": "mac handles its own edges",
+      "estTokens": "80k-200k",
+      "costDrivers": "delete anticipation, don't add machinery",
+      "estTime": "1h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.93",
+      "hcidx": 93,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Per-headphone volume normalization",
+      "why": "each pair remembers its level",
+      "estTokens": "120k-250k",
+      "costDrivers": "per-device gain in the audio lane",
+      "estTime": "2h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.94",
+      "hcidx": 94,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "UI polish batch (2026-08-08 checklist)",
+      "why": "the small frictions list",
+      "estTokens": "80k-150k",
+      "costDrivers": "batched; no behavior changes",
+      "estTime": "1h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.95",
+      "hcidx": 95,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Audio lane survives HID connect flows \u2014 self-heal",
+      "why": "music must not die quietly",
+      "estTokens": "150k-300k",
+      "costDrivers": "watchdog on adv/GATT re-register; 4th-dongle option",
+      "estTime": "2h",
+      "model": "Codex exec + Claude review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.96",
+      "hcidx": 96,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Recovery cycle \u2014 live radio pass",
+      "why": "code landed, needs Doug's pass",
+      "estTokens": "0 (landed)",
+      "costDrivers": "explicit handoff/gentle release shipped; verification only",
+      "estTime": "30m",
+      "model": "Codex exec + Claude review",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null
     }
   ],
   "history": [
@@ -3223,8 +3380,12 @@
     {
       "date": "2026-08-09",
       "entry": "Repaired second stale-tab clobber: v2 milestones re-derived (v2.86 joins M2), mixed state snapshotted to history, `rev` optimistic lock introduced \u2014 stale tabs can no longer save."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "OpenSpan suite (the multidevice control roadmap) added as v2.M8 with 10 rows v2.87-v2.96 \u2014 it lived only in the session task list and the board misread as import-only."
     }
   ],
   "extraCols": [],
-  "rev": 4
+  "rev": 5
 }
