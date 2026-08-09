@@ -2684,6 +2684,38 @@ def _not_landed_advice():
     )
 
 
+def gentle_release(vbox_run=None, verify=None, settle=0.5, log=None):
+    """Detach each VM-held radio, one verified detach at a time, BEFORE the
+    VM powers off.
+
+    A poweroff with radios still attached releases them all in one PnP
+    storm. That storm is the documented 2026-08-08 injury event: the first
+    radio-port fault in 149 hours appeared eight seconds after exactly this
+    mass release. An ordered detach per radio hands Windows a calm
+    re-enumeration instead. One attempt per device -- a radio that will not
+    detach simply keeps the power-off fate it already had.
+    """
+    vbox_run = vbox_run or (lambda *a: vbox(*a, quiet=True))
+    verify = verify or (lambda: parse_usb_attached(
+        vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout))
+    emit = log or (lambda m: _emit("event", m))
+    released, kept = [], []
+    for uuid in sorted(verify()):
+        vbox_run("controlvm", VM, "usbdetach", uuid)
+        time.sleep(settle)
+        if uuid in verify():
+            kept.append(uuid)
+        else:
+            released.append(uuid)
+    if released:
+        emit(f"released {len(released)} radio(s) to Windows ahead of "
+             "the power-off")
+    if kept:
+        emit(f"{len(kept)} radio(s) would not detach -- the power-off "
+             "will drop them the old way")
+    return released, kept
+
+
 def repair_radios(config=None, settle=None):
     """Everything the app can do about a missing radio, cheapest first.
 
@@ -7878,6 +7910,7 @@ class App:
         def work():
             try:
                 ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+                gentle_release()
                 vbox("controlvm", VM, "poweroff")
             finally:
                 done()
@@ -7896,6 +7929,7 @@ class App:
             try:
                 if vm_running():
                     ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+                    gentle_release()
                     vbox("controlvm", VM, "poweroff")
                     for _ in range(30):
                         if not vm_running():
@@ -7977,6 +8011,7 @@ class App:
         _clear_input_capture_lease("full stop")
         try:
             if vm_running():
+                gentle_release()
                 vbox("controlvm", VM, "poweroff")
         except Exception:  # noqa: BLE001
             pass

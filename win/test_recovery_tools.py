@@ -30,7 +30,40 @@ check("give-back heals only unhealthy Bluetooth nodes",
 check("give-back survives a machine with no VirtualBox at all",
       "skipping VM stop" in ps1)
 
-app = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
+import sys  # noqa: E402
+sys.path.insert(0, str(ROOT / "win"))
+import openspan as A  # noqa: E402
+
+# --- gentle_release: ordered, verified, one attempt per radio --------------
+calls = []
+held = {"aaa", "bbb"}
+
+
+def fake_vbox(*args):
+    calls.append(" ".join(args))
+    if args[2] == "usbdetach" and args[3] != "stuck":
+        held.discard(args[3])
+
+
+rel, kept = A.gentle_release(vbox_run=fake_vbox, verify=lambda: set(held),
+                             settle=0, log=lambda m: None)
+check("gentle release detaches every held radio, one verified pass",
+      sorted(rel) == ["aaa", "bbb"] and not kept and len(calls) == 2)
+
+calls.clear()
+held = {"stuck", "ccc"}
+rel, kept = A.gentle_release(vbox_run=fake_vbox, verify=lambda: set(held),
+                             settle=0, log=lambda m: None)
+check("a radio that will not detach is reported, never retried",
+      rel == ["ccc"] and kept == ["stuck"]
+      and len([c for c in calls if "stuck" in c]) == 1)
+
+app_src = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
+check("every power-off path releases gently before pulling the plug",
+      app_src.count("gentle_release()")
+      == app_src.count('vbox("controlvm", VM, "poweroff")'))
+
+app = app_src
 check("preflight-bearing guest chains get recovery-path headroom (90s)",
       app.count("timeout=90") >= 2
       and "hangs up at 45s reports" in app)
