@@ -103,8 +103,17 @@ table{width:100%;border-collapse:collapse}
 thead th{
   text-align:left;font-size:10.5px;font-weight:600;letter-spacing:1.1px;text-transform:uppercase;
   color:#6e7889;padding:9px 12px;border-bottom:1px solid var(--bd);white-space:nowrap;
-  background:var(--panel2);position:sticky;top:0;z-index:3;
+  background:var(--panel2);position:sticky;top:var(--frozen-h, 0px);z-index:3;
 }
+/* The whole top block rides along while the 85 rows scroll: header card,
+   milestones line, then the column row docks beneath them. Heights are
+   measured live (the plan name wraps, the milestones fold toggles). */
+header.hdr{position:sticky;top:0;z-index:40;background:var(--bg)}
+#msSection{position:sticky;top:var(--hdr-h, 0px);z-index:39;background:var(--bg)}
+/* overflow:hidden on the card makes it the sticky containing block and the
+   column row never sticks. The items card trades its corner clipping for a
+   working frozen header; the radius loss is invisible at these colors. */
+section.card:has(#itTable){overflow:visible}
 thead th.num{text-align:right}
 tbody td{
   padding:11px 12px;border-bottom:1px solid #161c26;vertical-align:top;font-size:13.5px;
@@ -1280,6 +1289,33 @@ function wireGlobal() {
     open = !open; apply();
   });
   apply();
+
+  // Frozen-top measurement: the header card and milestones section are
+  // sticky; the items table's column row docks below their combined
+  // height. Re-measured whenever either resizes (name wrap, fold toggle).
+  const hdr = document.querySelector("header.hdr");
+  const ms = document.getElementById("msSection");
+  const remeasure = () => {
+    const hh = hdr.getBoundingClientRect().height;
+    const mh = ms.getBoundingClientRect().height;
+    document.documentElement.style.setProperty("--hdr-h", hh + "px");
+    document.documentElement.style.setProperty(
+      "--frozen-h", (hh + mh + 12) + "px");
+  };
+  new ResizeObserver(remeasure).observe(hdr);
+  new ResizeObserver(remeasure).observe(ms);
+  // #main is hidden until the plan loads, so parse-time heights are 0 and
+  // a ResizeObserver on a display:none subtree may never fire. Belt and
+  // braces: retry until a real height lands, plus the load event.
+  let tries = 0;
+  const settle = () => {
+    remeasure();
+    if (hdr.getBoundingClientRect().height < 1 && ++tries < 40) {
+      setTimeout(settle, 150);
+    }
+  };
+  window.addEventListener("load", settle);
+  settle();
 })();
 
 })();
