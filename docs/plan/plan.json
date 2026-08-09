@@ -219,10 +219,10 @@
       "estTokens": "60k\u2013120k",
       "costDrivers": "explorer-restart re-add; tooltip law",
       "estTime": "1h",
-      "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "model": "Codex exec + Claude review",
+      "status": "done",
+      "actualTokens": "~42k Codex + ~25k Claude review",
+      "actualTime": "20m",
       "extra": {}
     },
     {
@@ -1637,6 +1637,14 @@
     {
       "date": "2026-08-09",
       "entry": "v1.03 done: monitor identity ported (win/monitor_identity.py, 12 checks + live probe on 3 displays). Actual ~110k/15m vs 80k-150k/1h \u2014 tokens in band, time 4x under."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.04 open: tray V4 upgrade \u2014 Codex exec pilot (brief docs/briefs/v1.04-tray-v4.md), Claude reviews."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.04 done: tray V4 + NIF_SHOWTIP upgraded in place by Codex (pilot), reviewed + probe-verified on the interactive desktop. Pattern proven: Codex writes, Claude briefs/reviews/commits. NOTE: running EsotericOS.exe predates this \u2014 lands in the next staged build."
     }
   ],
   "extraCols": []

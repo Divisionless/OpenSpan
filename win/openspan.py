@@ -3918,15 +3918,20 @@ class TrayIcon:
         self._nid.cbSize = ctypes.sizeof(NID)
         self._nid.hWnd = self.hwnd
         self._nid.uID = 1
-        self._nid.uFlags = 0x07  # NIF_MESSAGE | NIF_ICON | NIF_TIP
+        self._nid.uFlags = 0x87  # NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP
         self._nid.uCallbackMessage = self._WM_TRAY
         self._nid.hIcon = hicon
         self._nid.szTip = tip[:127]
         _TRAY["active"] = self  # before NIM_ADD: callbacks may fire at once
-        if not sh.Shell_NotifyIconW(0, ctypes.byref(self._nid)):  # NIM_ADD
+        self._nim_add_ok = bool(
+            sh.Shell_NotifyIconW(0, ctypes.byref(self._nid)))  # NIM_ADD
+        if not self._nim_add_ok:
             _TRAY["active"] = None
             u32.DestroyWindow(self.hwnd)  # class/thunk stay: immortal
             raise OSError("tray: Shell_NotifyIconW failed")
+        self._nid.uVersion = 4  # NOTIFYICON_VERSION_4
+        self._nim_setversion_ok = bool(
+            sh.Shell_NotifyIconW(4, ctypes.byref(self._nid)))  # NIM_SETVERSION
 
     @staticmethod
     def _register_once(ctypes, wt, u32, k32):
@@ -3961,15 +3966,20 @@ class TrayIcon:
             try:
                 t = _TRAY["active"]
                 if t is not None:
-                    if msg == TrayIcon._WM_TRAY and l in (0x0202, 0x0203):
-                        # WM_LBUTTONUP / WM_LBUTTONDBLCLK on the icon
+                    if msg == TrayIcon._WM_TRAY:
+                        evt = l & 0xFFFF  # V4: event is LOWORD(lParam)
+                    else:
+                        evt = None
+                    if evt in (0x0202, 0x0203, 0x0400, 0x0401):
+                        # WM_LBUTTONUP / WM_LBUTTONDBLCLK / NIN_SELECT /
+                        # NIN_KEYSELECT on the icon
                         try:
                             t.on_restore()
                         except Exception:  # noqa: BLE001
                             pass
                         return 0
-                    if msg == TrayIcon._WM_TRAY and l == 0x0205 \
-                            and t.on_menu:            # WM_RBUTTONUP on the icon
+                    if evt in (0x0205, 0x007B) and t.on_menu:
+                        # WM_RBUTTONUP / WM_CONTEXTMENU on the icon
                         try:
                             t.on_menu()
                         except Exception:  # noqa: BLE001
@@ -3978,7 +3988,11 @@ class TrayIcon:
                     if msg == _TRAY["taskbar_created"]:
                         # explorer restarted and forgot every tray icon: re-add
                         try:
-                            t._sh.Shell_NotifyIconW(0, ctypes.byref(t._nid))
+                            if t._sh.Shell_NotifyIconW(
+                                    0, ctypes.byref(t._nid)):  # NIM_ADD
+                                t._nid.uVersion = 4
+                                t._sh.Shell_NotifyIconW(
+                                    4, ctypes.byref(t._nid))  # NIM_SETVERSION
                         except Exception:  # noqa: BLE001
                             pass
                         return 0
@@ -4030,8 +4044,13 @@ class TrayIcon:
         try:
             if self._sh.Shell_NotifyIconW(1, self._ct.byref(self._nid)):
                 return True  # NIM_MODIFY succeeded -> icon exists
-            return bool(
-                self._sh.Shell_NotifyIconW(0, self._ct.byref(self._nid)))
+            if not self._sh.Shell_NotifyIconW(
+                    0, self._ct.byref(self._nid)):  # NIM_ADD
+                return False
+            self._nid.uVersion = 4
+            self._sh.Shell_NotifyIconW(
+                4, self._ct.byref(self._nid))  # NIM_SETVERSION
+            return True
         except Exception:  # noqa: BLE001
             return False
 
