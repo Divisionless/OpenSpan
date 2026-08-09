@@ -399,6 +399,8 @@ const RESORT_DELAY = 1000;
    state
    ================================================================== */
 let DOC = null;               // the plan document (exactly what gets POSTed)
+let LOADED_REV = null;        // rev of the doc THIS page loaded (optimistic lock)
+let staleLocked = false;      // disk moved under us -> this page may never save
 let saveTimer = null;
 let resortTimer = null;
 let pendingRender = false;    // a structural render was deferred (a cell had focus)
@@ -446,6 +448,8 @@ async function load() {
   }
 
   normalize();
+  LOADED_REV = DOC.rev || 0;
+  staleLocked = false;
   $("#errorPanel").hidden = true;
   $("#main").hidden = false;
   render();
@@ -561,13 +565,36 @@ function wordCount(s) { return (s || "").trim() ? s.trim().split(/\s+/).length :
    save
    ================================================================== */
 function scheduleSave() {
+  if (staleLocked) return;
   setSave("pending", "editing\u2026");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(doSave, SAVE_DEBOUNCE);
 }
 
+function lockStale() {
+  // The document on disk is not the one this page loaded. This page has
+  // twice overwritten newer work (2026-08-09, both times via a stale tab's
+  // autosave) \u2014 so a stale page gets NO save path at all, only a reload.
+  staleLocked = true;
+  clearTimeout(saveTimer);
+  setSave("error", "STALE \u2014 saving disabled");
+  setErr("The board changed on disk since this tab loaded it. This tab's " +
+         "edits were NOT saved. Reload the page (F5) to pick up the " +
+         "current board, then redo the edit there.");
+}
+
 async function doSave() {
   clearTimeout(saveTimer);
+  if (staleLocked) return;
+  // Optimistic lock: never write over a rev this page did not load.
+  try {
+    const probe = await fetch("plan.json?" + Date.now(), { cache: "no-store" });
+    if (probe.ok) {
+      const disk = await probe.json();
+      if ((disk.rev || 0) !== LOADED_REV) return lockStale();
+    }
+  } catch (e) { /* server unreachable: the POST below will fail loudly */ }
+  DOC.rev = LOADED_REV + 1;
   setSave("saving", "saving\u2026");
   let res, body;
   try {
@@ -588,6 +615,7 @@ async function doSave() {
     setErr("Save rejected: " + msg);
     return;
   }
+  LOADED_REV = DOC.rev;
   DOC.updated = isoToday();
   const t = new Date();
   setSave("saved", "saved " + pad2(t.getHours()) + ":" + pad2(t.getMinutes()) + ":" + pad2(t.getSeconds()));
