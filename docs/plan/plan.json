@@ -2,72 +2,67 @@
   "plan": "EsotericOS feature board",
   "project": "D:\\OpenSpan",
   "version": 2,
-  "anchor": "git:734dadb",
+  "anchor": "git:f457a16",
   "created": "2026-08-09",
   "updated": "2026-08-09",
   "nextSid": 86,
-  "nextMilestoneSid": 10,
+  "nextMilestoneSid": 8,
   "milestones": [
     {
       "sid": "v2.M1",
       "hcidx": 1,
-      "title": "Foundations",
+      "title": "Foundations \u2014 platform services",
       "deps": [],
       "status": "todo"
     },
     {
       "sid": "v2.M2",
       "hcidx": 2,
-      "title": "Window management",
+      "title": "Platform spine \u2014 settings, config, plugins",
       "deps": [],
       "status": "todo"
     },
     {
       "sid": "v2.M3",
       "hcidx": 3,
-      "title": "Spaces & displays",
-      "deps": [],
+      "title": "Window control",
+      "deps": [
+        "v2.M1"
+      ],
       "status": "todo"
     },
     {
       "sid": "v2.M4",
       "hcidx": 4,
-      "title": "Keyboard & pointer",
-      "deps": [],
+      "title": "Spaces",
+      "deps": [
+        "v2.M1",
+        "v2.M3"
+      ],
       "status": "todo"
     },
     {
       "sid": "v2.M5",
       "hcidx": 5,
-      "title": "Capture & files",
-      "deps": [],
+      "title": "Desktop & input",
+      "deps": [
+        "v2.M1"
+      ],
       "status": "todo"
     },
     {
       "sid": "v2.M6",
       "hcidx": 6,
-      "title": "Launcher & clipboard",
-      "deps": [],
+      "title": "Overviews \u2014 Mission Control, Stage Manager",
+      "deps": [
+        "v2.M4"
+      ],
       "status": "todo"
     },
     {
       "sid": "v2.M7",
       "hcidx": 7,
-      "title": "Shell & desktop",
-      "deps": [],
-      "status": "todo"
-    },
-    {
-      "sid": "v2.M8",
-      "hcidx": 8,
-      "title": "System controls",
-      "deps": [],
-      "status": "todo"
-    },
-    {
-      "sid": "v2.M9",
-      "hcidx": 9,
-      "title": "Platform & plumbing",
+      "title": "Deferred catalog",
       "deps": [],
       "status": "todo"
     }
@@ -84,7 +79,7 @@
       "costDrivers": "hook edge cases; Win-release masking",
       "estTime": "3h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -100,7 +95,7 @@
       "costDrivers": "DWM frame bounds; cloaked-window filtering",
       "estTime": "3h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -116,7 +111,7 @@
       "costDrivers": "reconnect semantics; debounced topology",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -132,7 +127,7 @@
       "costDrivers": "explorer-restart re-add; tooltip law",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -140,7 +135,7 @@
     {
       "sid": "v1.05",
       "hcidx": 5,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Reduce Motion, transparency, and contrast profiles  [accessibility-appearance-profiles]",
       "why": "proven in the old program",
@@ -156,7 +151,7 @@
     {
       "sid": "v1.06",
       "hcidx": 6,
-      "milestone": "v2.M8",
+      "milestone": "v2.M5",
       "deps": [],
       "title": "Hold a modifier and scroll to zoom the screen  [accessibility-zoom]",
       "why": "proven in the old program",
@@ -164,7 +159,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -172,7 +167,7 @@
     {
       "sid": "v1.07",
       "hcidx": 7,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Automatic light/dark schedule  [automatic-theme]",
       "why": "never built; plan spec only",
@@ -188,7 +183,7 @@
     {
       "sid": "v1.08",
       "hcidx": 8,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "macOS-like font rendering profile  [font-rendering-profile]",
       "why": "never built; plan spec only",
@@ -204,7 +199,7 @@
     {
       "sid": "v1.09",
       "hcidx": 9,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Per-workspace and per-display wallpaper  [per-space-wallpaper]",
       "why": "never built; plan spec only",
@@ -220,7 +215,7 @@
     {
       "sid": "v1.10",
       "hcidx": 10,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Compact audio device switcher  [audio-switcher]",
       "why": "never built; plan spec only",
@@ -236,7 +231,7 @@
     {
       "sid": "v1.11",
       "hcidx": 11,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Per-application audio routing  [per-app-audio-routing]",
       "why": "never built; plan spec only",
@@ -252,7 +247,7 @@
     {
       "sid": "v1.12",
       "hcidx": 12,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Immediate screenshot annotation  [capture-annotation]",
       "why": "proven in the old program",
@@ -268,7 +263,7 @@
     {
       "sid": "v1.13",
       "hcidx": 13,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Remembered capture destinations  [capture-destinations]",
       "why": "proven in the old program",
@@ -284,7 +279,7 @@
     {
       "sid": "v1.14",
       "hcidx": 14,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "OCR and Live Text from captures  [capture-ocr]",
       "why": "proven in the old program",
@@ -300,7 +295,7 @@
     {
       "sid": "v1.15",
       "hcidx": 15,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Unified screenshot and recording overlay  [capture-overlay]",
       "why": "proven core, hook awaits live drive",
@@ -316,7 +311,7 @@
     {
       "sid": "v1.16",
       "hcidx": 16,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "macOS-style capture shortcut entry  [screen-capture-trigger]",
       "why": "proven in the old program",
@@ -332,7 +327,7 @@
     {
       "sid": "v1.17",
       "hcidx": 17,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Drag capture thumbnail into arbitrary applications  [thumbnail-drag-anywhere]",
       "why": "needs an excluded prerequisite rethought",
@@ -348,7 +343,7 @@
     {
       "sid": "v1.18",
       "hcidx": 18,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Advanced paste transformations  [advanced-paste-transforms]",
       "why": "never built; plan spec only",
@@ -364,7 +359,7 @@
     {
       "sid": "v1.19",
       "hcidx": 19,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Rich clipboard history  [clipboard-history]",
       "why": "proven core, hook awaits live drive",
@@ -380,7 +375,7 @@
     {
       "sid": "v1.20",
       "hcidx": 20,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "AirDrop-like local transfer panel  [nearby-transfer]",
       "why": "never built; plan spec only",
@@ -396,7 +391,7 @@
     {
       "sid": "v1.21",
       "hcidx": 21,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Caffeinate / Keep Awake toggle  [caffeinate-awake]",
       "why": "proven in the old program",
@@ -412,7 +407,7 @@
     {
       "sid": "v1.22",
       "hcidx": 22,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Digital Color Meter-style picker  [digital-color-meter]",
       "why": "proven in the old program",
@@ -428,7 +423,7 @@
     {
       "sid": "v1.23",
       "hcidx": 23,
-      "milestone": "v2.M8",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Fine-grained volume and brightness steps  [fine-volume-brightness]",
       "why": "proven in the old program",
@@ -462,7 +457,7 @@
     {
       "sid": "v1.25",
       "hcidx": 25,
-      "milestone": "v2.M7",
+      "milestone": "v2.M5",
       "deps": [
         "v1.02"
       ],
@@ -472,7 +467,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -480,7 +475,7 @@
     {
       "sid": "v1.26",
       "hcidx": 26,
-      "milestone": "v2.M7",
+      "milestone": "v2.M5",
       "deps": [
         "v1.02"
       ],
@@ -490,7 +485,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -562,7 +557,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -570,7 +565,7 @@
     {
       "sid": "v1.31",
       "hcidx": 31,
-      "milestone": "v2.M3",
+      "milestone": "v2.M7",
       "deps": [
         "v1.03"
       ],
@@ -588,7 +583,7 @@
     {
       "sid": "v1.32",
       "hcidx": 32,
-      "milestone": "v2.M3",
+      "milestone": "v2.M7",
       "deps": [
         "v1.03"
       ],
@@ -606,7 +601,7 @@
     {
       "sid": "v1.33",
       "hcidx": 33,
-      "milestone": "v2.M3",
+      "milestone": "v2.M7",
       "deps": [
         "v1.03"
       ],
@@ -624,7 +619,7 @@
     {
       "sid": "v1.34",
       "hcidx": 34,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Batch rename tools  [batch-rename]",
       "why": "proven in the old program",
@@ -640,7 +635,7 @@
     {
       "sid": "v1.35",
       "hcidx": 35,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Clean context menus and file Quick Actions  [context-quick-actions]",
       "why": "works with a documented limitation",
@@ -656,7 +651,7 @@
     {
       "sid": "v1.36",
       "hcidx": 36,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Copy file path shortcut  [copy-path]",
       "why": "proven in the old program",
@@ -672,7 +667,7 @@
     {
       "sid": "v1.37",
       "hcidx": 37,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Finder-like file tags  [file-tags]",
       "why": "never built; plan spec only",
@@ -688,7 +683,7 @@
     {
       "sid": "v1.38",
       "hcidx": 38,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Finder-like file browser surface  [finder-shell]",
       "why": "never built; plan spec only",
@@ -704,7 +699,7 @@
     {
       "sid": "v1.39",
       "hcidx": 39,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Finder-like Get Info inspector  [get-info-inspector]",
       "why": "proven in the old program",
@@ -720,7 +715,7 @@
     {
       "sid": "v1.40",
       "hcidx": 40,
-      "milestone": "v2.M5",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Quick Look with Spacebar  [quick-look]",
       "why": "proven core, hook awaits live drive",
@@ -736,7 +731,7 @@
     {
       "sid": "v1.41",
       "hcidx": 41,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -754,7 +749,7 @@
     {
       "sid": "v1.42",
       "hcidx": 42,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -772,7 +767,7 @@
     {
       "sid": "v1.43",
       "hcidx": 43,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -790,7 +785,7 @@
     {
       "sid": "v1.44",
       "hcidx": 44,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -808,7 +803,7 @@
     {
       "sid": "v1.45",
       "hcidx": 45,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -826,7 +821,7 @@
     {
       "sid": "v1.46",
       "hcidx": 46,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -844,7 +839,7 @@
     {
       "sid": "v1.47",
       "hcidx": 47,
-      "milestone": "v2.M4",
+      "milestone": "v2.M5",
       "deps": [
         "v1.01"
       ],
@@ -854,7 +849,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -862,7 +857,7 @@
     {
       "sid": "v1.48",
       "hcidx": 48,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -880,7 +875,7 @@
     {
       "sid": "v1.49",
       "hcidx": 49,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -898,7 +893,7 @@
     {
       "sid": "v1.50",
       "hcidx": 50,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -916,7 +911,7 @@
     {
       "sid": "v1.51",
       "hcidx": 51,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -934,7 +929,7 @@
     {
       "sid": "v1.52",
       "hcidx": 52,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [
         "v1.01"
       ],
@@ -952,7 +947,7 @@
     {
       "sid": "v1.53",
       "hcidx": 53,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Launcher calculations and Quick Actions  [launcher-actions]",
       "why": "proven in the old program",
@@ -968,7 +963,7 @@
     {
       "sid": "v1.54",
       "hcidx": 54,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Spotlight-style launcher core  [launcher-core]",
       "why": "proven in the old program",
@@ -984,7 +979,7 @@
     {
       "sid": "v1.55",
       "hcidx": 55,
-      "milestone": "v2.M6",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Preview inside launcher results  [launcher-preview]",
       "why": "proven in the old program",
@@ -1036,7 +1031,7 @@
     {
       "sid": "v1.58",
       "hcidx": 58,
-      "milestone": "v2.M9",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Reliable elevated-window management  [elevated-window-control]",
       "why": "proven in the old program",
@@ -1052,7 +1047,7 @@
     {
       "sid": "v1.59",
       "hcidx": 59,
-      "milestone": "v2.M9",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Login items and background activity manager  [login-background-manager]",
       "why": "never built; plan spec only",
@@ -1068,7 +1063,7 @@
     {
       "sid": "v1.60",
       "hcidx": 60,
-      "milestone": "v2.M9",
+      "milestone": "v2.M2",
       "deps": [],
       "title": "Plugin and automation API  [plugin-system]",
       "why": "proven in the old program",
@@ -1076,7 +1071,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1084,7 +1079,7 @@
     {
       "sid": "v1.61",
       "hcidx": 61,
-      "milestone": "v2.M9",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Selected-text Services palette  [selected-text-services]",
       "why": "never built; plan spec only",
@@ -1100,7 +1095,7 @@
     {
       "sid": "v1.62",
       "hcidx": 62,
-      "milestone": "v2.M9",
+      "milestone": "v2.M2",
       "deps": [],
       "title": "Unified settings and orchestration service  [unified-settings]",
       "why": "proven in the old program",
@@ -1108,7 +1103,7 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1116,7 +1111,7 @@
     {
       "sid": "v1.63",
       "hcidx": 63,
-      "milestone": "v2.M9",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "UWP, WinUI, game, and protected-window compatibility  [uwp-game-compat]",
       "why": "proven core, hook awaits live drive",
@@ -1132,7 +1127,7 @@
     {
       "sid": "v1.64",
       "hcidx": 64,
-      "milestone": "v2.M9",
+      "milestone": "v2.M2",
       "deps": [],
       "title": "Single versionable configuration file  [workspace-config-file]",
       "why": "proven in the old program",
@@ -1140,7 +1135,7 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1148,7 +1143,7 @@
     {
       "sid": "v1.65",
       "hcidx": 65,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Locate cursor shortcut  [cursor-locator]",
       "why": "proven in the old program",
@@ -1164,7 +1159,7 @@
     {
       "sid": "v1.66",
       "hcidx": 66,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Natural scrolling per device  [natural-scroll-device]",
       "why": "never built; plan spec only",
@@ -1180,7 +1175,7 @@
     {
       "sid": "v1.67",
       "hcidx": 67,
-      "milestone": "v2.M4",
+      "milestone": "v2.M7",
       "deps": [],
       "title": "Smooth inertial mouse scrolling  [smooth-inertial-scroll]",
       "why": "never built; plan spec only",
@@ -1272,7 +1267,7 @@
     {
       "sid": "v1.72",
       "hcidx": 72,
-      "milestone": "v2.M2",
+      "milestone": "v2.M7",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1291,7 +1286,7 @@
     {
       "sid": "v1.73",
       "hcidx": 73,
-      "milestone": "v2.M2",
+      "milestone": "v2.M7",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1310,7 +1305,7 @@
     {
       "sid": "v1.74",
       "hcidx": 74,
-      "milestone": "v2.M2",
+      "milestone": "v2.M3",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1321,7 +1316,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1329,7 +1324,7 @@
     {
       "sid": "v1.75",
       "hcidx": 75,
-      "milestone": "v2.M2",
+      "milestone": "v2.M7",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1348,7 +1343,7 @@
     {
       "sid": "v1.76",
       "hcidx": 76,
-      "milestone": "v2.M2",
+      "milestone": "v2.M6",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1359,7 +1354,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1367,7 +1362,7 @@
     {
       "sid": "v1.77",
       "hcidx": 77,
-      "milestone": "v2.M2",
+      "milestone": "v2.M7",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1386,7 +1381,7 @@
     {
       "sid": "v1.78",
       "hcidx": 78,
-      "milestone": "v2.M2",
+      "milestone": "v2.M3",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1397,7 +1392,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1405,7 +1400,7 @@
     {
       "sid": "v1.79",
       "hcidx": 79,
-      "milestone": "v2.M2",
+      "milestone": "v2.M3",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1416,7 +1411,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1424,7 +1419,7 @@
     {
       "sid": "v1.80",
       "hcidx": 80,
-      "milestone": "v2.M3",
+      "milestone": "v2.M4",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1435,7 +1430,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1443,7 +1438,7 @@
     {
       "sid": "v1.81",
       "hcidx": 81,
-      "milestone": "v2.M3",
+      "milestone": "v2.M6",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1454,7 +1449,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1462,7 +1457,7 @@
     {
       "sid": "v1.82",
       "hcidx": 82,
-      "milestone": "v2.M3",
+      "milestone": "v2.M4",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1473,7 +1468,7 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1481,7 +1476,7 @@
     {
       "sid": "v1.83",
       "hcidx": 83,
-      "milestone": "v2.M3",
+      "milestone": "v2.M4",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1492,7 +1487,7 @@
       "costDrivers": "spec only \u2014 full build; was On by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1500,7 +1495,7 @@
     {
       "sid": "v1.84",
       "hcidx": 84,
-      "milestone": "v2.M3",
+      "milestone": "v2.M7",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1519,7 +1514,7 @@
     {
       "sid": "v1.85",
       "hcidx": 85,
-      "milestone": "v2.M3",
+      "milestone": "v2.M4",
       "deps": [
         "v1.02",
         "v1.03"
@@ -1530,7 +1525,7 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "deferred",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1705,7 +1700,7 @@
             "costDrivers": "hook edge cases; Win-release masking",
             "estTime": "3h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -1721,7 +1716,7 @@
             "costDrivers": "DWM frame bounds; cloaked-window filtering",
             "estTime": "3h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -1737,7 +1732,7 @@
             "costDrivers": "reconnect semantics; debounced topology",
             "estTime": "1h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -1753,7 +1748,7 @@
             "costDrivers": "explorer-restart re-add; tooltip law",
             "estTime": "1h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -1785,7 +1780,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2093,7 +2088,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "3\u20135h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2111,7 +2106,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "3\u20135h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2183,7 +2178,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2475,7 +2470,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "2h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2697,7 +2692,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2729,7 +2724,7 @@
             "costDrivers": "working C# reference module; was Always On",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2761,7 +2756,7 @@
             "costDrivers": "working C# reference module; was Always On",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2942,7 +2937,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -2980,7 +2975,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "4\u20138h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3018,7 +3013,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3037,7 +3032,7 @@
             "costDrivers": "working C# reference module; was On by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3056,7 +3051,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "3\u20135h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3075,7 +3070,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "4\u20138h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3094,7 +3089,7 @@
             "costDrivers": "working C# reference module; was Off by Default",
             "estTime": "1\u20132h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3113,7 +3108,7 @@
             "costDrivers": "spec only \u2014 full build; was On by Default",
             "estTime": "3\u20135h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3151,7 +3146,7 @@
             "costDrivers": "spec only \u2014 full build; was Off by Default",
             "estTime": "3\u20135h",
             "model": "Opus subagent",
-            "status": "deferred",
+            "status": "todo",
             "actualTokens": null,
             "actualTime": null,
             "extra": {}
@@ -3171,7 +3166,7 @@
     },
     {
       "date": "2026-08-09",
-      "entry": "v2: regrouped 16 domains into 9 clusters for the rail nav; item SIDs unchanged; v1 snapshot in history."
+      "entry": "v2: milestones derived from Doug's 21 picks in dependency order; 64 deferred rows kept in the catalog; v1 snapshot in history."
     }
   ],
   "extraCols": []
