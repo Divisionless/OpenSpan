@@ -166,6 +166,9 @@ tbody tr.st-blocked td.c-title{box-shadow:inset 2px 0 0 0 var(--blocked)}
 .chip.status.done   {background:#132720;border-color:#1f4a34;color:#7fd6a5}
 .chip.status.done::before{content:"\2713 ";font-weight:700}
 .chip.status.blocked{background:#2a1418;border-color:#4a2429;color:#f0a3a8}
+.chip.status.deferred{background:#191722;border-color:#2A203B;color:#6E687A}
+tbody tr.st-deferred{opacity:.45}
+tbody tr.st-deferred:hover{opacity:.7}
 .tagrow{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px}
 .chip.ms{
   background:#1a1626;border-color:#2e2745;color:#a99adf;cursor:pointer;font-family:var(--mono);font-size:11px;
@@ -324,9 +327,12 @@ details.logbox>summary .count{margin-left:auto;font-weight:400;letter-spacing:.5
 /* ==================================================================
    constants
    ================================================================== */
-const STATUSES = ["todo", "doing", "done", "blocked"];
-const NEXT_STATUS = { todo: "doing", doing: "done", done: "blocked", blocked: "todo" };
-const SORT_RANK = { done: 0, doing: 1, todo: 2, blocked: 3 };
+const STATUSES = ["todo", "doing", "done", "blocked", "deferred"];
+const NEXT_STATUS = { todo: "doing", doing: "done", done: "blocked",
+                      blocked: "deferred", deferred: "todo" };
+/* deferred sinks below everything: chosen-not-now, preserved with its
+   estimates, never destroyed like a delete */
+const SORT_RANK = { done: 0, doing: 1, todo: 2, blocked: 3, deferred: 4 };
 const CORE_COLS = [
   { key: "title",        label: "Title",              cls: "c-title" },
   { key: "estTokens",    label: "Est. tokens",        cls: "c-est",   mono: true, ph: "—" },
@@ -1014,6 +1020,17 @@ function confirmDelete(anchor, row, kind) {
   const rowb = el("div", "pop-row");
   const cancel = el("button", null, "Cancel");
   cancel.addEventListener("click", closePop);
+  if (kind === "item") {
+    // "Not now" is a deferral, not a deletion: the row keeps its SID and
+    // estimates and sinks to the bottom of the board, recoverable.
+    const defer = el("button", null, "Defer");
+    defer.style.borderColor = "#5F3DC4"; defer.style.color = "#B28DFF";
+    defer.addEventListener("click", () => {
+      row.status = "deferred";
+      closePop(); scheduleSave(); render();
+    });
+    rowb.appendChild(defer);
+  }
   const del = el("button", "danger", "Delete");
   del.addEventListener("click", () => {
     const list = kind === "milestone" ? DOC.milestones : DOC.items;
