@@ -1142,9 +1142,9 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~61k Codex + ~25k Claude review",
+      "actualTime": "~12m",
       "extra": {}
     },
     {
@@ -3400,8 +3400,12 @@
     {
       "date": "2026-08-09",
       "entry": "Estimates re-graded against 5 actuals (90 rows): reference-backed ports -40% tokens (measured .40-.96x), spec-only rows +25% (v2.86 novel work ran 1.6x OVER), all times rebased to Codex-writes/Claude-reviews throughput."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.64 done: config store ported (35 checks incl. a frozen-build path defect Claude caught in review and fixed). 31 suites green."
     }
   ],
   "extraCols": [],
-  "rev": 9
+  "rev": 10
 }
