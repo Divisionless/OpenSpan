@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#11151d; --panel2:#0e1219;
+  --txt:#d7dde7; --mut:#7a8494; --acc:#4c9df0; --bd:#1e2530;
+  --todo:#7a8494; --doing:#4c9df0; --done:#4fbf7f; --blocked:#e4636b; --warn:#d9a441;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--txt); font-family:var(--font);
+  font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
+}
+#app{max-width:1680px;margin:0 auto;padding:22px 26px 80px}
+a{color:var(--acc)}
+
+/* ---------- error panel ---------- */
+#errorPanel{
+  background:#1b1013;border:1px solid #4a2429;border-left:3px solid var(--blocked);
+  border-radius:6px;padding:16px 18px;margin-bottom:20px;
+}
+#errorPanel h2{margin:0 0 6px;font-size:15px;color:#f0a3a8;font-weight:600}
+#errorPanel p{margin:4px 0;color:#c9b3b5}
+#errorPanel code{font-family:var(--mono);font-size:12.5px;background:#0f0b0d;padding:2px 6px;border-radius:4px;color:#e0c0c3}
+
+/* ---------- header ---------- */
+header.hdr{
+  display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;justify-content:space-between;
+  background:var(--panel);border:1px solid var(--bd);border-radius:8px;
+  padding:16px 18px;margin-bottom:22px;
+}
+.hdr-l{min-width:320px;flex:1 1 460px}
+.hdr-r{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:0 0 auto}
+#planName{
+  font-size:20px;font-weight:600;letter-spacing:.2px;color:#eef2f8;
+  outline:none;border-radius:4px;padding:1px 4px;margin:0 -4px 4px;display:inline-block;min-width:60px;
+}
+#planName:hover{background:#151a24}
+#planName:focus{background:#151a24;box-shadow:0 0 0 1px var(--acc)}
+.hdr-path{font-family:var(--mono);font-size:12px;color:var(--mut);word-break:break-all}
+.hdr-meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--mut)}
+.hdr-meta b{color:#9fb0c4;font-weight:500}
+.badge{
+  display:inline-block;background:#152033;border:1px solid #22344e;color:var(--acc);
+  border-radius:6px;padding:2px 9px;font-size:12px;font-weight:600;letter-spacing:.4px;
+}
+.badge.anchor{background:#1a1626;border-color:#2e2745;color:#a99adf;font-weight:500;font-family:var(--mono)}
+.overall{font-size:12px;color:var(--mut);text-align:right}
+.overall b{color:var(--txt);font-weight:600;font-size:14px}
+.overall .bar{width:190px;margin-top:5px}
+
+/* ---------- save indicator ---------- */
+.saveWrap{text-align:right;font-size:12px;min-height:16px}
+#saveState{color:var(--mut);font-variant-numeric:tabular-nums}
+#saveState.saving{color:var(--acc)}
+#saveState.saved{color:var(--done)}
+#saveState.pending{color:var(--warn)}
+#saveErr{color:var(--blocked);font-size:12px;margin-top:2px;max-width:340px}
+#saveErr:empty{display:none}
+
+/* ---------- sections ---------- */
+section.card{
+  background:var(--panel);border:1px solid var(--bd);border-radius:8px;
+  margin-bottom:22px;overflow:hidden;
+}
+.card-hd{
+  display:flex;align-items:center;gap:12px;justify-content:space-between;
+  padding:11px 16px;border-bottom:1px solid var(--bd);background:var(--panel2);
+}
+.card-hd h2{
+  margin:0;font-size:11.5px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#9fb0c4;
+}
+.card-hd .count{font-size:11.5px;color:var(--mut);letter-spacing:.5px}
+
+/* ---------- buttons ---------- */
+button{font-family:inherit;font-size:12px;color:var(--txt);background:#161c27;
+  border:1px solid var(--bd);border-radius:6px;padding:4px 11px;cursor:pointer;line-height:1.5}
+button:hover{background:#1c2431;border-color:#2b3648}
+button:active{background:#141a24}
+button:focus-visible{outline:1px solid var(--acc);outline-offset:1px}
+button.primary{background:#17293f;border-color:#26456b;color:#a9cdf5}
+button.primary:hover{background:#1c3350;border-color:#33578a}
+button.danger{background:#2a1418;border-color:#4a2429;color:#f0a3a8}
+button.danger:hover{background:#361a1f;border-color:#632f36}
+button.ghost{background:transparent;border-color:transparent;color:var(--mut);padding:2px 6px}
+button.ghost:hover{background:#1a2130;color:var(--txt)}
+.xbtn{
+  background:transparent;border:1px solid transparent;color:#57616f;border-radius:5px;
+  padding:0;width:20px;height:20px;line-height:18px;text-align:center;font-size:13px;cursor:pointer;
+}
+tr:hover .xbtn{color:var(--mut)}
+.xbtn:hover{background:#2a1418;border-color:#4a2429;color:#f0a3a8}
+
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse}
+thead th{
+  text-align:left;font-size:10.5px;font-weight:600;letter-spacing:1.1px;text-transform:uppercase;
+  color:#6e7889;padding:9px 12px;border-bottom:1px solid var(--bd);white-space:nowrap;
+  background:var(--panel2);position:sticky;top:0;z-index:3;
+}
+thead th.num{text-align:right}
+tbody td{
+  padding:11px 12px;border-bottom:1px solid #161c26;vertical-align:top;font-size:13.5px;
+}
+tbody tr:last-child td{border-bottom:none}
+tbody tr{transition:background .09s}
+tbody tr:hover{background:#141a24}
+tbody tr.st-done{opacity:.62}
+tbody tr.st-done:hover{opacity:.82}
+tbody tr.st-blocked td.c-title{box-shadow:inset 2px 0 0 0 var(--blocked)}
+.c-idx{width:44px;text-align:right;font-family:var(--mono);font-size:12px;color:#5d6779;
+  font-variant-numeric:tabular-nums;user-select:none}
+.c-sid{width:74px;font-family:var(--mono);font-size:12px;color:#8ea3bc;white-space:nowrap;user-select:none}
+.c-title{min-width:280px}
+.c-deps{width:190px}
+.c-prog{width:180px}
+.c-est{width:110px}
+.c-drv{min-width:150px}
+.c-time{width:98px}
+.c-model{width:130px}
+.c-status{width:100px}
+.c-extra{width:130px}
+.c-act{width:34px;text-align:right}
+.empty-row td{color:var(--mut);font-size:13px;padding:18px 12px;text-align:center}
+
+/* ---------- editable cells ---------- */
+.ed{
+  outline:none;border-radius:4px;padding:2px 5px;margin:-2px -5px;min-height:20px;
+  white-space:pre-wrap;overflow-wrap:anywhere;cursor:text;
+}
+.ed:hover{background:#161d28}
+.ed:focus{background:#161d28;box-shadow:0 0 0 1px var(--acc)}
+.ed:empty::before{content:attr(data-ph);color:#4d5665;pointer-events:none}
+.ed.mono{font-family:var(--mono);font-size:12.5px}
+.ed.title{font-weight:500;color:#e6ecf4;font-size:14px}
+.ed.mut{color:#96a2b3}
+.why{
+  display:block;margin-top:5px;font-size:12.5px;color:#8b95a6;
+  padding-left:11px;position:relative;
+}
+.why::before{content:"\2022";position:absolute;left:1px;top:0;color:#4c586a}
+.why.warn{box-shadow:0 0 0 1px var(--warn);background:#1d1a12}
+.why-note{
+  display:none;font-size:10.5px;color:var(--warn);letter-spacing:.5px;text-transform:uppercase;
+  margin-top:3px;padding-left:11px;
+}
+.why-note.on{display:block}
+
+/* ---------- chips ---------- */
+.chip{
+  display:inline-block;border-radius:6px;padding:2px 8px;font-size:11.5px;line-height:1.55;
+  border:1px solid transparent;white-space:nowrap;
+}
+.chip.status{cursor:pointer;user-select:none;min-width:66px;text-align:center;font-weight:500;
+  letter-spacing:.4px;text-transform:lowercase}
+.chip.status:hover{filter:brightness(1.25)}
+.chip.status.todo   {background:#1b2028;border-color:#2b3341;color:#95a0b1}
+.chip.status.doing  {background:#15263a;border-color:#27456b;color:#8bbef4}
+.chip.status.done   {background:#132720;border-color:#1f4a34;color:#7fd6a5}
+.chip.status.done::before{content:"\2713 ";font-weight:700}
+.chip.status.blocked{background:#2a1418;border-color:#4a2429;color:#f0a3a8}
+.tagrow{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px}
+.chip.ms{
+  background:#1a1626;border-color:#2e2745;color:#a99adf;cursor:pointer;font-family:var(--mono);font-size:11px;
+}
+.chip.ms.none{background:#151a22;border-color:#242c39;color:#5f6a7b;font-family:var(--font)}
+.chip.ms:hover{border-color:#4a3f6e;color:#c1b5ee}
+.depstrip{display:flex;flex-wrap:wrap;gap:5px;align-items:center;cursor:pointer;
+  border-radius:6px;padding:1px 3px;margin:-1px -3px;min-height:22px}
+.depstrip:hover{background:#161d28}
+.chip.dep{background:#151d29;border-color:#243044;color:#8ea3bc;font-family:var(--mono);font-size:11px}
+.chip.dep .hc{color:#5d6779}
+.depstrip .ph{font-size:11.5px;color:#4d5665}
+.depstrip:hover .ph{color:var(--mut)}
+
+/* ---------- progress bar ---------- */
+.bar{height:3px;background:#1a212c;border-radius:2px;overflow:hidden;width:100%}
+.bar>i{display:block;height:100%;background:var(--done);border-radius:2px;transition:width .18s}
+.bar.zero>i{background:#2b3341}
+.prog-txt{font-size:11.5px;color:var(--mut);margin-bottom:5px;font-variant-numeric:tabular-nums}
+.prog-txt b{color:#9fb0c4;font-weight:600}
+
+/* ---------- extra column header ---------- */
+th .exhd{display:flex;align-items:center;gap:5px}
+th .exname{outline:none;border-radius:3px;padding:0 3px;margin:0 -3px;min-width:24px;
+  text-transform:uppercase;letter-spacing:1.1px}
+th .exname:focus{background:#1a2130;box-shadow:0 0 0 1px var(--acc);color:var(--txt)}
+th .xbtn{width:16px;height:16px;line-height:14px;font-size:11px;color:#4a5361}
+th .xbtn:hover{color:#f0a3a8}
+th.addcol{text-align:right}
+
+/* ---------- popover ---------- */
+#pop{
+  position:absolute;z-index:60;background:#141a24;border:1px solid #2a3444;border-radius:7px;
+  box-shadow:0 10px 34px rgba(0,0,0,.62);padding:10px;min-width:230px;max-width:380px;font-size:13px;
+}
+#pop[hidden]{display:none}
+.pop-t{font-size:10.5px;letter-spacing:1.1px;text-transform:uppercase;color:#6e7889;margin:0 2px 8px;font-weight:600}
+.pop-list{max-height:290px;overflow:auto;margin:0 -4px;padding:0 4px}
+.pop-list label{
+  display:flex;gap:8px;align-items:baseline;padding:5px 6px;border-radius:5px;cursor:pointer;
+}
+.pop-list label:hover{background:#1b2330}
+.pop-list input{margin:0;accent-color:var(--acc);flex:0 0 auto;position:relative;top:2px}
+.pop-list .sid{font-family:var(--mono);font-size:11.5px;color:#8ea3bc;flex:0 0 auto}
+.pop-list .tt{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop-list .ms-hd{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#5d6779;padding:6px 6px 3px}
+.pop-msg{color:#c9b3b5;margin:0 2px 10px;line-height:1.5}
+.pop-msg strong{color:#f0a3a8}
+.pop-msg .sids{font-family:var(--mono);font-size:11.5px;color:#8ea3bc;display:block;margin-top:5px;
+  overflow-wrap:anywhere}
+.pop-row{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+#pop input.txt{
+  width:100%;background:#0e131b;border:1px solid #2a3444;border-radius:5px;color:var(--txt);
+  font-family:inherit;font-size:13px;padding:5px 8px;outline:none;margin-bottom:9px;
+}
+#pop input.txt:focus{border-color:var(--acc)}
+
+/* ---------- footer / log ---------- */
+details.logbox{background:var(--panel);border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+details.logbox>summary{
+  padding:11px 16px;cursor:pointer;list-style:none;background:var(--panel2);
+  font-size:11.5px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:#9fb0c4;
+  display:flex;align-items:center;gap:10px;
+}
+details.logbox>summary::-webkit-details-marker{display:none}
+details.logbox>summary::before{content:"\25B8";color:#5d6779;font-size:10px;transition:transform .12s}
+details.logbox[open]>summary::before{transform:rotate(90deg)}
+details.logbox>summary .count{margin-left:auto;font-weight:400;letter-spacing:.5px;color:var(--mut)}
+.logbody{padding:6px 16px 14px;border-top:1px solid var(--bd);max-height:340px;overflow:auto}
+.logbody ol{margin:0;padding:0;list-style:none}
+.logbody li{
+  padding:7px 0 7px 14px;border-bottom:1px solid #161c26;font-size:12.5px;color:#9aa5b5;
+  position:relative;overflow-wrap:anywhere;
+}
+.logbody li:last-child{border-bottom:none}
+.logbody li::before{content:"";position:absolute;left:2px;top:14px;width:4px;height:4px;
+  border-radius:50%;background:#2f3a4a}
+.logbody li .when{font-family:var(--mono);font-size:11.5px;color:#5d6779;margin-right:8px}
+.logbody .none{color:#4d5665;font-size:12.5px;padding:8px 0}
+.foot{margin-top:14px;font-size:11.5px;color:#4d5665;text-align:right}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="errorPanel" hidden></div>
+  <div id="main" hidden>
+
+    <header class="hdr">
+      <div class="hdr-l">
+        <div id="planName" contenteditable="true" spellcheck="false" data-ph="Untitled plan"></div>
+        <div class="hdr-path" id="projPath"></div>
+        <div class="hdr-meta" id="hdrMeta"></div>
+      </div>
+      <div class="hdr-r">
+        <div id="hdrBadges" style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"></div>
+        <div class="overall" id="overall"></div>
+        <div class="saveWrap">
+          <div id="saveState">idle</div>
+          <div id="saveErr"></div>
+        </div>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="card-hd">
+        <h2>Milestones</h2>
+        <span class="count" id="msCount"></span>
+        <span style="flex:1"></span>
+        <button class="primary" id="addMs">+ milestone</button>
+      </div>
+      <table id="msTable">
+        <thead>
+          <tr>
+            <th class="c-idx num">#</th>
+            <th class="c-sid">SID</th>
+            <th class="c-title">Title</th>
+            <th class="c-deps">Depends on</th>
+            <th class="c-prog">Progress</th>
+            <th class="c-status">Status</th>
+            <th class="c-act"></th>
+          </tr>
+        </thead>
+        <tbody id="msBody"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <div class="card-hd">
+        <h2>Work items</h2>
+        <span class="count" id="itCount"></span>
+        <span style="flex:1"></span>
+        <button class="primary" id="addIt">+ row</button>
+      </div>
+      <table id="itTable">
+        <thead><tr id="itHead"></tr></thead>
+        <tbody id="itBody"></tbody>
+      </table>
+    </section>
+
+    <details class="logbox" id="logBox">
+      <summary>Log <span class="count" id="logCount"></span></summary>
+      <div class="logbody" id="logBody"></div>
+    </details>
+
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+
+<div id="pop" hidden></div>
+
+<script>
+"use strict";
+(function () {
+
+/* ==================================================================
+   constants
+   ================================================================== */
+const STATUSES = ["todo", "doing", "done", "blocked"];
+const NEXT_STATUS = { todo: "doing", doing: "done", done: "blocked", blocked: "todo" };
+const SORT_RANK = { done: 0, doing: 1, todo: 2, blocked: 3 };
+const CORE_COLS = [
+  { key: "title",        label: "Title",              cls: "c-title" },
+  { key: "estTokens",    label: "Est. tokens",        cls: "c-est",   mono: true, ph: "—" },
+  { key: "costDrivers",  label: "What moves the cost",cls: "c-drv",   mut: true,  ph: "—" },
+  { key: "estTime",      label: "Est. time",          cls: "c-time",  mono: true, ph: "—" },
+  { key: "model",        label: "Model / effort",     cls: "c-model", mut: true,  ph: "—" }
+];
+const ACTUAL_COLS = [
+  { key: "actualTokens", label: "Actual tokens", cls: "c-est",  mono: true, ph: "—" },
+  { key: "actualTime",   label: "Actual time",   cls: "c-time", mono: true, ph: "—" }
+];
+const WHY_MAX = 9;
+const SAVE_DEBOUNCE = 600;
+const RESORT_DELAY = 1000;
+
+/* ==================================================================
+   state
+   ================================================================== */
+let DOC = null;               // the plan document (exactly what gets POSTed)
+let saveTimer = null;
+let resortTimer = null;
+let pendingRender = false;    // a structural render was deferred (a cell had focus)
+let focusAfterRender = null;  // {kind:'item'|'ms', sid:'...'} -> focus its title cell
+let popAnchor = null;
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const el = (tag, cls, txt) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+};
+
+/* ==================================================================
+   boot
+   ================================================================== */
+load();
+
+async function load() {
+  let res, text;
+  try {
+    res = await fetch("plan.json", { cache: "no-store" });
+  } catch (e) {
+    return showFatal("Could not reach plan.json.",
+      "The page could not make a request for <code>plan.json</code>. The most likely cause is that the plan server is not running, or this file was opened directly from disk (<code>file://</code>) instead of through the server.",
+      e.message);
+  }
+  if (!res.ok) {
+    return showFatal("plan.json returned HTTP " + res.status + ".",
+      "The server answered, but not with the plan. Check that <code>plan.json</code> sits in the same directory as this page and that the server was pointed at that directory.",
+      res.statusText || "");
+  }
+  try {
+    text = await res.text();
+    DOC = JSON.parse(text);
+  } catch (e) {
+    return showFatal("plan.json is not valid JSON.",
+      "The file was fetched but could not be parsed. Fix the JSON by hand (or restore <code>plan.json.bak</code>) and reload.",
+      e.message);
+  }
+  if (!DOC || typeof DOC !== "object" || Array.isArray(DOC)) {
+    return showFatal("plan.json is not a plan document.",
+      "The top level of the file must be a JSON object with <code>plan</code> and <code>items</code> keys.", "");
+  }
+
+  normalize();
+  $("#errorPanel").hidden = true;
+  $("#main").hidden = false;
+  render();
+  setSave("idle", "loaded");
+  wireGlobal();
+}
+
+function showFatal(title, html, detail) {
+  const p = $("#errorPanel");
+  p.innerHTML = "";
+  p.appendChild(el("h2", null, title));
+  const body = el("p"); body.innerHTML = html; p.appendChild(body);
+  const hint = el("p");
+  hint.innerHTML = 'Start the server with: <code>python plan_server.py &lt;this directory&gt;</code> ' +
+                   'then open <code>http://127.0.0.1:7350/plan.html</code>.';
+  p.appendChild(hint);
+  if (detail) p.appendChild(el("p", null, "Detail: " + detail));
+  p.hidden = false;
+  $("#main").hidden = true;
+}
+
+/* ==================================================================
+   model normalization  (tolerant of hand-edited / agent-written files)
+   ================================================================== */
+function normalize() {
+  const d = DOC;
+  if (typeof d.plan !== "string") d.plan = d.plan == null ? "" : String(d.plan);
+  if (typeof d.project !== "string") d.project = d.project == null ? "" : String(d.project);
+  if (typeof d.version !== "number" || !isFinite(d.version)) d.version = 1;
+  if (d.anchor === undefined) d.anchor = null;
+  const today = isoToday();
+  if (!d.created) d.created = today;
+  if (!d.updated) d.updated = today;
+  if (!Array.isArray(d.milestones)) d.milestones = [];
+  if (!Array.isArray(d.items)) d.items = [];
+  if (!Array.isArray(d.history)) d.history = [];
+  if (!Array.isArray(d.log)) d.log = [];
+  if (!Array.isArray(d.extraCols)) d.extraCols = [];
+  d.extraCols = d.extraCols.filter(c => typeof c === "string" && c.trim()).map(c => c.trim());
+
+  d.milestones.forEach((m, i) => {
+    if (typeof m.title !== "string") m.title = m.title == null ? "" : String(m.title);
+    if (!Array.isArray(m.deps)) m.deps = [];
+    m.deps = m.deps.filter(x => typeof x === "string");
+    if (!STATUSES.includes(m.status)) m.status = "todo";
+    if (typeof m.hcidx !== "number") m.hcidx = i + 1;
+  });
+  d.items.forEach((it, i) => {
+    ["title", "why", "estTokens", "costDrivers", "estTime", "model"].forEach(k => {
+      if (typeof it[k] !== "string") it[k] = it[k] == null ? "" : String(it[k]);
+    });
+    ["actualTokens", "actualTime"].forEach(k => {
+      if (it[k] != null && typeof it[k] !== "string") it[k] = String(it[k]);
+      if (it[k] === undefined) it[k] = null;
+    });
+    if (it.milestone === undefined) it.milestone = null;
+    if (!Array.isArray(it.deps)) it.deps = [];
+    it.deps = it.deps.filter(x => typeof x === "string");
+    if (!STATUSES.includes(it.status)) it.status = "todo";
+    if (typeof it.hcidx !== "number") it.hcidx = i + 1;
+    if (!it.extra || typeof it.extra !== "object" || Array.isArray(it.extra)) it.extra = {};
+  });
+
+  // SIDs: keep what is there, mint for anything missing, then make counters safe.
+  let ns = typeof d.nextSid === "number" ? d.nextSid : 1;
+  let nm = typeof d.nextMilestoneSid === "number" ? d.nextMilestoneSid : 1;
+  ns = Math.max(ns, maxSidNum(d.items, false) + 1);
+  nm = Math.max(nm, maxSidNum(d.milestones, true) + 1);
+  d.milestones.forEach(m => { if (!m.sid) m.sid = "v" + d.version + ".M" + (nm++); });
+  d.items.forEach(it => { if (!it.sid) it.sid = "v" + d.version + "." + pad2(ns++); });
+  d.nextSid = ns;
+  d.nextMilestoneSid = nm;
+
+  renumber(d.milestones);
+  renumber(d.items);
+  pruneDeps();
+}
+
+function maxSidNum(list, isMs) {
+  let max = 0;
+  const re = isMs ? /\.M(\d+)$/ : /\.(\d+)$/;
+  list.forEach(r => {
+    const m = typeof r.sid === "string" && r.sid.match(re);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  });
+  return max;
+}
+function pad2(n) { return String(n).padStart(2, "0"); }
+function isoToday() {
+  const d = new Date();
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+}
+function renumber(list) {
+  list.slice().sort((a, b) => (a.hcidx || 0) - (b.hcidx || 0)).forEach((r, i) => { r.hcidx = i + 1; });
+}
+function allRows() { return DOC.milestones.concat(DOC.items); }
+function sidExists(sid) { return allRows().some(r => r.sid === sid); }
+function pruneDeps() {
+  allRows().forEach(r => { r.deps = r.deps.filter(s => s !== r.sid && sidExists(s)); });
+  DOC.items.forEach(it => {
+    if (it.milestone && !DOC.milestones.some(m => m.sid === it.milestone)) it.milestone = null;
+  });
+}
+function rowBySid(sid) { return allRows().find(r => r.sid === sid) || null; }
+function displaySort(list) {
+  return list.slice().sort((a, b) =>
+    (SORT_RANK[a.status] ?? 2) - (SORT_RANK[b.status] ?? 2) || (a.hcidx || 0) - (b.hcidx || 0));
+}
+function msItems(sid) { return DOC.items.filter(i => i.milestone === sid); }
+function wordCount(s) { return (s || "").trim() ? s.trim().split(/\s+/).length : 0; }
+
+/* ==================================================================
+   save
+   ================================================================== */
+function scheduleSave() {
+  setSave("pending", "editing\u2026");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, SAVE_DEBOUNCE);
+}
+
+async function doSave() {
+  clearTimeout(saveTimer);
+  setSave("saving", "saving\u2026");
+  let res, body;
+  try {
+    res = await fetch("/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(DOC)
+    });
+    body = await res.json().catch(() => null);
+  } catch (e) {
+    setSave("error", "not saved");
+    setErr("Save failed \u2014 no response from the server. Is plan_server.py still running? (" + e.message + ")");
+    return;
+  }
+  if (!res.ok || !body || body.ok !== true) {
+    const msg = (body && body.error) ? body.error : ("HTTP " + res.status);
+    setSave("error", "not saved");
+    setErr("Save rejected: " + msg);
+    return;
+  }
+  DOC.updated = isoToday();
+  const t = new Date();
+  setSave("saved", "saved " + pad2(t.getHours()) + ":" + pad2(t.getMinutes()) + ":" + pad2(t.getSeconds()));
+  setErr("");
+  renderHeader();
+}
+
+function setSave(cls, txt) {
+  const n = $("#saveState");
+  n.className = cls;
+  n.textContent = txt;
+}
+function setErr(msg) { $("#saveErr").textContent = msg || ""; }
+
+/* ==================================================================
+   render orchestration
+   ================================================================== */
+function editingNow() {
+  const a = document.activeElement;
+  return !!(a && a.isContentEditable && a.closest("#app"));
+}
+/** Structural re-render; deferred while a cell is focused so typing is never interrupted. */
+function requestRender() {
+  if (editingNow() || !$("#pop").hidden) { pendingRender = true; return; }
+  pendingRender = false;
+  render();
+}
+function render() {
+  renderHeader();
+  renderMilestones();
+  renderItems();
+  renderLog();
+  $("#foot").textContent = "plan.json \u00b7 " + DOC.items.length + " items \u00b7 " +
+    DOC.milestones.length + " milestones \u00b7 saved to disk on every edit";
+  if (focusAfterRender) {
+    const sel = '[data-focus="' + cssEsc(focusAfterRender) + '"]';
+    const target = document.querySelector(sel);
+    focusAfterRender = null;
+    if (target) { target.focus(); caretEnd(target); target.scrollIntoView({ block: "nearest" }); }
+  }
+}
+function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+function caretEnd(node) {
+  const r = document.createRange(); r.selectNodeContents(node); r.collapse(false);
+  const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+}
+
+/* ==================================================================
+   header
+   ================================================================== */
+function renderHeader() {
+  const nameEl = $("#planName");
+  if (document.activeElement !== nameEl) nameEl.textContent = DOC.plan || "";
+  $("#projPath").textContent = DOC.project || "";
+
+  const badges = $("#hdrBadges");
+  badges.innerHTML = "";
+  badges.appendChild(el("span", "badge", "v" + DOC.version));
+  if (DOC.anchor) badges.appendChild(el("span", "badge anchor", "anchor: " + DOC.anchor));
+
+  const meta = $("#hdrMeta");
+  meta.innerHTML = "";
+  const put = (k, v) => {
+    const s = el("span");
+    s.appendChild(el("b", null, k + " "));
+    s.appendChild(document.createTextNode(v));
+    meta.appendChild(s);
+  };
+  put("created", DOC.created || "\u2014");
+  put("updated", DOC.updated || "\u2014");
+
+  const done = DOC.items.filter(i => i.status === "done").length;
+  const tot = DOC.items.length;
+  const ov = $("#overall");
+  ov.innerHTML = "";
+  const line = el("div");
+  line.appendChild(el("b", null, done + "/" + tot));
+  line.appendChild(document.createTextNode(" items done"));
+  ov.appendChild(line);
+  ov.appendChild(bar(done, tot));
+
+  $("#msCount").textContent = DOC.milestones.length + " total";
+  $("#itCount").textContent = tot + " total \u00b7 " + done + " done";
+}
+
+function bar(n, m) {
+  const b = el("div", "bar" + (n === 0 ? " zero" : ""));
+  const i = el("i");
+  i.style.width = (m > 0 ? Math.round((n / m) * 100) : 0) + "%";
+  b.appendChild(i);
+  return b;
+}
+
+/* ==================================================================
+   editable cell factory
+   ================================================================== */
+function editable(obj, key, opts) {
+  opts = opts || {};
+  const n = el("div", "ed" + (opts.cls ? " " + opts.cls : ""));
+  n.contentEditable = "true";
+  n.spellcheck = false;
+  n.setAttribute("data-ph", opts.ph || "");
+  const cur = obj[key];
+  n.textContent = cur == null ? "" : String(cur);
+
+  n.addEventListener("input", () => {
+    let v = n.innerText.replace(/\u00a0/g, " ").replace(/\n+$/, "");
+    obj[key] = (opts.nullable && v.trim() === "") ? null : v;
+    if (opts.oninput) opts.oninput(v, n);
+    scheduleSave();
+  });
+  n.addEventListener("paste", ev => {
+    ev.preventDefault();
+    const t = (ev.clipboardData || window.clipboardData).getData("text/plain").replace(/\s*\n\s*/g, " ");
+    insertPlain(t);
+  });
+  n.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); n.blur(); }
+  });
+  n.addEventListener("blur", () => {
+    if (opts.onblur) opts.onblur(n);
+    maybeDeferredRender();
+  });
+  return n;
+}
+
+function insertPlain(text) {
+  if (!text) return;
+  try { if (document.execCommand("insertText", false, text)) return; } catch (e) { /* fall through */ }
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const r = sel.getRangeAt(0);
+  r.deleteContents();
+  const node = document.createTextNode(text);
+  r.insertNode(node);
+  r.setStartAfter(node); r.collapse(true);
+  sel.removeAllRanges(); sel.addRange(r);
+}
+
+function maybeDeferredRender(delay) {
+  setTimeout(() => {
+    if (pendingRender && !editingNow() && $("#pop").hidden) { pendingRender = false; render(); }
+  }, delay || 0);
+}
+
+/* ==================================================================
+   milestones table
+   ================================================================== */
+function renderMilestones() {
+  const tb = $("#msBody");
+  tb.innerHTML = "";
+  if (!DOC.milestones.length) {
+    const tr = el("tr", "empty-row");
+    const td = el("td", null, "No milestones yet. Use \u201c+ milestone\u201d to add one.");
+    td.colSpan = 7; tr.appendChild(td); tb.appendChild(tr);
+    return;
+  }
+  displaySort(DOC.milestones).forEach(m => {
+    const tr = el("tr", "st-" + m.status);
+    tr.appendChild(el("td", "c-idx", String(m.hcidx)));
+    tr.appendChild(el("td", "c-sid", m.sid));
+
+    const tdT = el("td", "c-title");
+    const t = editable(m, "title", { cls: "title", ph: "Milestone title" });
+    t.setAttribute("data-focus", m.sid);
+    tdT.appendChild(t);
+    tr.appendChild(tdT);
+
+    const tdD = el("td", "c-deps");
+    tdD.appendChild(depStrip(m));
+    tr.appendChild(tdD);
+
+    const kids = msItems(m.sid);
+    const nDone = kids.filter(i => i.status === "done").length;
+    const tdP = el("td", "c-prog");
+    const txt = el("div", "prog-txt");
+    txt.appendChild(el("b", null, nDone + "/" + kids.length));
+    txt.appendChild(document.createTextNode(kids.length ? " done" : " \u2014 no items"));
+    tdP.appendChild(txt);
+    tdP.appendChild(bar(nDone, kids.length));
+    tr.appendChild(tdP);
+
+    const tdS = el("td", "c-status");
+    tdS.appendChild(statusChip(m));
+    tr.appendChild(tdS);
+
+    const tdX = el("td", "c-act");
+    tdX.appendChild(deleteBtn(m, "milestone"));
+    tr.appendChild(tdX);
+
+    tb.appendChild(tr);
+  });
+}
+
+/* ==================================================================
+   work items table
+   ================================================================== */
+function renderItems() {
+  const hr = $("#itHead");
+  hr.innerHTML = "";
+  const th = (label, cls, num) => {
+    const n = el("th", cls, label);
+    if (num) n.classList.add("num");
+    hr.appendChild(n); return n;
+  };
+  th("#", "c-idx", true);
+  th("SID", "c-sid");
+  CORE_COLS.forEach(c => th(c.label, c.cls));
+  th("Status", "c-status");
+  ACTUAL_COLS.forEach(c => th(c.label, c.cls));
+  DOC.extraCols.forEach(name => {
+    const n = el("th", "c-extra");
+    const wrap = el("div", "exhd");
+    const nm = el("span", "exname", name);
+    nm.contentEditable = "true"; nm.spellcheck = false;
+    nm.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); nm.blur(); } });
+    nm.addEventListener("blur", () => renameExtraCol(name, nm.innerText.trim(), nm));
+    const x = el("button", "xbtn", "\u00d7");
+    x.title = "Remove column";
+    x.addEventListener("click", ev => { ev.stopPropagation(); confirmRemoveCol(x, name); });
+    wrap.appendChild(nm); wrap.appendChild(x);
+    n.appendChild(wrap);
+    hr.appendChild(n);
+  });
+  const last = el("th", "c-act addcol");
+  const addc = el("button", "ghost", "+ col");
+  addc.title = "Add a user-defined column";
+  addc.addEventListener("click", ev => { ev.stopPropagation(); promptAddCol(addc); });
+  last.appendChild(addc);
+  hr.appendChild(last);
+
+  const ncols = 2 + CORE_COLS.length + 1 + ACTUAL_COLS.length + DOC.extraCols.length + 1;
+
+  const tb = $("#itBody");
+  tb.innerHTML = "";
+  if (!DOC.items.length) {
+    const tr = el("tr", "empty-row");
+    const td = el("td", null, "No work items yet. Use \u201c+ row\u201d to add one.");
+    td.colSpan = ncols; tr.appendChild(td); tb.appendChild(tr);
+    return;
+  }
+
+  displaySort(DOC.items).forEach(it => {
+    const tr = el("tr", "st-" + it.status);
+    tr.appendChild(el("td", "c-idx", String(it.hcidx)));
+    tr.appendChild(el("td", "c-sid", it.sid));
+
+    // -- title cell: title / why bullet / milestone tag + dep chips
+    const tdT = el("td", "c-title");
+    const t = editable(it, "title", { cls: "title", ph: "What gets done" });
+    t.setAttribute("data-focus", it.sid);
+    tdT.appendChild(t);
+
+    const note = el("div", "why-note", WHY_MAX + "-word max");
+    const why = editable(it, "why", {
+      cls: "why", ph: "why this item exists",
+      oninput: (v, node) => applyWhyWarn(node, note, v)
+    });
+    applyWhyWarn(why, note, it.why);
+    tdT.appendChild(why);
+    tdT.appendChild(note);
+
+    const tags = el("div", "tagrow");
+    tags.appendChild(msTag(it));
+    tags.appendChild(depStrip(it));
+    tdT.appendChild(tags);
+    tr.appendChild(tdT);
+
+    CORE_COLS.slice(1).forEach(c => {
+      const td = el("td", c.cls);
+      td.appendChild(editable(it, c.key, {
+        cls: (c.mono ? "mono" : "") + (c.mut ? " mut" : ""), ph: c.ph
+      }));
+      tr.appendChild(td);
+    });
+
+    const tdS = el("td", "c-status");
+    tdS.appendChild(statusChip(it));
+    tr.appendChild(tdS);
+
+    ACTUAL_COLS.forEach(c => {
+      const td = el("td", c.cls);
+      td.appendChild(editable(it, c.key, { cls: "mono", ph: c.ph, nullable: true }));
+      tr.appendChild(td);
+    });
+
+    DOC.extraCols.forEach(name => {
+      const td = el("td", "c-extra");
+      if (!it.extra) it.extra = {};
+      if (typeof it.extra[name] !== "string") it.extra[name] = it.extra[name] == null ? "" : String(it.extra[name]);
+      td.appendChild(editable(it.extra, name, { cls: "mut", ph: "\u2014" }));
+      tr.appendChild(td);
+    });
+
+    const tdX = el("td", "c-act");
+    tdX.appendChild(deleteBtn(it, "item"));
+    tr.appendChild(tdX);
+
+    tb.appendChild(tr);
+  });
+}
+
+function applyWhyWarn(node, note, v) {
+  const over = wordCount(v) > WHY_MAX;
+  node.classList.toggle("warn", over);
+  note.classList.toggle("on", over);
+}
+
+/* ==================================================================
+   status chip
+   ================================================================== */
+function statusChip(row) {
+  const c = el("span", "chip status " + row.status, row.status);
+  c.title = "click to cycle: todo \u2192 doing \u2192 done \u2192 blocked";
+  c.setAttribute("role", "button");
+  c.tabIndex = 0;
+  const cycle = () => {
+    row.status = NEXT_STATUS[row.status] || "todo";
+    c.className = "chip status " + row.status;
+    c.textContent = row.status;
+    const tr = c.closest("tr");
+    if (tr) tr.className = "st-" + row.status;
+    renderHeader();
+    renderMilestones();        // milestone progress bars track item status
+    scheduleSave();
+    clearTimeout(resortTimer);
+    resortTimer = setTimeout(requestRender, RESORT_DELAY);   // re-sort after the dust settles
+  };
+  c.addEventListener("click", cycle);
+  c.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); cycle(); }
+  });
+  return c;
+}
+
+/* ==================================================================
+   dependency chips + popover
+   ================================================================== */
+function depStrip(row) {
+  const strip = el("div", "depstrip");
+  strip.title = "click to choose dependencies";
+  paintDeps(strip, row);
+  strip.addEventListener("click", ev => { ev.stopPropagation(); openDepsPop(strip, row); });
+  return strip;
+}
+
+function paintDeps(strip, row) {
+  strip.innerHTML = "";
+  if (!row.deps.length) { strip.appendChild(el("span", "ph", "+ deps")); return; }
+  row.deps.forEach(sid => {
+    const dep = rowBySid(sid);
+    const c = el("span", "chip dep");
+    c.appendChild(document.createTextNode(sid));
+    if (dep) {
+      const h = el("span", "hc", " (#" + dep.hcidx + ")");
+      c.appendChild(h);
+      c.title = dep.title || sid;
+    }
+    strip.appendChild(c);
+  });
+}
+
+function openDepsPop(anchor, row) {
+  const pop = openPop(anchor);
+  pop.appendChild(el("div", "pop-t", "Depends on \u2014 " + row.sid));
+  const list = el("div", "pop-list");
+
+  const section = (label, rows) => {
+    if (!rows.length) return;
+    list.appendChild(el("div", "ms-hd", label));
+    rows.forEach(r => {
+      if (r.sid === row.sid) return;
+      const lab = el("label");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = row.deps.indexOf(r.sid) !== -1;
+      cb.addEventListener("change", () => {
+        const i = row.deps.indexOf(r.sid);
+        if (cb.checked && i === -1) row.deps.push(r.sid);
+        if (!cb.checked && i !== -1) row.deps.splice(i, 1);
+        row.deps.sort();
+        paintDeps(anchor, row);       // in-place: popover stays open, no structural render
+        scheduleSave();
+      });
+      lab.appendChild(cb);
+      lab.appendChild(el("span", "sid", r.sid));
+      lab.appendChild(el("span", "tt", r.title || "(untitled)"));
+      list.appendChild(lab);
+    });
+  };
+  section("Milestones", displaySort(DOC.milestones));
+  section("Work items", displaySort(DOC.items));
+
+  if (!list.childNodes.length) list.appendChild(el("div", "ms-hd", "nothing else to depend on"));
+  pop.appendChild(list);
+  const rowb = el("div", "pop-row");
+  const done = el("button", null, "Done");
+  done.addEventListener("click", closePop);
+  rowb.appendChild(done);
+  pop.appendChild(rowb);
+  placePop(anchor);
+}
+
+/* ==================================================================
+   milestone tag + popover
+   ================================================================== */
+function msTag(it) {
+  const m = it.milestone ? DOC.milestones.find(x => x.sid === it.milestone) : null;
+  const c = el("span", "chip ms" + (m ? "" : " none"));
+  c.textContent = m ? (m.sid + " \u00b7 " + (m.title || "untitled")) : "no milestone";
+  c.title = "click to assign a milestone";
+  c.addEventListener("click", ev => { ev.stopPropagation(); openMsPop(c, it); });
+  return c;
+}
+
+function openMsPop(anchor, it) {
+  const pop = openPop(anchor);
+  pop.appendChild(el("div", "pop-t", "Milestone \u2014 " + it.sid));
+  const list = el("div", "pop-list");
+  const mk = (sid, label) => {
+    const lab = el("label");
+    const rb = el("input");
+    rb.type = "radio"; rb.name = "mspick"; rb.checked = (it.milestone || null) === sid;
+    rb.addEventListener("change", () => {
+      it.milestone = sid;
+      scheduleSave();
+      closePop();
+      renderMilestones();
+      requestRender();
+    });
+    lab.appendChild(rb);
+    if (sid) lab.appendChild(el("span", "sid", sid));
+    lab.appendChild(el("span", "tt", label));
+    list.appendChild(lab);
+  };
+  mk(null, "none");
+  displaySort(DOC.milestones).forEach(m => mk(m.sid, m.title || "(untitled)"));
+  pop.appendChild(list);
+  placePop(anchor);
+}
+
+/* ==================================================================
+   delete + inline confirm
+   ================================================================== */
+function deleteBtn(row, kind) {
+  const b = el("button", "xbtn", "\u00d7");
+  b.title = "Delete this " + kind;
+  b.addEventListener("click", ev => { ev.stopPropagation(); confirmDelete(b, row, kind); });
+  return b;
+}
+
+function confirmDelete(anchor, row, kind) {
+  const dependents = allRows().filter(r => r.sid !== row.sid && r.deps.indexOf(row.sid) !== -1);
+  const orphans = kind === "milestone" ? msItems(row.sid) : [];
+  const pop = openPop(anchor);
+  pop.appendChild(el("div", "pop-t", "Delete " + row.sid));
+
+  const msg = el("div", "pop-msg");
+  msg.appendChild(document.createTextNode("Delete " + kind + " \u201c" + (row.title || "untitled") + "\u201d?"));
+  pop.appendChild(msg);
+
+  if (dependents.length) {
+    const w = el("div", "pop-msg");
+    const s = el("strong", null, dependents.length + (dependents.length === 1 ? " row depends" : " rows depend") + " on this");
+    w.appendChild(s);
+    w.appendChild(document.createTextNode(". Its SID will be stripped from their deps."));
+    w.appendChild(el("span", "sids", dependents.map(r => r.sid + " (#" + r.hcidx + ")").join("   ")));
+    pop.appendChild(w);
+  }
+  if (orphans.length) {
+    const w = el("div", "pop-msg");
+    w.appendChild(document.createTextNode(orphans.length + " item(s) assigned to this milestone will become unassigned."));
+    w.appendChild(el("span", "sids", orphans.map(r => r.sid).join("   ")));
+    pop.appendChild(w);
+  }
+
+  const rowb = el("div", "pop-row");
+  const cancel = el("button", null, "Cancel");
+  cancel.addEventListener("click", closePop);
+  const del = el("button", "danger", "Delete");
+  del.addEventListener("click", () => {
+    const list = kind === "milestone" ? DOC.milestones : DOC.items;
+    const i = list.indexOf(row);
+    if (i !== -1) list.splice(i, 1);
+    allRows().forEach(r => {
+      const j = r.deps.indexOf(row.sid);
+      if (j !== -1) r.deps.splice(j, 1);
+    });
+    if (kind === "milestone") {
+      DOC.items.forEach(it => { if (it.milestone === row.sid) it.milestone = null; });
+    }
+    renumber(list);            // compact renumber by creation order; SIDs untouched
+    closePop();
+    scheduleSave();
+    render();
+  });
+  rowb.appendChild(cancel); rowb.appendChild(del);
+  pop.appendChild(rowb);
+  placePop(anchor);
+  del.focus();
+}
+
+/* ==================================================================
+   adding rows
+   ================================================================== */
+function addItem() {
+  const sid = "v" + DOC.version + "." + pad2(DOC.nextSid++);
+  DOC.items.push({
+    sid: sid, hcidx: DOC.items.length + 1, milestone: null, deps: [],
+    title: "", why: "", estTokens: "", costDrivers: "", estTime: "", model: "",
+    status: "todo", actualTokens: null, actualTime: null, extra: {}
+  });
+  focusAfterRender = sid;
+  scheduleSave();
+  render();
+}
+function addMilestone() {
+  const sid = "v" + DOC.version + ".M" + (DOC.nextMilestoneSid++);
+  DOC.milestones.push({ sid: sid, hcidx: DOC.milestones.length + 1, title: "", deps: [], status: "todo" });
+  focusAfterRender = sid;
+  scheduleSave();
+  render();
+}
+
+/* ==================================================================
+   extra columns
+   ================================================================== */
+function promptAddCol(anchor) {
+  const pop = openPop(anchor);
+  pop.appendChild(el("div", "pop-t", "New column"));
+  const inp = el("input", "txt");
+  inp.type = "text"; inp.placeholder = "Column name (e.g. Owner)";
+  const err = el("div", "pop-msg"); err.style.display = "none";
+  const commit = () => {
+    const name = inp.value.trim();
+    if (!name) { err.textContent = "Give the column a name."; err.style.display = ""; return; }
+    if (DOC.extraCols.indexOf(name) !== -1 || isCoreName(name)) {
+      err.textContent = "A column called \u201c" + name + "\u201d already exists."; err.style.display = ""; return;
+    }
+    DOC.extraCols.push(name);
+    DOC.items.forEach(it => { if (!it.extra) it.extra = {}; if (it.extra[name] == null) it.extra[name] = ""; });
+    closePop(); scheduleSave(); render();
+  };
+  inp.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+  });
+  pop.appendChild(inp);
+  pop.appendChild(err);
+  const rowb = el("div", "pop-row");
+  const cancel = el("button", null, "Cancel"); cancel.addEventListener("click", closePop);
+  const ok = el("button", "primary", "Add"); ok.addEventListener("click", commit);
+  rowb.appendChild(cancel); rowb.appendChild(ok);
+  pop.appendChild(rowb);
+  placePop(anchor);
+  inp.focus();
+}
+
+function isCoreName(name) {
+  const n = name.toLowerCase();
+  return ["#", "sid", "title", "est. tokens", "what moves the cost", "est. time",
+          "model / effort", "status", "actual tokens", "actual time"].indexOf(n) !== -1;
+}
+
+function renameExtraCol(oldName, newName, node) {
+  if (newName === oldName) return;
+  if (!newName || DOC.extraCols.indexOf(newName) !== -1 || isCoreName(newName)) {
+    node.textContent = oldName;   // reject silently, restore
+    return;
+  }
+  const i = DOC.extraCols.indexOf(oldName);
+  if (i === -1) return;
+  DOC.extraCols[i] = newName;
+  DOC.items.forEach(it => {
+    if (!it.extra) it.extra = {};
+    it.extra[newName] = it.extra[oldName] != null ? it.extra[oldName] : "";
+    delete it.extra[oldName];
+  });
+  scheduleSave();
+  requestRender();
+}
+
+function confirmRemoveCol(anchor, name) {
+  const withVals = DOC.items.filter(it => it.extra && String(it.extra[name] || "").trim()).length;
+  const pop = openPop(anchor);
+  pop.appendChild(el("div", "pop-t", "Remove column"));
+  const msg = el("div", "pop-msg");
+  msg.appendChild(document.createTextNode("Remove the column \u201c" + name + "\u201d?"));
+  if (withVals) {
+    msg.appendChild(el("span", "sids", withVals + " item(s) have a value in it \u2014 those values are deleted."));
+  }
+  pop.appendChild(msg);
+  const rowb = el("div", "pop-row");
+  const cancel = el("button", null, "Cancel"); cancel.addEventListener("click", closePop);
+  const del = el("button", "danger", "Remove"); del.addEventListener("click", () => {
+    const i = DOC.extraCols.indexOf(name);
+    if (i !== -1) DOC.extraCols.splice(i, 1);
+    DOC.items.forEach(it => { if (it.extra) delete it.extra[name]; });
+    closePop(); scheduleSave(); render();
+  });
+  rowb.appendChild(cancel); rowb.appendChild(del);
+  pop.appendChild(rowb);
+  placePop(anchor);
+  del.focus();
+}
+
+/* ==================================================================
+   log
+   ================================================================== */
+function renderLog() {
+  const body = $("#logBody");
+  body.innerHTML = "";
+  $("#logCount").textContent = DOC.log.length + (DOC.log.length === 1 ? " entry" : " entries");
+  if (!DOC.log.length) {
+    body.appendChild(el("div", "none", "No log entries. The agent writes here between sessions."));
+    return;
+  }
+  const ol = el("ol");
+  DOC.log.forEach(entry => {
+    const li = el("li");
+    if (entry && typeof entry === "object") {
+      const when = entry.when || entry.date || entry.ts || entry.time;
+      if (when) li.appendChild(el("span", "when", String(when)));
+      const text = entry.text || entry.msg || entry.note || entry.entry;
+      li.appendChild(document.createTextNode(text != null ? String(text) : JSON.stringify(entry)));
+    } else {
+      li.textContent = String(entry);
+    }
+    ol.appendChild(li);
+  });
+  body.appendChild(ol);
+}
+
+/* ==================================================================
+   popover plumbing
+   ================================================================== */
+function openPop(anchor) {
+  const pop = $("#pop");
+  pop.innerHTML = "";
+  pop.hidden = false;
+  popAnchor = anchor;
+  return pop;
+}
+function placePop(anchor) {
+  const pop = $("#pop");
+  const r = anchor.getBoundingClientRect();
+  const sx = window.scrollX, sy = window.scrollY;
+  pop.style.left = "0px"; pop.style.top = "0px";
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = r.left + sx;
+  let top = r.bottom + sy + 6;
+  const maxLeft = sx + document.documentElement.clientWidth - pw - 12;
+  if (left > maxLeft) left = Math.max(sx + 8, maxLeft);
+  if (r.bottom + ph + 14 > document.documentElement.clientHeight && r.top - ph - 6 > 0) {
+    top = r.top + sy - ph - 6;
+  }
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+}
+function closePop(renderDelay) {
+  const pop = $("#pop");
+  if (pop.hidden) return;
+  pop.hidden = true;
+  pop.innerHTML = "";
+  popAnchor = null;
+  maybeDeferredRender(typeof renderDelay === "number" ? renderDelay : 0);
+}
+
+/* ==================================================================
+   global wiring
+   ================================================================== */
+function wireGlobal() {
+  const nameEl = $("#planName");
+  nameEl.addEventListener("input", () => {
+    DOC.plan = nameEl.innerText.replace(/\u00a0/g, " ").replace(/\n+$/, "");
+    document.title = DOC.plan || "Plan";
+    scheduleSave();
+  });
+  nameEl.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); nameEl.blur(); } });
+  nameEl.addEventListener("paste", ev => {
+    ev.preventDefault();
+    insertPlain((ev.clipboardData || window.clipboardData).getData("text/plain").replace(/\s+/g, " "));
+  });
+  nameEl.addEventListener("blur", maybeDeferredRender);
+  document.title = DOC.plan || "Plan";
+
+  $("#addIt").addEventListener("click", addItem);
+  $("#addMs").addEventListener("click", addMilestone);
+
+  document.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") {
+      if (!$("#pop").hidden) { ev.preventDefault(); closePop(); }
+      else if (editingNow()) document.activeElement.blur();
+    }
+  });
+  document.addEventListener("mousedown", ev => {
+    const pop = $("#pop");
+    if (pop.hidden) return;
+    if (pop.contains(ev.target)) return;
+    if (popAnchor && popAnchor.contains(ev.target)) return;
+    // delay any deferred structural render past this mousedown's click,
+    // so clicking straight from one popover to another still lands.
+    closePop(180);
+  }, true);
+  window.addEventListener("beforeunload", ev => {
+    if (saveTimer) { clearTimeout(saveTimer); doSave(); }
+  });
+}
+
+})();
+</script>
+</body>
+</html>
