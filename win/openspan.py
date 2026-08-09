@@ -6937,6 +6937,16 @@ class App:
         self.to_windows.pack(side="left", expand=True, fill="x", padx=2)
         self._refresh_mode_buttons()
 
+        desk = _section(pane_system, "System desk — AI usage")
+        self.usage_codex = tk.StringVar(value="Codex  reading local data…")
+        self.usage_claude = tk.StringVar(value="Claude  reading local data…")
+        tk.Label(desk, textvariable=self.usage_codex, bg=BG, fg=MUTED,
+                 font=("Consolas", 8), anchor="w", justify="left").pack(
+            fill="x")
+        tk.Label(desk, textvariable=self.usage_claude, bg=BG, fg=MUTED,
+                 font=("Consolas", 8), anchor="w", justify="left").pack(
+            fill="x")
+
         # THE designated spacer, and the only expanding child of `bridge`.
         # Nothing is drawn in it. It exists so the window can still be dragged
         # taller without any panel distorting to absorb the extra height, and so
@@ -7045,6 +7055,62 @@ class App:
                          f"{content_h}px. The bottom {content_h - avail_h}px "
                          "cannot be shown — panels below the fold are cut off.")
         self._tick()
+        threading.Thread(target=self._usage_worker,
+                         name="openspan-usage-monitor", daemon=True).start()
+
+    def _usage_worker(self):
+        """Refresh local AI usage without ever touching Tk off-thread."""
+        while not self._closing:
+            codex_text = "Codex   … usage read failed"
+            claude_text = "Claude  … usage read failed"
+            try:
+                import usage_monitor
+            except Exception:  # noqa: BLE001
+                pass
+            else:
+                try:
+                    snapshot = usage_monitor.codex_snapshot()
+                    if snapshot is None:
+                        codex_text = (
+                            "Codex   no local data (has it run on this machine?)")
+                    else:
+                        reset = time.strftime(
+                            "%b %d", time.localtime(float(snapshot["resets_at"])))
+                        codex_text = (
+                            f"Codex   ● {float(snapshot['used_percent']):.1f}% "
+                            f"of weekly window · resets {reset} · "
+                            f"plan {snapshot['plan_type']}")
+                except Exception:  # noqa: BLE001
+                    codex_text = "Codex   … usage read failed"
+
+                try:
+                    burn = usage_monitor.claude_burn(7)
+                    if not burn.get("days"):
+                        claude_text = "Claude  no local data"
+                    else:
+                        today = time.strftime("%Y-%m-%d", time.gmtime())
+                        bucket = burn["days"].get(today, {})
+                        main = bucket.get(
+                            "main", {"fresh": 0, "cache": 0, "out": 0})
+                        subagents = bucket.get(
+                            "subagents", {"fresh": 0, "cache": 0, "out": 0})
+                        today_out = main["out"] + subagents["out"]
+                        today_fresh = main["fresh"] + subagents["fresh"]
+                        totals = burn["totals"]
+                        spend = totals["fresh"] + totals["out"]
+                        claude_text = (
+                            f"Claude  today {today_out / 1_000_000:.1f}M out + "
+                            f"{today_fresh / 1_000:.1f}k fresh · 7d spend "
+                            f"{spend / 1_000_000:.1f}M "
+                            f"(cache {totals['cache'] / 1_000_000_000:.1f}B)")
+                except Exception:  # noqa: BLE001
+                    claude_text = "Claude  … usage read failed"
+
+            if self._closing:
+                return
+            self.ui(lambda codex=codex_text, claude=claude_text: (
+                self.usage_codex.set(codex), self.usage_claude.set(claude)))
+            time.sleep(600)
 
     # ---- the rail: one pane at a time ------------------------------------
     def select_pane(self, key, rederive=True, remember=True):
