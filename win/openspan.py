@@ -2684,6 +2684,99 @@ def _not_landed_advice():
     )
 
 
+# One PnP kick per device per app run. The kick is the missing half of
+# VirtualBox's own capture: the filter arms, the Windows stack comes down,
+# and the re-add as a VBox proxy silently never runs -- observed on every
+# boot of 2026-08-08. A restart of the device node is a fresh arrival, and
+# the armed filter takes a fresh arrival reliably (often completing every
+# OTHER pending capture in the same stroke). One kick only: a device the
+# kick cannot save is a phantom, and phantoms take a physical replug.
+_PNP_KICKED = set()
+
+
+def _pnp_kick(device, runner=None):
+    """Restart one radio's Windows device node so the armed filter captures
+    it as a fresh arrival. Returns (ok, detail). Generic: the instance ID is
+    built from the device's own VID/PID/serial, or discovered by prefix when
+    the adapter (like a built-in Intel) exposes no serial."""
+    runner = runner or (lambda args: subprocess.run(
+        args, capture_output=True, text=True, timeout=30,
+        creationflags=NO_WINDOW))
+
+    def norm(value):
+        return str(value or "").strip().upper().removeprefix("0X")
+
+    vid, pid = norm(device.get("vendor")), norm(device.get("product_id"))
+    serial = str(device.get("serial") or "").strip()
+    if not vid or not pid:
+        return False, "device reports no VID/PID to kick by"
+    prefix = f"USB\\VID_{vid}&PID_{pid}\\"
+    if serial:
+        instances = [prefix + serial]
+    else:
+        r = runner(["pnputil", "/enum-devices"])
+        instances = [line.split(":", 1)[1].strip()
+                     for line in (r.stdout or "").splitlines()
+                     if ":" in line and prefix in line.upper()]
+        if not instances:
+            return False, "no Windows device node matches the adapter"
+    iid = instances[0]
+    r = runner(["pnputil", "/restart-device", iid])
+    out = ((r.stdout or "") + (r.stderr or ""))
+    if r.returncode == 0 and "successfully" in out.lower():
+        return True, iid
+    if "not connected" in out.lower():
+        return False, ("its Windows node is a phantom -- only a physical "
+                       "replug re-enumerates it")
+    return False, (out.strip()[-160:] or "pnputil would not restart it")
+
+
+def explicit_handoff(state=None, verify=None, kick=None, settle=None,
+                     config=None, log=None):
+    """The app performs the delivery VirtualBox failed to finish.
+
+    For each Captured-but-not-delivered radio: ONE PnP kick (per app run),
+    a settle, then the only verification that counts -- the VM's own
+    attached list. Returns (delivered_labels, failed_pairs). Anything the
+    kick cannot deliver keeps the fail-closed replug coaching; nothing here
+    retries, loops, or touches healthy radios.
+    """
+    state = state if state is not None else read_radio_state()
+    verify = verify or (lambda: parse_usb_attached(
+        vbox("showvminfo", VM, "--machinereadable", quiet=True).stdout))
+    kick = kick or _pnp_kick
+    settle = ATTACH_SETTLE * 4 if settle is None else settle
+    emit = log or (lambda m: _emit("event", m))
+    delivered, failed = [], []
+    for device in state.get("captured", []):
+        label = usb_label(device, config)
+        uuids = {str(value).lower() for value in
+                 (device.get("uuids") or {device.get("uuid")}) if value}
+        identity = tuple(sorted(uuids))
+        if identity in _PNP_KICKED:
+            failed.append((label, _captured_advice()))
+            continue
+        _PNP_KICKED.add(identity)
+        emit(f"performing the delivery VirtualBox left unfinished: {label}…")
+        ok, detail = kick(device)
+        if not ok:
+            _USB_ATTACH_BLOCKED.update(uuids)
+            failed.append((label, f"kick failed -- {detail}. "
+                           + REPLUG_ADVICE))
+            continue
+        time.sleep(settle)
+        now_held = {str(value).lower() for value in verify()}
+        if uuids & now_held or not uuids:
+            _USB_ATTACH_BLOCKED.difference_update(uuids)
+            delivered.append(label)
+            emit(f"{label} delivered to the VM.")
+        else:
+            _USB_ATTACH_BLOCKED.update(uuids)
+            failed.append((label, "the kick re-enumerated it but the VM "
+                           "still does not hold it. " + REPLUG_ADVICE))
+    return delivered, failed
+
+
 def gentle_release(vbox_run=None, verify=None, settle=0.5, log=None):
     """Detach each VM-held radio, one verified detach at a time, BEFORE the
     VM powers off.
@@ -2758,13 +2851,15 @@ def repair_radios(config=None, settle=None):
     }
 
 
-def reclaim_radios(settle=ATTACH_SETTLE, verify=None, config=None):
+def reclaim_radios(settle=ATTACH_SETTLE, verify=None, config=None, kick=None):
     """Serialize repair clicks, then run exactly one ownership pass."""
     with _USB_REPAIR_LOCK:
-        return _reclaim_radios_once(settle=settle, verify=verify, config=config)
+        return _reclaim_radios_once(settle=settle, verify=verify,
+                                    config=config, kick=kick)
 
 
-def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None):
+def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None,
+                         kick=None):
     """Resolve one ownership report without retrying. Returns two result lists.
 
     **Success is the VM holding the device, not VBoxManage returning zero.**
@@ -2792,11 +2887,15 @@ def _reclaim_radios_once(settle=ATTACH_SETTLE, verify=None, config=None):
         failed.append((usb_filter_label(spec),
                        "No matching host adapter is present. OpenSpan sent no "
                        "attach request; check that the radio is plugged in."))
-    for device in state.get("captured", []):
-        _USB_ATTACH_BLOCKED.update(
-            str(value).lower() for value in
-            (device.get("uuids") or {device.get("uuid")}) if value)
-        failed.append((usb_label(device, config), _captured_advice()))
+    # Captured-but-not-delivered: perform the delivery VirtualBox left
+    # unfinished (one PnP kick per device per run) instead of only advising.
+    # Whatever the kick cannot save keeps the fail-closed replug coaching.
+    kicked_ok, kicked_failed = explicit_handoff(
+        state=state, verify=verify, config=config,
+        settle=settle * 4 if settle else settle,
+        **({"kick": kick} if kick else {}))
+    recovered.extend(kicked_ok)
+    failed.extend(kicked_failed)
     for device in state.get("unavailable", []):
         failed.append((
             usb_label(device, config),
@@ -8452,6 +8551,18 @@ class App:
             # app waited forever on a daemon that only Pair could create.
             # Safe by construction: each device owns its own radio, so these
             # can never claim each other's controller.
+            # Before bringing lanes up, finish any delivery VirtualBox left
+            # hanging at VM start -- otherwise every lane on an undelivered
+            # radio fails its bringup and the fix is a human with a dongle.
+            try:
+                usb_state = read_radio_state()
+                if usb_state.get("captured"):
+                    _, undelivered = explicit_handoff(
+                        state=usb_state, config=self.canvas.config)
+                    for label, reason in undelivered:
+                        _emit("err", f"{label}: {reason}")
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"explicit handoff pass failed: {exc}")
             for device in self.canvas.devices():
                 radio = str(device.get("radio", "") or "")
                 if not device.get("enabled", True) or not radio:

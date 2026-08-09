@@ -509,18 +509,43 @@ try:
           f"tried {len([c for c in calls if 'usbattach' in c])} times")
 
     A._USB_ATTACH_BLOCKED.clear()
+    A._PNP_KICKED.clear()
     A.vbox = fake_vbox
     captured = [dict(LOST[0], uuid="captured-radio-1", state="Captured")]
     A.read_radio_state = lambda: ownership_state(captured=captured)
     calls.clear()
-    got, failed = A.reclaim_radios(settle=0, verify=lambda: set())
-    check("Captured-but-not-delivered fails closed without usbattach",
+    phantom = lambda device: (False, "its Windows node is a phantom (test)")
+    got, failed = A.reclaim_radios(settle=0, verify=lambda: set(),
+                                   kick=phantom)
+    check("Captured-but-not-delivered never gets a usbattach",
           not got and failed and not [c for c in calls if "usbattach" in c],
           str(calls))
-    check("Captured failure tells the operator to replug, never restart the VM",
+    check("a phantom the kick cannot save gets the replug coaching",
           "plug it back in" in failed[0][1]
           and "restart Windows" in failed[0][1]          # built-in radio rung
-          and "Do not restart the VM" in failed[0][1], failed[0][1])
+          and "restart the vm" in failed[0][1].lower(), failed[0][1])
+
+    # The kick is the delivery VirtualBox left unfinished: when it works and
+    # the VM is then observed holding the device, the radio is RECOVERED.
+    A._PNP_KICKED.clear()
+    calls.clear()
+    got, failed = A.reclaim_radios(
+        settle=0, verify=lambda: {"captured-radio-1"},
+        kick=lambda device: (True, "USB\\VID_TEST\\1"))
+    check("a successful kick + VM-held verification recovers the radio",
+          got and not failed and not [c for c in calls if "usbattach" in c],
+          f"got={got} failed={str(failed)[:120]}")
+    check("a delivered radio is no longer attach-blocked",
+          "captured-radio-1" not in A._USB_ATTACH_BLOCKED)
+
+    # One kick per device per app run: the second pass must not kick again.
+    kick_count = []
+    got, failed = A.reclaim_radios(
+        settle=0, verify=lambda: set(),
+        kick=lambda device: kick_count.append(1) or (True, "x"))
+    check("a device is kicked at most once per app run",
+          not kick_count and failed
+          and "plug it back in" in failed[0][1], str(failed)[:120])
 
     A._USB_ATTACH_BLOCKED.clear()
     absent = [{"name": "MissingRadio", "vendor": "0x1234",

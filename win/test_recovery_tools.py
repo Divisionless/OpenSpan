@@ -58,6 +58,52 @@ check("a radio that will not detach is reported, never retried",
       rel == ["ccc"] and kept == ["stuck"]
       and len([c for c in calls if "stuck" in c]) == 1)
 
+# --- _pnp_kick: generic instance-ID construction and phantom honesty -------
+runs = []
+
+
+def fake_runner(args):
+    runs.append(args)
+
+    class R:
+        returncode = 0
+        stderr = ""
+        stdout = ("Restarting device...\nDevice restarted successfully."
+                  if args[1] == "/restart-device" else
+                  "Instance ID: USB\\VID_8087&PID_0AAA\\5&AB&0&14\n")
+    return R()
+
+
+ok, detail = A._pnp_kick(
+    {"vendor": "0x2357", "product_id": "0x0604", "serial": "AABBCCDDEEFF"},
+    runner=fake_runner)
+check("kick builds the instance ID from the device's own VID/PID/serial",
+      ok and runs[-1] == ["pnputil", "/restart-device",
+                          "USB\\VID_2357&PID_0604\\AABBCCDDEEFF"])
+
+runs.clear()
+ok, detail = A._pnp_kick(
+    {"vendor": "8087", "product_id": "0aaa", "serial": ""},
+    runner=fake_runner)
+check("a serial-less adapter is discovered by VID/PID prefix, never assumed",
+      ok and runs[0][1] == "/enum-devices"
+      and runs[-1][2] == "USB\\VID_8087&PID_0AAA\\5&AB&0&14")
+
+
+def phantom_runner(args):
+    class R:
+        returncode = 1
+        stderr = ""
+        stdout = "Failed to restart device.\nThe device is not connected."
+    return R()
+
+
+ok, detail = A._pnp_kick(
+    {"vendor": "2357", "product_id": "0604", "serial": "X"},
+    runner=phantom_runner)
+check("a phantom node is named as such -- replug territory, not retry",
+      not ok and "phantom" in detail)
+
 app_src = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
 check("every power-off path releases gently before pulling the plug",
       app_src.count("gentle_release()")
