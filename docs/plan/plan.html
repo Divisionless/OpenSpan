@@ -273,10 +273,12 @@ details.logbox>summary .count{margin-left:auto;font-weight:400;letter-spacing:.5
       </div>
     </header>
 
-    <section class="card">
-      <div class="card-hd">
-        <h2>Milestones</h2>
+    <section class="card" id="msSection">
+      <div class="card-hd" id="msToggleHd" style="cursor:pointer"
+           title="Milestones are derived from the work, not edited — collapsed until they earn attention">
+        <h2><span id="msCaret" style="display:inline-block;width:1em">▸</span>Milestones</h2>
         <span class="count" id="msCount"></span>
+        <span class="count" style="opacity:.6">determined later — the work items are the board</span>
         <span style="flex:1"></span>
         <button class="primary" id="addMs">+ milestone</button>
       </div>
@@ -1259,6 +1261,26 @@ function wireGlobal() {
     if (saveTimer) { clearTimeout(saveTimer); doSave(); }
   });
 }
+
+/* Milestones are derived from the work, not hand-edited: collapsed by
+   default, one click to peek. The work items are the board. */
+(function () {
+  const tbl = document.getElementById("msTable");
+  const add = document.getElementById("addMs");
+  const caret = document.getElementById("msCaret");
+  const hd = document.getElementById("msToggleHd");
+  let open = false;
+  const apply = () => {
+    tbl.style.display = open ? "" : "none";
+    add.style.display = open ? "" : "none";
+    caret.textContent = open ? "▾" : "▸";
+  };
+  hd.addEventListener("click", ev => {
+    if (ev.target === add) return;   // the button keeps its own job
+    open = !open; apply();
+  });
+  apply();
+})();
 
 })();
 </script>
