@@ -1635,8 +1635,8 @@
       "estTime": "1h",
       "model": "Codex exec + Claude review",
       "status": "doing",
-      "actualTokens": null,
-      "actualTime": null
+      "actualTokens": "~177k Codex + ~70k Claude review",
+      "actualTime": "~50m"
     }
   ],
   "history": [],
@@ -1668,6 +1668,10 @@
     {
       "date": "2026-08-09",
       "entry": "v2.86 slice 1 done: win/usage_monitor.py readers + 12 fixture checks, probe verified live (Codex 2.0% weekly, resets 08-16; Claude week: ~28M fresh+out vs 7.3B cache). One review loop via codex exec resume (component split). Codex ~113k (48k+64k), Claude review ~35k. Slice 2 = panel UI."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v2.86 code complete: both slices committed (d5e66f1, b860efc), 51 checks green, EsotericOS-next.exe staged (70MB). Status stays doing until Doug eyeballs the System desk panel live. Estimate grade: 80k-150k band held only because Codex carried ~177k of writing; future rows estimate the two budgets separately."
     }
   ],
   "extraCols": []
