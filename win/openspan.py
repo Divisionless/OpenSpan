@@ -8427,7 +8427,11 @@ class App:
                     f"bash /opt/openspan/set-hid-device.sh {device['id']} "
                     f"{radio} {int(device.get('port', BASE_PORT))} "
                     f"{shlex.quote(name)}",
-                    timeout=45, quiet=True)
+                    # 90s, not 45: a real preflight recovery (3 spaced probes,
+                    # lane stop, bluetoothd kill+restart, lane restore) runs
+                    # ~50-60s guest-side. A caller that hangs up at 45s reports
+                    # failure for work that then completes anyway.
+                    timeout=90, quiet=True)
                 if r.returncode == 0:
                     _emit("event", f"{device.get('name', device['id'])} lane "
                                    f"ready on its own radio ({radio}).")
@@ -8675,7 +8679,9 @@ class App:
                 "for i in $(seq 25); do "
                 f"ss -ltn 2>/dev/null | grep -q ':{port}' && exit 0; "
                 "sleep 1; done; exit 1")
-            r = ssh_guest(command, timeout=55)
+            # 90s: preflight recovery alone can spend ~60s before the 25s
+            # port wait even starts. See the boot-time bringup timeout note.
+            r = ssh_guest(command, timeout=90)
         if r.returncode:
             set_target_advertising(device_id, False)
             state["inflight"] = False
