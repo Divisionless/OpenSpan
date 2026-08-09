@@ -5,7 +5,7 @@
   "anchor": "git:7b6f1a7",
   "created": "2026-08-09",
   "updated": "2026-08-09",
-  "nextSid": 97,
+  "nextSid": 102,
   "nextMilestoneSid": 9,
   "milestones": [
     {
@@ -1399,7 +1399,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1418,7 +1418,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -1700,6 +1700,81 @@
       "estTime": "30m",
       "model": "Codex exec + Claude review",
       "status": "doing",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.97",
+      "hcidx": 97,
+      "milestone": "v2.M2",
+      "deps": [],
+      "title": "WIRE: settings + config + hotkey host into the app",
+      "why": "dark code becomes live",
+      "estTokens": "150k-300k",
+      "costDrivers": "touches openspan.py; hook host OFF by default (portal + Input Director already hold the keyboard)",
+      "estTime": "1h",
+      "model": "Claude (serialized \u2014 one writer on openspan.py)",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.98",
+      "hcidx": 98,
+      "milestone": "v2.M3",
+      "deps": [],
+      "title": "WIRE: window control \u2014 tiling chords, rules, presets",
+      "why": "the headline daily driver",
+      "estTokens": "150k-300k",
+      "costDrivers": "chords through the landed router; every action reversible",
+      "estTime": "1h",
+      "model": "Claude (serialized \u2014 one writer on openspan.py)",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.99",
+      "hcidx": 99,
+      "milestone": "v2.M4",
+      "deps": [],
+      "title": "WIRE: spaces into the app",
+      "why": "workspaces become usable",
+      "estTokens": "150k-300k",
+      "costDrivers": "after the spaces subsystem lands",
+      "estTime": "1h",
+      "model": "Claude (serialized \u2014 one writer on openspan.py)",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.100",
+      "hcidx": 100,
+      "milestone": "v2.M5",
+      "deps": [],
+      "title": "WIRE: desktop & input features",
+      "why": "stacks, widgets, remapping live",
+      "estTokens": "150k-300k",
+      "costDrivers": "after those ports land",
+      "estTime": "1h",
+      "model": "Claude (serialized \u2014 one writer on openspan.py)",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null
+    },
+    {
+      "sid": "v2.101",
+      "hcidx": 101,
+      "milestone": "v2.M6",
+      "deps": [],
+      "title": "WIRE: overviews + retirement build",
+      "why": "the build that retires the old",
+      "estTokens": "200k-400k",
+      "costDrivers": "full pass over Doug's 21 picks, then the build he judges",
+      "estTime": "1.5h",
+      "model": "Claude (serialized \u2014 one writer on openspan.py)",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null
     }
@@ -3412,8 +3487,12 @@
     {
       "date": "2026-08-09",
       "entry": "Wave B: v1.62 settings service + v1.74 tiling geometry + v1.30 display profiles running as three parallel Codex slices. Display profiles is read-only by brief - it may never apply a mode change to the live desk."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "Added five WIRE rows (one per milestone). Ported modules are dark code until wired; retirement of the old program is gated on wiring + builds Doug tests, not on port count."
     }
   ],
   "extraCols": [],
-  "rev": 12
+  "rev": 13
 }
