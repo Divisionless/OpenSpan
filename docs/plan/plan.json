@@ -172,9 +172,10 @@
       "costDrivers": "hook edge cases; Win-release masking",
       "estTime": "3h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.02",
@@ -187,9 +188,10 @@
       "costDrivers": "DWM frame bounds; cloaked-window filtering",
       "estTime": "3h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.03",
@@ -202,9 +204,10 @@
       "costDrivers": "reconnect semantics; debounced topology",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.04",
@@ -217,9 +220,10 @@
       "costDrivers": "explorer-restart re-add; tooltip law",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.05",
@@ -232,9 +236,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.06",
@@ -247,9 +252,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.07",
@@ -262,9 +268,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.08",
@@ -277,9 +284,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.09",
@@ -292,9 +300,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.10",
@@ -307,9 +316,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.11",
@@ -322,9 +332,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.12",
@@ -337,9 +348,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.13",
@@ -352,9 +364,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.14",
@@ -367,9 +380,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.15",
@@ -382,9 +396,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.16",
@@ -397,9 +412,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.17",
@@ -412,9 +428,10 @@
       "costDrivers": "spec only \u2014 full build; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.18",
@@ -427,9 +444,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.19",
@@ -442,9 +460,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.20",
@@ -457,9 +476,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.21",
@@ -472,9 +492,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.22",
@@ -487,9 +508,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.23",
@@ -502,9 +524,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.24",
@@ -519,9 +542,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.25",
@@ -536,9 +560,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.26",
@@ -553,9 +578,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.27",
@@ -570,9 +596,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.28",
@@ -587,9 +614,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.29",
@@ -604,9 +632,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.30",
@@ -621,9 +650,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.31",
@@ -638,9 +668,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.32",
@@ -655,9 +686,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.33",
@@ -672,9 +704,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.34",
@@ -687,9 +720,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.35",
@@ -702,9 +736,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.36",
@@ -717,9 +752,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.37",
@@ -732,9 +768,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.38",
@@ -747,9 +784,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.39",
@@ -762,9 +800,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.40",
@@ -777,9 +816,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.41",
@@ -794,9 +834,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.42",
@@ -811,9 +852,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.43",
@@ -828,9 +870,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.44",
@@ -845,9 +888,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.45",
@@ -862,9 +906,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.46",
@@ -879,9 +924,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.47",
@@ -896,9 +942,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.48",
@@ -913,9 +960,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.49",
@@ -930,9 +978,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.50",
@@ -947,9 +996,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.51",
@@ -964,9 +1014,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.52",
@@ -981,9 +1032,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.53",
@@ -996,9 +1048,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.54",
@@ -1011,9 +1064,10 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.55",
@@ -1026,9 +1080,10 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.56",
@@ -1043,9 +1098,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.57",
@@ -1060,9 +1116,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.58",
@@ -1075,9 +1132,10 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.59",
@@ -1090,9 +1148,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.60",
@@ -1105,9 +1164,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.61",
@@ -1120,9 +1180,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.62",
@@ -1135,9 +1196,10 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.63",
@@ -1150,9 +1212,10 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.64",
@@ -1165,9 +1228,10 @@
       "costDrivers": "working C# reference module; was Always On",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.65",
@@ -1180,9 +1244,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.66",
@@ -1195,9 +1260,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.67",
@@ -1210,9 +1276,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.68",
@@ -1228,9 +1295,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.69",
@@ -1246,9 +1314,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.70",
@@ -1264,9 +1333,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.71",
@@ -1282,9 +1352,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.72",
@@ -1300,9 +1371,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "2h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.73",
@@ -1318,9 +1390,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.74",
@@ -1336,9 +1409,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.75",
@@ -1354,9 +1428,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.76",
@@ -1372,9 +1447,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.77",
@@ -1390,9 +1466,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.78",
@@ -1408,9 +1485,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.79",
@@ -1426,9 +1504,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.80",
@@ -1444,9 +1523,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.81",
@@ -1462,9 +1542,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "4\u20138h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.82",
@@ -1480,9 +1561,10 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.83",
@@ -1498,9 +1580,10 @@
       "costDrivers": "spec only \u2014 full build; was On by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.84",
@@ -1516,9 +1599,10 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "1\u20132h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     },
     {
       "sid": "v1.85",
@@ -1534,9 +1618,10 @@
       "costDrivers": "spec only \u2014 full build; was Off by Default",
       "estTime": "3\u20135h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "deferred",
       "actualTokens": null,
-      "actualTime": null
+      "actualTime": null,
+      "extra": {}
     }
   ],
   "history": [],
@@ -1544,6 +1629,11 @@
     {
       "date": "2026-08-09",
       "entry": "Board generated from FEATURE_STATUS.md ground truth: 81 features + 4 foundations. Doug culls by deleting rows."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "Inverted to opt-in: all 85 items deferred; Doug promotes his starters (status chip: deferred -> todo)."
     }
-  ]
+  ],
+  "extraCols": []
 }
