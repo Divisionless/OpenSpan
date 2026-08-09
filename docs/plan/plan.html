@@ -120,6 +120,32 @@ section.card:has(#itTable) .card-hd{position:sticky;
    column row never sticks. The items card trades its corner clipping for a
    working frozen header; the radius loss is invisible at these colors. */
 section.card:has(#itTable){overflow:visible}
+
+/* ---------- left rail: single-page nav over the groups ---------- */
+#app{margin-left:216px}
+#rail{position:fixed;left:12px;top:16px;width:190px;z-index:45;
+  font-size:12.5px;user-select:none}
+#rail .railt{font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;
+  color:#6e7889;font-weight:700;padding:4px 10px 8px}
+#rail a{display:flex;justify-content:space-between;align-items:baseline;
+  gap:8px;color:#95a0b1;text-decoration:none;padding:5px 10px;
+  border-radius:6px;border-left:2px solid transparent}
+#rail a:hover{background:#17161C;color:#E6E6F0}
+#rail a.active{color:#B28DFF;border-left-color:#8A5CFF;background:#17161C}
+#rail a.dim{opacity:.35}
+#rail .cnt{color:#6e7889;font-size:11px;font-family:var(--mono, monospace)}
+
+/* group header rows inside the items table */
+tr.grp-hd td{background:#0D0D12;color:#B28DFF;font-size:11px;
+  letter-spacing:1.4px;text-transform:uppercase;font-weight:700;
+  padding:14px 12px 8px;border-bottom:1px solid var(--bd)}
+tr.grp-hd{scroll-margin-top:calc(var(--frozen2-h, 0px) + 6px)}
+
+/* the filter box lives in the frozen bar */
+#itSearch{background:#0B0B11;border:1px solid var(--bd);border-radius:6px;
+  color:var(--txt);padding:6px 10px;font:inherit;font-size:12.5px;
+  width:230px;outline:none}
+#itSearch:focus{border-color:#5F3DC4;box-shadow:0 0 0 2px rgba(138,92,255,.18)}
 thead th.num{text-align:right}
 tbody td{
   padding:11px 12px;border-bottom:1px solid #161c26;vertical-align:top;font-size:13.5px;
@@ -313,11 +339,15 @@ details.logbox>summary .count{margin-left:auto;font-weight:400;letter-spacing:.5
       </table>
     </section>
 
+    <nav id="rail" hidden></nav>
+
     <section class="card">
       <div class="card-hd">
         <h2>Work items</h2>
         <span class="count" id="itCount"></span>
         <span style="flex:1"></span>
+        <input id="itSearch" type="search" placeholder="filter rows…"
+               spellcheck="false" autocomplete="off">
         <button class="primary" id="addIt">+ row</button>
       </div>
       <table id="itTable">
@@ -800,7 +830,7 @@ function renderItems() {
     return;
   }
 
-  displaySort(DOC.items).forEach(it => {
+  const buildRow = it => {
     const tr = el("tr", "st-" + it.status);
     tr.appendChild(el("td", "c-idx", String(it.hcidx)));
     tr.appendChild(el("td", "c-sid", it.sid));
@@ -856,7 +886,119 @@ function renderItems() {
     tdX.appendChild(deleteBtn(it, "item"));
     tr.appendChild(tdX);
 
+    tr.dataset.grp = it.milestone || "none";
+    tr.dataset.search = [it.sid, it.title, it.why, it.costDrivers,
+                         it.status].join(" ").toLowerCase();
     tb.appendChild(tr);
+  };
+
+  // Grouped by cluster (milestone), in milestone order; status sort inside
+  // each group. A group header row anchors the rail's #links.
+  const grpHeader = (sid, title, rows, n) => {
+    const tr = el("tr", "grp-hd");
+    tr.id = "grp-" + n;
+    tr.dataset.grphd = sid;
+    const td = el("td");
+    td.colSpan = ncols;
+    const lit = rows.filter(r => r.status !== "deferred").length;
+    td.textContent = title + "  ·  " + rows.length
+      + (lit ? "  ·  " + lit + " chosen" : "");
+    tr.appendChild(td);
+    tb.appendChild(tr);
+  };
+  const grouped = DOC.milestones.map((m, i) => (
+    { sid: m.sid, title: m.title || "untitled",
+      rows: DOC.items.filter(it => it.milestone === m.sid), n: i + 1 }));
+  const loose = DOC.items.filter(
+    it => !DOC.milestones.some(m => m.sid === it.milestone));
+  if (loose.length) {
+    grouped.push({ sid: "none", title: "Ungrouped", rows: loose,
+                   n: grouped.length + 1 });
+  }
+  grouped.forEach(g => {
+    if (!g.rows.length) return;
+    grpHeader(g.sid, g.title, g.rows, g.n);
+    displaySort(g.rows).forEach(buildRow);
+  });
+  renderRail(grouped.filter(g => g.rows.length));
+  applyFilter();
+}
+
+/* ==================================================================
+   left rail + live filter + scrollspy
+   ================================================================== */
+let FILTER_Q = "";
+let railSpy = null;
+
+function renderRail(groups) {
+  const rail = document.getElementById("rail");
+  rail.hidden = false;
+  rail.innerHTML = "";
+  rail.appendChild(el("div", "railt", "Groups"));
+  groups.forEach(g => {
+    const a = el("a");
+    a.href = "#grp-" + g.n;
+    a.dataset.grp = g.sid;
+    const lit = g.rows.filter(r => r.status !== "deferred").length;
+    a.appendChild(el("span", null, g.title));
+    a.appendChild(el("span", "cnt", lit ? lit + "/" + g.rows.length
+                                        : String(g.rows.length)));
+    a.addEventListener("click", ev => {
+      ev.preventDefault();
+      const t = document.getElementById("grp-" + g.n);
+      if (!t) return;
+      // scroll-margin on <tr> is unreliable; compute the offset ourselves
+      const frozen = parseFloat(getComputedStyle(document.documentElement)
+        .getPropertyValue("--frozen2-h")) || 0;
+      // instant, not smooth: programmatic smooth scroll no-ops under the
+      // OS reduce-motion preference, and an instant jump is the point of
+      // a nav rail anyway.
+      window.scrollTo(
+        0, window.scrollY + t.getBoundingClientRect().top - frozen - 6);
+    });
+    rail.appendChild(a);
+  });
+
+  const links = [...rail.querySelectorAll("a")];
+  const mark = sid => links.forEach(
+    a => a.classList.toggle("active", a.dataset.grp === sid));
+  // plain scroll computation: the active group is the last header at or
+  // above the frozen line. No observers -- deterministic and cheap.
+  const spy = () => {
+    const frozen = parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue("--frozen2-h")) || 0;
+    let cur = null;
+    document.querySelectorAll("tr.grp-hd").forEach(h => {
+      if (h.style.display !== "none"
+          && h.getBoundingClientRect().top <= frozen + 12) {
+        cur = h.dataset.grphd;
+      }
+    });
+    mark(cur || (groups[0] && groups[0].sid));
+  };
+  // position-delta watcher, not a scroll listener: scroll events proved
+  // unreliable in this embedding, and a 250ms compare of scrollY is free.
+  if (railSpy) clearInterval(railSpy);
+  let lastY = -1;
+  railSpy = setInterval(() => {
+    if (window.scrollY !== lastY) { lastY = window.scrollY; spy(); }
+  }, 250);
+  spy();
+}
+
+function applyFilter() {
+  const q = FILTER_Q.trim().toLowerCase();
+  const visible = {};
+  document.querySelectorAll("#itBody tr[data-grp]").forEach(tr => {
+    const show = !q || tr.dataset.search.indexOf(q) !== -1;
+    tr.style.display = show ? "" : "none";
+    if (show) visible[tr.dataset.grp] = (visible[tr.dataset.grp] || 0) + 1;
+  });
+  document.querySelectorAll("tr.grp-hd").forEach(h => {
+    h.style.display = visible[h.dataset.grphd] ? "" : "none";
+  });
+  document.querySelectorAll("#rail a").forEach(a => {
+    a.classList.toggle("dim", q ? !visible[a.dataset.grp] : false);
   });
 }
 
@@ -1330,6 +1472,13 @@ function wireGlobal() {
   };
   window.addEventListener("load", settle);
   settle();
+
+  // live filter: typing narrows rows; groups and rail follow
+  const search = document.getElementById("itSearch");
+  search.addEventListener("input", () => {
+    FILTER_Q = search.value;
+    applyFilter();
+  });
 })();
 
 })();
