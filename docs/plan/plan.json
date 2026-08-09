@@ -86,7 +86,7 @@
       "costDrivers": "hook edge cases; Win-release masking",
       "estTime": "3h",
       "model": "Opus subagent",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -101,10 +101,10 @@
       "estTokens": "250k\u2013400k",
       "costDrivers": "DWM frame bounds; cloaked-window filtering",
       "estTime": "3h",
-      "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "model": "Codex exec + Claude review",
+      "status": "done",
+      "actualTokens": "~99k Codex + ~30k Claude review",
+      "actualTime": "~15m",
       "extra": {}
     },
     {
@@ -3384,8 +3384,16 @@
     {
       "date": "2026-08-09",
       "entry": "OpenSpan suite (the multidevice control roadmap) added as v2.M8 with 10 rows v2.87-v2.96 \u2014 it lived only in the session task list and the board misread as import-only."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.01 + v1.02 open as parallel Codex slices: standalone modules only, no app wiring (briefs v1.01-keyboard-interception.md, v1.02-window-tracker.md)."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.02 done: window tracker ported (22 checks); enumeration verified on the live desktop (7 eligible, 291 invisible excluded); WinEvent hook proven with a synthetic off-screen window (30 events)."
     }
   ],
   "extraCols": [],
-  "rev": 5
+  "rev": 7
 }
