@@ -2237,3 +2237,43 @@ number, so the test certified the understatement. It now only asserts a wait is
 advertised; section (g) checks the value.
 
 Suite 1223 -> 1236 across 19 files.
+
+### Iteration 3 — the day the radios taught us everything (2026-08-08/09)
+
+Two blue screens opened the day; a tagged release closed it. The whole arc is
+preserved in the recovery indexes (`D:\OpenSpan-preservation\2026-08-08*`), but
+the engineering lessons live here.
+
+The wedge that caused it all: VirtualBox arms a capture, tears down the
+Windows device stack, and the re-add as a VBox proxy silently never runs. The
+device becomes a PnP phantom — electrically present, unreachable by software,
+"Captured" forever. The BSODs (0xCA) were churn against that state, not
+steady-state passthrough: the stable week's own logs show 12/12 clean attaches
+until the first mass-release storm at a cold-backup poweroff injured the tree
+— timestamped eight seconds after the release, misread twice before the logs
+settled it. dwErr=31 descriptor noise turned out to mean "Windows owns this
+radio", not damage; a warm reboot just re-rolls which radios wedge; ONE
+physical replug (a fresh arrival = a new device object) completes every
+pending capture at once.
+
+What landed as iteration-3 (tag on 8a3f38c, exe E03207FD…): the six-commit
+integration (fail-closed USB ownership with a per-run attach blocklist,
+stuck-input release keyed to the owning socket, templated lane provisioning
+behind a refuse-legacy guard, per-device volume that rejects ambiguous sink
+evidence), plus stable radio identity — lanes keyed by controller MAC,
+resolved at every service start, proven the same night by an enumeration
+reshuffle that would previously have crossed every lane — plus hardware-
+identity radio labels (a controller list must never wear a lane's name), a
+preflight that demands three spaced probe failures before its global remedy
+(and probes with busctl, because a python interpreter's cold-start can eat a
+6-second window all by itself), and an agent unit that dies by SIGKILL in
+under 5s instead of parking systemd's job queue for 90 (the entire "45-second
+lane timeout" mystery, twice).
+
+Carried forward, eyes open: VM restarts still race the capture path (the
+recovery cycle makes the app perform and verify its own handoffs); lanes
+resolve their MAC only at start (event-driven re-resolution is filed with the
+peer-identity work); audio dies without a watchdog when its radio hosts HID
+churn; and the Cold-restart button is honest about the guest while lying
+about the hardware — it cold-boots the kernel and mass-releases the radios,
+which is precisely backwards, and its redesign is specified.
