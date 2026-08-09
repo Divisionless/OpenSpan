@@ -8272,6 +8272,7 @@ class App:
 
                 def stop():
                     try:
+                        gentle_release()
                         vbox("controlvm", VM, "acpipowerbutton")
                     finally:
                         done()

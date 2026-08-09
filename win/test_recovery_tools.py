@@ -105,16 +105,23 @@ check("a phantom node is named as such -- replug territory, not retry",
       not ok and "phantom" in detail)
 
 app_src = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
-check("every power-off path releases gently before pulling the plug",
-      app_src.count("gentle_release()")
-      == app_src.count('vbox("controlvm", VM, "acpipowerbutton")')
-      + app_src.count('vbox("controlvm", VM, "poweroff")')
-      - 1)  # cold restart owns BOTH: ACPI first, poweroff as fallback
+# Every VM-stopping flow must hand radios back one at a time first. The
+# check is per-function so a new stop path cannot ship unguarded by hiding
+# in the counts.
+import re as _re  # noqa: E402
+stop_bodies = _re.split(r"\n    def ", app_src)
+stoppers = [b for b in stop_bodies
+            if '"acpipowerbutton")' in b or '"poweroff")' in b]
+check("every VM-stopping flow releases radios gently first",
+      stoppers and all("gentle_release()" in b for b in stoppers),
+      )
 check("cold restart asks the guest to shut down before pulling any plug",
-      app_src.index('vbox("controlvm", VM, "acpipowerbutton")')
+      "guest ignored ACPI" in app_src
+      and app_src.index('vbox("controlvm", VM, "acpipowerbutton")')
       < app_src.index("guest ignored ACPI"))
 check("the cold-restart dialog no longer claims a hardware power-cycle",
-      "never power-cycle" in app_src and "Power-cycle the whole VM" not in app_src)
+      "never power-cycle" in app_src
+      and "Power-cycle the whole VM" not in app_src)
 
 app = app_src
 check("preflight-bearing guest chains get recovery-path headroom (90s)",
