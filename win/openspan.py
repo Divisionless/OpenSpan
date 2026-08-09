@@ -8018,8 +8018,10 @@ class App:
     def cold_restart_vm(self):
         if not dark_confirm(
                 self.root, "Cold-restart VM?",
-                "Power-cycle the whole VM (~90s). Audio + keyboard come back "
-                "fresh; you re-pair the keyboard on the iPad.\n\nRestart now?"):
+                "Reboot the bridge VM cleanly (~2min): radios handed back "
+                "one at a time, guest shut down properly, then a fresh boot "
+                "and re-delivery. The radios themselves never power-cycle — "
+                "that takes a replug or a host reboot.\n\nRestart now?"):
             return
         self.status.set("Cold-restarting VM…")
         done = self.busy(self._sysbtn["Cold-restart VM"], "Restarting VM…")
@@ -8028,12 +8030,24 @@ class App:
             try:
                 if vm_running():
                     ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+                    # Ordered radio handback first, then a REAL guest
+                    # shutdown. The old flow pulled the virtual plug with
+                    # radios attached: a mass USB release (the 2026-08-08
+                    # injury event) plus a hard filesystem stop, in exchange
+                    # for a "cold boot" the radios never actually got.
                     gentle_release()
-                    vbox("controlvm", VM, "poweroff")
+                    vbox("controlvm", VM, "acpipowerbutton")
                     for _ in range(30):
                         if not vm_running():
                             break
                         threading.Event().wait(1)
+                    if vm_running():
+                        _emit("event", "guest ignored ACPI — hard poweroff")
+                        vbox("controlvm", VM, "poweroff")
+                        for _ in range(15):
+                            if not vm_running():
+                                break
+                            threading.Event().wait(1)
                 start_vm_clean()
             finally:
                 done()

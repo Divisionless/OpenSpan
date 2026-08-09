@@ -107,7 +107,14 @@ check("a phantom node is named as such -- replug territory, not retry",
 app_src = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
 check("every power-off path releases gently before pulling the plug",
       app_src.count("gentle_release()")
-      == app_src.count('vbox("controlvm", VM, "poweroff")'))
+      == app_src.count('vbox("controlvm", VM, "acpipowerbutton")')
+      + app_src.count('vbox("controlvm", VM, "poweroff")')
+      - 1)  # cold restart owns BOTH: ACPI first, poweroff as fallback
+check("cold restart asks the guest to shut down before pulling any plug",
+      app_src.index('vbox("controlvm", VM, "acpipowerbutton")')
+      < app_src.index("guest ignored ACPI"))
+check("the cold-restart dialog no longer claims a hardware power-cycle",
+      "never power-cycle" in app_src and "Power-cycle the whole VM" not in app_src)
 
 app = app_src
 check("preflight-bearing guest chains get recovery-path headroom (90s)",
