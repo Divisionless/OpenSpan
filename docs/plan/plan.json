@@ -1475,9 +1475,9 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~120k Codex + ~25k Claude review",
+      "actualTime": "~30m",
       "extra": {}
     },
     {
@@ -3530,8 +3530,12 @@
     {
       "date": "2026-08-09",
       "entry": "Doug tested zoom: first tick shifts the desktop sideways. Diagnosed: the port has ViewportOffset but NOT RescaleAbout (pan-preserving) or EaseLevel (log-space ramp) -- so every notch re-centers instead of easing. Fix + v1.82 separate spaces running."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "v1.82 done: Displays Have Separate Spaces (25 checks). Per-monitor space sets incl. correct separation of the twin-key panels; every hide ledgered and undoable; a disappearing monitor restores rather than orphans; probe verified read-only on the live desk."
     }
   ],
   "extraCols": [],
-  "rev": 20
+  "rev": 21
 }
