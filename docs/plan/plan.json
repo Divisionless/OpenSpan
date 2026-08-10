@@ -1714,9 +1714,9 @@
       "costDrivers": "touches openspan.py; hook host OFF by default (portal + Input Director already hold the keyboard)",
       "estTime": "1h",
       "model": "Claude (serialized \u2014 one writer on openspan.py)",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null
+      "status": "done",
+      "actualTokens": "~40k Claude (serialized on openspan.py)",
+      "actualTime": "~25m"
     },
     {
       "sid": "v2.98",
@@ -1729,9 +1729,9 @@
       "costDrivers": "chords through the landed router; every action reversible",
       "estTime": "1h",
       "model": "Claude (serialized \u2014 one writer on openspan.py)",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null
+      "status": "done",
+      "actualTokens": "~40k Claude (serialized on openspan.py)",
+      "actualTime": "~25m"
     },
     {
       "sid": "v2.99",
@@ -1789,9 +1789,9 @@
       "costDrivers": "ties router+tiling+tracker; ships DISABLED by default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "doing",
-      "actualTokens": null,
-      "actualTime": null
+      "status": "done",
+      "actualTokens": "~161k Codex + ~30k Claude review",
+      "actualTime": "~35m"
     }
   ],
   "history": [
@@ -3518,8 +3518,12 @@
     {
       "date": "2026-08-09",
       "entry": "v1.79 + v1.78 done. v1.78 needed a second pass: review ran its probe on the live desk and found twin CF15T panels (one shared stable key) collapsing into one monitor \u2014 a 'no-op' restore planned to move every second-panel window 1920px. Fixed with position-resolved instance ordinals."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "BUILD 1: EsotericOS-wm.exe (70MB). Window management pane wired \u2014 chords listed, one switch, hook OFF by default, released before anything else on shutdown. 38 suites green. Review added laptop-reachable chords: the reference bindings were numpad-only, dead keys on this machine."
     }
   ],
   "extraCols": [],
-  "rev": 16
+  "rev": 17
 }
