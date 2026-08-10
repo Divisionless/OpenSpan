@@ -68,6 +68,19 @@ check("screen_zoom is imported lazily",
           source, method("_screen_zoom"))
       and not re.search(r"^import screen_zoom", source, re.M))
 
+spaces_toggle = ast.get_source_segment(source, method("_toggle_spaces"))
+check("spaces is imported lazily inside its toggle",
+      "import spaces" in spaces_toggle
+      and not re.search(r"^import spaces", source, re.M))
+check("a failed enable restores rather than leaving windows hidden",
+      spaces_toggle.count("disable()") >= 2
+      and "except Exception as exc" in spaces_toggle)
+check("shutdown disables spaces: exiting with windows hidden loses them",
+      "_spaces" in full_stop
+      and full_stop.index("_spaces") < full_stop.index("clip_server"))
+check("the spaces switch says plainly that nothing is hidden while off",
+      "off — every window stays visible" in source)
+
 host_builder = ast.get_source_segment(source, method("_window_host"))
 check("hotkey_host is imported lazily inside its builder",
       "import hotkey_host" in host_builder

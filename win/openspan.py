@@ -6958,6 +6958,19 @@ class App:
 
         # Zoom rides its own switch: it installs a MOUSE hook, which is a
         # different risk from the keyboard one and worth failing separately.
+        # Spaces hides windows, which is the only thing in this section that
+        # can lose work. Its switch says so, and turning it OFF restores
+        # everything before it releases anything.
+        srow = tk.Frame(wm, bg=BG)
+        srow.pack(fill="x", pady=(PAD_SM, 0))
+        self.spaces_state = tk.StringVar(
+            value="off — every window stays visible")
+        self.spaces_btn = ttk.Button(srow, text="Turn on separate Spaces",
+                                     command=self._toggle_spaces)
+        self.spaces_btn.pack(side="left")
+        tk.Label(srow, textvariable=self.spaces_state, bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
+
         zrow = tk.Frame(wm, bg=BG)
         zrow.pack(fill="x", pady=(PAD_SM, 0))
         self.zoom_state = tk.StringVar(value="off — hold Alt and scroll "
@@ -7090,6 +7103,7 @@ class App:
                          name="openspan-usage-monitor", daemon=True).start()
         self._wm_host = None
         self._zoom = None
+        self._spaces = None
         self.ui(self._show_window_chords)
 
     # ---- window management (ported EsotericOS features) --------------------
@@ -7149,6 +7163,44 @@ class App:
         self.wm_btn.config(text="Turn off window chords")
         _emit("ok", "window chords on — try Ctrl+Win+Alt+Numpad 4 on a "
                     "focused window.")
+
+    def _toggle_spaces(self):
+        """Enable or disable separate Spaces. Disable ALWAYS restores."""
+        try:
+            import spaces
+        except Exception as exc:  # noqa: BLE001
+            _emit("err", f"Spaces unavailable: {exc}")
+            self.spaces_btn.state(["disabled"])
+            return
+        if self._spaces is not None and self._spaces.enabled:
+            restored = self._spaces.disable()
+            self.spaces_state.set("off — every window stays visible")
+            self.spaces_btn.config(text="Turn on separate Spaces")
+            _emit("ok", "separate Spaces off — every hidden window is back "
+                        f"({restored} restored).")
+            return
+        try:
+            if self._spaces is None:
+                self._spaces = spaces.SpacesModule()
+            monitors = spaces._live_monitors()
+            windows = spaces._live_windows(monitors)
+            self._spaces.enable(monitors, windows)
+        except Exception as exc:  # noqa: BLE001
+            # Never leave the feature half-enabled: anything hidden during a
+            # failed enable comes straight back.
+            try:
+                if self._spaces is not None:
+                    self._spaces.disable()
+            except Exception:  # noqa: BLE001
+                pass
+            self.spaces_state.set("refused — see the console")
+            _emit("err", f"separate Spaces refused: {exc}")
+            return
+        self.spaces_state.set(
+            f"ON — {len(monitors)} displays, each with its own spaces")
+        self.spaces_btn.config(text="Turn off separate Spaces")
+        _emit("ok", "separate Spaces on — each display switches "
+                    "independently. Turning it off restores every window.")
 
     def _screen_zoom(self):
         """The zoom module, built on first use. None when unavailable."""
@@ -8373,6 +8425,15 @@ class App:
         if _zoom is not None and getattr(_zoom, "is_running", False):
             try:
                 _zoom.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        # And Spaces, for the sharpest reason of the three: exiting while it
+        # holds windows hidden would leave them invisible with nothing left
+        # running to show them again.
+        _spc = getattr(self, "_spaces", None)
+        if _spc is not None and getattr(_spc, "enabled", False):
+            try:
+                _spc.disable()
             except Exception:  # noqa: BLE001
                 pass
         if getattr(self, "clip_server", None):
