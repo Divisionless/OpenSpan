@@ -6937,6 +6937,25 @@ class App:
         self.to_windows.pack(side="left", expand=True, fill="x", padx=2)
         self._refresh_mode_buttons()
 
+        # ---- Window management: the ported EsotericOS feature set ----------
+        # OFF until asked. The portal already captures this keyboard and a
+        # rival KVM hooks it too; a third low-level hook arriving unannounced
+        # is how a working desk breaks. The switch is the whole disclosure.
+        wm = _section(pane_system, "Window management")
+        self.wm_state = tk.StringVar(value="off — chords are not intercepted")
+        wmrow = tk.Frame(wm, bg=BG)
+        wmrow.pack(fill="x")
+        self.wm_btn = ttk.Button(wmrow, text="Turn on window chords",
+                                 command=self._toggle_window_chords)
+        self.wm_btn.pack(side="left")
+        tk.Label(wmrow, textvariable=self.wm_state, bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
+        self.wm_binds = tk.StringVar(value="")
+        _wmb = tk.Label(wm, textvariable=self.wm_binds, bg=BG, fg=MUTED,
+                        font=("Consolas", 8), anchor="w", justify="left")
+        _wmb.pack(fill="x", pady=(PAD_XS, 0))
+        bind_wraplength(_wmb)
+
         desk = _section(pane_system, "System desk — AI usage")
         self.usage_codex = tk.StringVar(value="Codex  reading local data…")
         self.usage_claude = tk.StringVar(value="Claude  reading local data…")
@@ -7057,6 +7076,65 @@ class App:
         self._tick()
         threading.Thread(target=self._usage_worker,
                          name="openspan-usage-monitor", daemon=True).start()
+        self._wm_host = None
+        self.ui(self._show_window_chords)
+
+    # ---- window management (ported EsotericOS features) --------------------
+    # The host is built lazily and started ONLY from the button below. Nothing
+    # here installs a hook at startup: see the section comment in the pane.
+
+    def _window_host(self):
+        """The hotkey host, built on first use. None when unavailable."""
+        if self._wm_host is None:
+            try:
+                import hotkey_host
+                self._wm_host = hotkey_host.HotkeyHost(
+                    hotkey_host.WindowActions())
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"window chords unavailable: {exc}")
+                return None
+        return self._wm_host
+
+    def _show_window_chords(self):
+        """Paint the binding table and any collisions. Reads only."""
+        host = self._window_host()
+        if host is None:
+            self.wm_binds.set("")
+            self.wm_state.set("unavailable on this build")
+            self.wm_btn.state(["disabled"])
+            return
+        by_command = {}
+        for chord, command in host.bindings().items():
+            by_command.setdefault(command.rsplit(".", 1)[-1], []).append(chord)
+        self.wm_binds.set("   ".join(
+            f"{name}: {' / '.join(chords)}"
+            for name, chords in sorted(by_command.items())))
+        collisions = host.collisions()
+        if collisions:
+            _emit("err", f"window chords: {len(collisions)} collision(s) — "
+                         "two commands claim one chord.")
+
+    def _toggle_window_chords(self):
+        """Start or stop the hook. The ONE place either happens."""
+        host = self._window_host()
+        if host is None:
+            return
+        if host.is_running:
+            host.stop()
+            self.wm_state.set("off — chords are not intercepted")
+            self.wm_btn.config(text="Turn on window chords")
+            _emit("ok", "window chords off — the keyboard is untouched.")
+            return
+        # start() refuses rather than stacking when another owner holds the
+        # hook; report that refusal instead of pretending it worked.
+        if not host.start():
+            self.wm_state.set("refused — another hook owner holds the keyboard")
+            _emit("err", "window chords refused: this process already has a "
+                         "keyboard hook owner. Stop the portal and retry.")
+            return
+        self.wm_state.set("ON — chords are intercepted")
+        self.wm_btn.config(text="Turn off window chords")
+        _emit("ok", "window chords on — try Win+Alt+Left on a focused window.")
 
     def _usage_worker(self):
         """Refresh local AI usage without ever touching Tk off-thread."""
@@ -8232,6 +8310,14 @@ class App:
         """The FULL STOP: portal, audio sender, and the VM all go down, then
         the app closes — nothing lingers, next launch is a clean cold boot."""
         self._closing = True  # stop the ui() pump rescheduling past destroy
+        # The keyboard hook comes out FIRST. A low-level hook outliving its
+        # process is how a machine ends up with dead chords until a reboot.
+        _host = getattr(self, "_wm_host", None)
+        if _host is not None and _host.is_running:
+            try:
+                _host.stop()
+            except Exception:  # noqa: BLE001
+                pass
         if getattr(self, "clip_server", None):
             self.clip_server.stop()  # clipboard offline before teardown
         # best-effort: flush the guest journal to disk before the hard power
