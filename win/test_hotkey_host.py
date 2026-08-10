@@ -284,6 +284,10 @@ expected_bindings = {
     in (*host.ZONE_COMMANDS, *host.REFINE_COMMANDS)
 }
 expected_bindings["Win+Alt+Numpad 5"] = host.RESTORE_COMMAND
+# Every numpad zone also answers to a laptop chord: the reference bindings
+# alone leave eight dead keys on a keyboard without a numpad.
+for _command, _chord in host.LAPTOP_SHORTCUTS.items():
+    expected_bindings[_chord] = _command
 
 
 class FakeService:
@@ -322,8 +326,17 @@ hotkeys = host.HotkeyHost(actions, service=service,
 check("the feature declaration is disabled by default",
       not host.FEATURE_DECLARATION.default_enabled
       and not settings.is_enabled(host.FEATURE_ID))
-check("the live binding table exactly matches the reference defaults",
+check("the live binding table carries the reference and laptop chords",
       hotkeys.bindings() == expected_bindings)
+check("every zone is reachable without a numpad",
+      all(any(chord in host.LAPTOP_SHORTCUTS.values()
+              and command == bound
+              for chord, bound in hotkeys.bindings().items())
+          for command, _argument, _chord in host.ZONE_COMMANDS))
+check("no laptop chord collides with a reference chord",
+      len(set(host.LAPTOP_SHORTCUTS.values())
+          & {chord for _c, _a, chord in
+             (*host.ZONE_COMMANDS, *host.REFINE_COMMANDS)}) == 0)
 check("collisions delegates to settings_service",
       hotkeys.collisions() == settings.shortcut_collisions())
 check("construction installs and registers nothing",

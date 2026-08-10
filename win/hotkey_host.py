@@ -71,11 +71,29 @@ REFINE_COMMANDS: tuple[tuple[str, TileDirection, str], ...] = (
     ("esotericos.tile.refine-down", TileDirection.DOWN, "Win+Down"),
 )
 
-DEFAULT_SHORTCUTS = {
-    command: (chord,) for command, _argument, chord
-    in (*ZONE_COMMANDS, *REFINE_COMMANDS)
+# The reference bindings are numpad-based, which is unreachable on a laptop
+# keyboard -- eight of the thirteen defaults would be dead keys on the machine
+# this ships to first. Each zone therefore carries a second, numpad-free chord;
+# both are bound, so muscle memory from either layout works.
+LAPTOP_SHORTCUTS: dict[str, str] = {
+    "esotericos.tile.left-half": "Win+Alt+Left",
+    "esotericos.tile.right-half": "Win+Alt+Right",
+    "esotericos.tile.top-half": "Win+Alt+Up",
+    "esotericos.tile.bottom-half": "Win+Alt+Down",
+    "esotericos.tile.top-left": "Win+Alt+Shift+Left",
+    "esotericos.tile.top-right": "Win+Alt+Shift+Up",
+    "esotericos.tile.bottom-left": "Win+Alt+Shift+Down",
+    "esotericos.tile.bottom-right": "Win+Alt+Shift+Right",
+    RESTORE_COMMAND: "Win+Alt+Backspace",
 }
-DEFAULT_SHORTCUTS[RESTORE_COMMAND] = ("Win+Alt+Numpad 5",)
+
+DEFAULT_SHORTCUTS = {
+    command: ((chord, LAPTOP_SHORTCUTS[command])
+              if command in LAPTOP_SHORTCUTS else (chord,))
+    for command, _argument, chord in (*ZONE_COMMANDS, *REFINE_COMMANDS)
+}
+DEFAULT_SHORTCUTS[RESTORE_COMMAND] = (
+    "Win+Alt+Numpad 5", LAPTOP_SHORTCUTS[RESTORE_COMMAND])
 
 FEATURE_DECLARATION = FeatureDeclaration(
     FEATURE_ID,
