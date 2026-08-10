@@ -57,7 +57,38 @@ built = os.path.join(DIST, f"{NAME}.exe")
 if not os.path.exists(built):
     sys.exit(f"BUILD FAILED: {NAME}.exe not produced")
 target = os.path.join(ROOT, f"{NAME}.exe")
+
+
+def _locked(path):
+    """True when Windows will refuse to overwrite this file.
+
+    Doug works while builds run -- that is the normal rhythm here, not an
+    accident -- so the target is often the exe he is using. Opening it for
+    append is the cheap way to ask Windows, and it changes nothing.
+    """
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "ab"):
+            return False
+    except PermissionError:
+        return True
+
+
+# Ask BEFORE spending two minutes compiling into a copy that cannot land.
+if _locked(target):
+    target = os.path.join(ROOT, f"{NAME}-next.exe")
+    staged = True
+else:
+    staged = False
+
 shutil.copy2(built, target)
 size_mb = os.path.getsize(target) / (1024 * 1024)
 print(f"\nOK -> {target}  ({size_mb:.0f} MB)")
+if staged:
+    print(f"\n{NAME}.exe is RUNNING, so this build was staged beside it.")
+    print("When you are ready to swap, with the app closed:")
+    print(f"    cd /d/{os.path.basename(ROOT)} && "
+          f"mv -f {NAME}.exe {NAME}.exe.prev && "
+          f"mv -f {NAME}-next.exe {NAME}.exe && (./{NAME}.exe &)")
 print(f"Runs in place ({ROOT} holds the data files it needs).")
