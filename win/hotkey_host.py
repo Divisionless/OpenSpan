@@ -99,12 +99,23 @@ LAPTOP_SHORTCUTS: dict[str, str] = {
     RESTORE_COMMAND: "Ctrl+Win+Alt+Backspace",
 }
 
+# Space switching, straight from the old program: Alt+<n> jumps to space n
+# on the display under the pointer. Doug's muscle memory runs on Alt+1/Alt+2,
+# and these chords are the ONLY way back to a hidden space from the keyboard,
+# so they ship bound whenever Spaces can be enabled at all.
+SPACE_SWITCH_COMMANDS: tuple[tuple[str, int, str], ...] = tuple(
+    (f"esotericos.spaces.switch-{n}", n - 1, f"Alt+{n}") for n in range(1, 10))
+NEXT_SPACE_COMMAND = "esotericos.spaces.next"
+PREVIOUS_SPACE_COMMAND = "esotericos.spaces.previous"
+
 DEFAULT_SHORTCUTS = {
     command: tuple(chord for chord in (
         reference, TOP_ROW_DIGITS.get(command),
         LAPTOP_SHORTCUTS.get(command)) if chord)
     for command, _argument, reference in (*ZONE_COMMANDS, *REFINE_COMMANDS)
 }
+for _command, _ordinal, _chord in SPACE_SWITCH_COMMANDS:
+    DEFAULT_SHORTCUTS[_command] = (_chord,)
 DEFAULT_SHORTCUTS[RESTORE_COMMAND] = (
     "Ctrl+Win+Alt+Numpad 5", "Ctrl+Win+Alt+5",
     LAPTOP_SHORTCUTS[RESTORE_COMMAND])
@@ -601,7 +612,28 @@ class HotkeyHost:
                 return lambda direction=direction: self.actions.refine_focused(direction)
         if command == RESTORE_COMMAND:
             return self.actions.restore_focused
+        for command_id, ordinal, _chord in SPACE_SWITCH_COMMANDS:
+            if command == command_id:
+                return lambda ordinal=ordinal: self.switch_space(ordinal)
         raise KeyError(command)
+
+    # The app attaches the live Spaces module here. Until it does, the chord
+    # is bound but inert -- it reports rather than pretending, and it never
+    # raises inside the hook.
+    switch_space_hook: Callable[[int], Any] | None = None
+
+    def switch_space(self, ordinal: int) -> ActionResult:
+        hook = self.switch_space_hook
+        if hook is None:
+            return ActionResult(f"esotericos.spaces.switch-{ordinal + 1}",
+                                False, "separate Spaces is not enabled", {})
+        try:
+            hook(ordinal)
+        except Exception as exc:  # noqa: BLE001
+            return ActionResult(f"esotericos.spaces.switch-{ordinal + 1}",
+                                False, f"space switch failed: {exc}", {})
+        return ActionResult(f"esotericos.spaces.switch-{ordinal + 1}",
+                            True, "switched space", {"ordinal": ordinal})
 
     def start(self) -> HostResult:
         if self._running:

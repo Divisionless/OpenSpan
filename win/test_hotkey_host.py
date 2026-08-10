@@ -296,6 +296,10 @@ for _table in (host.TOP_ROW_DIGITS, host.LAPTOP_SHORTCUTS):
         expected_bindings[_canonical(_chord)] = _command
 expected_bindings[_canonical("Ctrl+Win+Alt+Numpad 5")] = host.RESTORE_COMMAND
 expected_bindings[_canonical("Ctrl+Win+Alt+5")] = host.RESTORE_COMMAND
+# Alt+<n> switches spaces, as the old program bound it. These are the only
+# keyboard route back to a hidden space, so they are always bound.
+for _command, _ordinal, _chord in host.SPACE_SWITCH_COMMANDS:
+    expected_bindings[_canonical(_chord)] = _command
 
 
 class FakeService:

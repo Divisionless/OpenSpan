@@ -102,8 +102,18 @@ check("autostart arms chords and zoom through their own toggles",
       and "_toggle_screen_zoom" in autostart
       and "host.start()" not in autostart
       and "zoom.start()" not in autostart)
-check("autostart never arms Spaces, which hides windows",
-      "_toggle_spaces" not in autostart)
+check("autostart arms Spaces too, at Doug's explicit request",
+      "_toggle_spaces" in autostart)
+# Spaces hides windows. Alt+<n> is the only keyboard route back, so enabling
+# without attaching those chords is the one way this feature costs work.
+spaces_toggle_src = ast.get_source_segment(source, method("_toggle_spaces"))
+check("enabling Spaces attaches the Alt+<n> switch chords",
+      "_attach_space_chords" in spaces_toggle_src)
+attach = ast.get_source_segment(source, method("_attach_space_chords"))
+check("the switch chords act on the display under the pointer",
+      "_pointer_monitor" in attach and "switch_to_ordinal" in attach)
+check("a switch with Spaces disabled does nothing rather than raising",
+      "module.enabled" in attach)
 check("one feature failing to arm cannot stop the other or the app",
       "except Exception" in autostart)
 check("autostart can be disabled without a rebuild",

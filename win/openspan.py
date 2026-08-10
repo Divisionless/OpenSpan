@@ -7117,7 +7117,8 @@ class App:
         if os.environ.get("WINDOW_FEATURE_AUTOSTART", "1").strip() == "0":
             _emit("info", "window features left off (WINDOW_FEATURE_AUTOSTART=0).")
             return
-        for arm in (self._toggle_window_chords, self._toggle_screen_zoom):
+        for arm in (self._toggle_window_chords, self._toggle_screen_zoom,
+                    self._toggle_spaces):
             try:
                 arm()
             except Exception as exc:  # noqa: BLE001
@@ -7217,11 +7218,37 @@ class App:
             self.spaces_state.set("refused — see the console")
             _emit("err", f"separate Spaces refused: {exc}")
             return
+        # Attach the switch chords to the live module. Without this, Alt+<n>
+        # is inert and a hidden space has NO keyboard route back -- which is
+        # the one way this feature could actually cost work.
+        self._attach_space_chords()
         self.spaces_state.set(
-            f"ON — {len(monitors)} displays, each with its own spaces")
+            f"ON — {len(monitors)} displays, Alt+1/Alt+2 switch spaces")
         self.spaces_btn.config(text="Turn off separate Spaces")
-        _emit("ok", "separate Spaces on — each display switches "
-                    "independently. Turning it off restores every window.")
+        _emit("ok", "separate Spaces on — Alt+1 and Alt+2 switch the space on "
+                    "the display under the pointer. Turning it off restores "
+                    "every window.")
+
+    def _attach_space_chords(self):
+        """Point the hotkey host's space verbs at the live Spaces module."""
+        host = self._window_host()
+        if host is None or self._spaces is None:
+            return
+
+        def switch(ordinal):
+            import spaces as _spaces
+            module = self._spaces
+            if module is None or not module.enabled:
+                return
+            monitors = _spaces._live_monitors()
+            target = _spaces._pointer_monitor(monitors)
+            if target is None:
+                target = monitors[0] if monitors else None
+            if target is None:
+                return
+            module.switch_to_ordinal(target.id, ordinal)
+
+        host.switch_space_hook = switch
 
     def _screen_zoom(self):
         """The zoom module, built on first use. None when unavailable."""
