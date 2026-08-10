@@ -2,6 +2,9 @@
 
 import ast
 import ctypes
+import inspect
+import logging
+import math
 import pathlib
 import tempfile
 import threading
@@ -246,6 +249,95 @@ check("zoom stepping clamps at both C# limits",
       and zoom.step_level(1.0, 100) == zoom.MAX_LEVEL
       and zoom.clamp_level(float("nan")) == zoom.MIN_LEVEL)
 
+screen = zoom.ScreenRect(-2560, -1440, 2560, 1440)
+anchor = (-1000, -500)
+old_x, old_y = -2200.25, -1200.75
+new_x, new_y = zoom.rescale_about(
+    screen, anchor, old_x, old_y, 2.0, 5.0)
+check("RescaleAbout keeps the anchor pixel fixed across a level change",
+      math.isclose((anchor[0] - old_x) * 2.0,
+                   (anchor[0] - new_x) * 5.0, abs_tol=1e-9)
+      and math.isclose((anchor[1] - old_y) * 2.0,
+                       (anchor[1] - new_y) * 5.0, abs_tol=1e-9))
+
+composed_x, composed_y = old_x, old_y
+levels = [2.0 * math.pow(5.0 / 2.0, index / 200.0)
+          for index in range(201)]
+for before, after in zip(levels, levels[1:]):
+    composed_x, composed_y = zoom.rescale_about(
+        screen, anchor, composed_x, composed_y, before, after)
+direct_x, direct_y = zoom.rescale_about(
+    screen, anchor, old_x, old_y, 2.0, 5.0)
+check("fractional RescaleAbout composition does not accumulate drift",
+      math.isclose(composed_x, direct_x, abs_tol=1e-9)
+      and math.isclose(composed_y, direct_y, abs_tol=1e-9))
+
+negative_monitor = zoom.ScreenRect(-2560, -1440, 2560, 1440)
+view_x, view_y = -2200.25, -1100.75
+level = 2.5
+transform = zoom.window_transform(
+    negative_monitor, view_x, view_y, level)
+wrong_false_origin_x = -view_x * level
+wrong_relative_x = -(view_x - negative_monitor.x) * level
+wrong_false_origin_y = -view_y * level
+wrong_relative_y = -(view_y - negative_monitor.y) * level
+check("negative-origin transform includes the monitor desktop constant",
+      math.isclose(
+          transform.v02,
+          negative_monitor.x - view_x * level, abs_tol=1e-9)
+      and math.isclose(
+          transform.v12,
+          negative_monitor.y - view_y * level, abs_tol=1e-9)
+      and transform.v00 == transform.v11 == level
+      and transform.v22 == 1.0)
+check("neither documented false-origin transform is produced",
+      not math.isclose(transform.v02, wrong_false_origin_x)
+      and not math.isclose(transform.v02, wrong_relative_x)
+      and not math.isclose(transform.v12, wrong_false_origin_y)
+      and not math.isclose(transform.v12, wrong_relative_y))
+resolved_x = (negative_monitor.x - transform.v02) / level
+resolved_y = (negative_monitor.y - transform.v12) / level
+check("a left-of-primary viewport resolves to itself, never the primary",
+      math.isclose(resolved_x, view_x, abs_tol=1e-9)
+      and math.isclose(resolved_y, view_y, abs_tol=1e-9)
+      and resolved_x < 0)
+
+edge_screen = zoom.ScreenRect(-3200, -1200, 1600, 1200)
+edge_level = 2.0
+edge_x, edge_y = -3000.0, -1100.0
+view_width = round(edge_screen.width / edge_level)
+view_height = round(edge_screen.height / edge_level)
+right_overshoot = 37
+bottom_overshoot = 23
+pushed_x, pushed_y = zoom.edge_push(
+    edge_screen,
+    (round(edge_x) + view_width - 1 + right_overshoot,
+     round(edge_y) + view_height - 1 + bottom_overshoot),
+    edge_x, edge_y, edge_level)
+check("EdgePush moves a negative-origin viewport by exactly the overshoot",
+      pushed_x == edge_x + right_overshoot
+      and pushed_y == edge_y + bottom_overshoot)
+inside = zoom.edge_push(
+    edge_screen, (-2800, -800), pushed_x, pushed_y, edge_level)
+check("EdgePush leaves viewport state untouched while the pointer is inside",
+      inside == (pushed_x, pushed_y))
+
+eased = zoom.ease_level(2.0, 8.0, zoom.RAMP_TIME_CONSTANT_MS)
+expected_log = (math.log(2.0)
+                + (math.log(8.0) - math.log(2.0)) * (1.0 - math.exp(-1.0)))
+settling = 2.0
+for _ in range(100):
+    settling = zoom.ease_level(settling, 8.0, 16.0)
+check("EaseLevel converges in log space and settles exactly on target",
+      math.isclose(math.log(eased), expected_log, abs_tol=1e-12)
+      and settling == 8.0)
+
+negative_screen = zoom.ScreenRect(-1920, -1080, 1920, 1080)
+negative_view = zoom.ScreenRect(-1680, -945, 960, 540)
+check("negative-origin monitor uses primary-relative fullscreen offsets",
+      zoom.fullscreen_offsets(negative_screen, negative_view, 2.0)
+      == (-720, -405))
+
 monitor = MonitorIdentity(
     native_width=1920, native_height=1080,
     virtual_x=-1920, virtual_y=0, device_name="DISPLAY2")
@@ -385,6 +477,10 @@ class FakeMagnifier:
         self.applied.append((level, screen, anchor))
         return True
 
+    def apply_viewport(self, level, screen, view):
+        self.applied.append((level, screen, view))
+        return True
+
     def reset(self):
         self.events.append("reset")
         if self.reset_error is not None:
@@ -424,6 +520,51 @@ check("unavailable magnification installs no half-armed hook",
       not unavailable_module.start() and unavailable_magnifier.probes == 1
       and not factory_calls and unavailable_module.available is False)
 
+
+class RampClock:
+    def __init__(self):
+        self.value = 1.0
+
+    def __call__(self):
+        self.value += 0.016
+        return self.value
+
+    def advance(self, seconds):
+        self.value += seconds
+
+
+negative_monitor_identity = MonitorIdentity(
+    native_width=1920, native_height=1080,
+    virtual_x=-1920, virtual_y=-200, device_name="DISPLAY2")
+upper_monitor = MonitorIdentity(
+    native_width=1920, native_height=1080,
+    virtual_x=0, virtual_y=-1280, device_name="DISPLAY3")
+ramp_clock = RampClock()
+ramp_magnifier = FakeMagnifier()
+ramp_module = zoom.ScreenZoomModule(
+    ramp_magnifier,
+    monitor_provider=lambda: (negative_monitor_identity, upper_monitor),
+    clock=ramp_clock)
+first_anchor = (-1500, 300)
+ramp_module.zoom_at(1.0, first_anchor, 2.0)
+ramp_module.zoom_at(1.0, (800, -800), 2.0)
+check("the 600 ms gesture freezes its anchor and never crosses displays",
+      ramp_module._gesture_anchor == first_anchor
+      and ramp_module.level == 4.0
+      and ramp_magnifier.applied[-1][2]
+      == first_anchor
+      and ramp_magnifier.applied[-1][1]
+      == zoom.ScreenRect(-1920, -200, 1920, 1080))
+ramp_clock.advance(0.7)
+new_anchor = (800, -800)
+ramp_module.zoom_at(-1.0, new_anchor, 2.0)
+check("a new gesture re-establishes its anchor",
+      ramp_module._gesture_anchor == new_anchor
+      and ramp_module.level == 2.0
+      and ramp_magnifier.applied[-1][2] == new_anchor
+      and ramp_magnifier.applied[-1][1]
+      == zoom.ScreenRect(0, -1280, 1920, 1080))
+
 lifetime_events = []
 
 
@@ -448,6 +589,32 @@ magnifier = zoom.ScreenMagnifier(
     bindings_factory=lambda: construction_calls.append("native"))
 check("ScreenMagnifier construction starts no thread or native API",
       not construction_calls and magnifier._thread is None)
+
+
+class CursorCalls:
+    def __init__(self, outcomes):
+        self.outcomes = iter(outcomes)
+        self.calls = []
+
+    def __call__(self, show):
+        self.calls.append(show)
+        return next(self.outcomes)
+
+
+cursor_calls = CursorCalls((True, True, False, True))
+cursor_logger = logging.getLogger("cursor-test")
+cursor_logger.disabled = True
+cursor = zoom._CursorVisibility(
+    cursor_calls, cursor_logger)
+startup_restored = cursor.restore_at_startup()
+hidden = cursor.set_hidden(True)
+first_restore = cursor.set_hidden(False)
+still_owned_after_failure = cursor.hidden
+second_restore = cursor.set_hidden(False)
+check("cursor is restored at startup and a failed restore is retried",
+      startup_restored and hidden and not first_restore
+      and still_owned_after_failure and second_restore and not cursor.hidden
+      and cursor_calls.calls == [True, False, True, True])
 
 
 # ---- structural proof of the explicit start boundary ------------------------
@@ -510,6 +677,67 @@ module_level_effects = [
     if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
 ]
 check("the module has no import-time call expressions", not module_level_effects)
+
+render_method = next(
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.FunctionDef) and node.name == "_render_level")
+render_mag_calls = [
+    node.func.attr for node in ast.walk(render_method)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr.startswith("MagSet")
+]
+source_pushes = [
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "MagSetWindowSource"
+]
+source_push_owner = (enclosing(source_pushes[0], ast.FunctionDef)
+                     if len(source_pushes) == 1 else None)
+check("each render branch makes one transform call and never pushes source",
+      sorted(render_mag_calls)
+      == ["MagSetFullscreenTransform", "MagSetWindowTransform"]
+      and len(source_pushes) == 1
+      and source_push_owner is not None
+      and source_push_owner.name == "_on_apply")
+check("the per-display host has the required cursor style and self-filter",
+      "MS_SHOWMAGNIFIEDCURSOR" in source
+      and "MagSetWindowFilterList" in source
+      and "WS_EX_TRANSPARENT" in source
+      and "WM_SETREDRAW" not in source)
+scope_default = inspect.signature(
+    zoom.ScreenMagnifier).parameters["scope"].default
+check("per-display scope is default and desktop scope remains explicit",
+      scope_default == "display"
+      and hasattr(zoom.ScreenMagnifier, "apply_fullscreen"))
+check("the magnifier owns an STA message-pump thread",
+      "COINIT_APARTMENTTHREADED" in source
+      and "GetMessageW" in source
+      and "DispatchMessageW" in source)
+
+thread_main = next(
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.FunctionDef)
+    and node.name == "_thread_main"
+    and enclosing(node, ast.ClassDef).name == "ScreenMagnifier")
+cleanup_calls = [
+    node for node in ast.walk(thread_main)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "_cleanup_on_thread"
+]
+hide_method = next(
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.FunctionDef) and node.name == "_hide_on_thread")
+restore_calls = [
+    node for node in ast.walk(hide_method)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "set_hidden"
+]
+check("cursor restoration is on normal hide and the thread-finally exit",
+      len(cleanup_calls) == 1 and len(restore_calls) == 1)
 
 
 if failures:
