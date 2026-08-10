@@ -166,8 +166,8 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "done",
-      "actualTokens": "~110k Codex + ~45k Claude (wiring)",
+      "status": "doing",
+      "actualTokens": "~110k Codex + ~45k Claude (wiring) +fix",
       "actualTime": "~30m",
       "extra": {}
     },
@@ -1475,7 +1475,7 @@
       "costDrivers": "working C# reference module; was Off by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -3526,8 +3526,12 @@
     {
       "date": "2026-08-09",
       "entry": "BUILD 2 (EsotericOS-wm2.exe): v1.06 Alt+scroll zoom ported and wired on its own switch, and the tiling chords rebound to Doug's Ctrl+Win+Alt+<number> (the C# reference used Win+Alt, which is why none of his combos fired). Number-row digits and arrows bound too. 39 suites green."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "Doug tested zoom: first tick shifts the desktop sideways. Diagnosed: the port has ViewportOffset but NOT RescaleAbout (pan-preserving) or EaseLevel (log-space ramp) -- so every notch re-centers instead of easing. Fix + v1.82 separate spaces running."
     }
   ],
   "extraCols": [],
-  "rev": 19
+  "rev": 20
 }
