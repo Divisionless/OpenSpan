@@ -7105,6 +7105,25 @@ class App:
         self._zoom = None
         self._spaces = None
         self.ui(self._show_window_chords)
+        self.ui(self._autostart_window_features)
+
+    # Chords and zoom come up ON. That reverses the shipping default, and
+    # deliberately: Doug drove both live and asked for the program to start
+    # in the state he tested. Spaces stays opt-in because it HIDES windows,
+    # and a feature that can make work vanish should be a decision, not a
+    # side effect of launching. Every switch still turns off in one click,
+    # and WINDOW_FEATURE_AUTOSTART=0 in the environment disables the lot.
+    def _autostart_window_features(self):
+        if os.environ.get("WINDOW_FEATURE_AUTOSTART", "1").strip() == "0":
+            _emit("info", "window features left off (WINDOW_FEATURE_AUTOSTART=0).")
+            return
+        for arm in (self._toggle_window_chords, self._toggle_screen_zoom):
+            try:
+                arm()
+            except Exception as exc:  # noqa: BLE001
+                # One feature failing to arm must never cost the other one,
+                # and must never stop the app from finishing startup.
+                _emit("err", f"window feature did not start: {exc}")
 
     # ---- window management (ported EsotericOS features) --------------------
     # The host is built lazily and started ONLY from the button below. Nothing
@@ -7184,7 +7203,9 @@ class App:
                 self._spaces = spaces.SpacesModule()
             monitors = spaces._live_monitors()
             windows = spaces._live_windows(monitors)
-            self._spaces.enable(monitors, windows)
+            # enable() wants monitor IDENTITIES, not the live records; the
+            # records carry the work areas that _live_windows needs.
+            self._spaces.enable([m.id for m in monitors], windows)
         except Exception as exc:  # noqa: BLE001
             # Never leave the feature half-enabled: anything hidden during a
             # failed enable comes straight back.

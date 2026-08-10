@@ -88,8 +88,23 @@ check("hotkey_host is imported lazily inside its builder",
 check("construction failure disables the button instead of crashing",
       "unavailable" in source and 'self.wm_btn.state(["disabled"])' in source)
 
-check("startup paints the bindings but never starts the hook",
+check("painting the binding table never starts a hook",
       "self._wm_host = None" in source
       and "self.ui(self._show_window_chords)" in source
       and "host.start()" not in ast.get_source_segment(
           source, method("_show_window_chords")))
+
+# Doug tested both live and asked for them ON at launch. Autostart must go
+# through the SAME toggles, so the single-start-site guarantee above holds.
+autostart = ast.get_source_segment(source, method("_autostart_window_features"))
+check("autostart arms chords and zoom through their own toggles",
+      "_toggle_window_chords" in autostart
+      and "_toggle_screen_zoom" in autostart
+      and "host.start()" not in autostart
+      and "zoom.start()" not in autostart)
+check("autostart never arms Spaces, which hides windows",
+      "_toggle_spaces" not in autostart)
+check("one feature failing to arm cannot stop the other or the app",
+      "except Exception" in autostart)
+check("autostart can be disabled without a rebuild",
+      "WINDOW_FEATURE_AUTOSTART" in autostart)
