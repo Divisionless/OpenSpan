@@ -117,6 +117,19 @@ check("the switch chords act on the display under the pointer",
 check("a switch re-syncs windows opened since Spaces was enabled",
       "window_appeared" in attach
       and attach.index("window_appeared") < attach.index("switch_to_ordinal"))
+# A window dragged to another screen belonged to the screen it LEFT, so that
+# screen's Alt+n kept reclaiming it. rehome only fires on a real monitor
+# change, so re-syncing every window cannot disturb one that has not moved.
+check("a window dragged to another screen re-homes to it",
+      "window_moved" in attach)
+# macOS carries the window you are holding when you change space.
+check("a held window is carried to the target space",
+      "_dragged_window" in attach and "model.assign" in attach)
+dragged = ast.get_source_segment(source, method("_attach_space_chords"))
+check("the drag is read from the physical button, not a hooked event",
+      "GetAsyncKeyState" in dragged and "GetForegroundWindow" in dragged)
+check("carrying happens before the switch, so the window travels with it",
+      dragged.index("model.assign") < dragged.rindex("switch_to_ordinal"))
 check("a switch with Spaces disabled does nothing rather than raising",
       "module.enabled" in attach)
 check("one feature failing to arm cannot stop the other or the app",

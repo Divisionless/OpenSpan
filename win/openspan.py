@@ -7235,21 +7235,41 @@ class App:
         if host is None or self._spaces is None:
             return
 
+        def _dragged_window():
+            """The window under a held mouse button, or None.
+
+            macOS carries the window you are dragging when you change space.
+            There is no drag EVENT to hook here -- a title-bar drag runs
+            inside Windows' own modal move loop -- but the physical button
+            state is enough: if the left button is down when the chord
+            fires, the foreground window is the one in hand.
+            """
+            import ctypes
+            u32 = ctypes.windll.user32
+            if not (u32.GetAsyncKeyState(0x01) & 0x8000):  # VK_LBUTTON
+                return None
+            u32.GetForegroundWindow.restype = ctypes.c_void_p
+            return u32.GetForegroundWindow() or None
+
         def switch(ordinal):
             import spaces as _spaces
             module = self._spaces
             if module is None or not module.enabled:
                 return
             monitors = _spaces._live_monitors()
-            # Re-sync BEFORE switching. enable() takes a one-time snapshot, so
-            # anything opened afterwards was never in the model and simply did
-            # not participate -- which reads as "Alt+1 only affects some of my
-            # windows". window_appeared is idempotent: it returns False for a
-            # window the model already knows, so this is a cheap catch-up, not
-            # a rebuild, and it never re-homes a window the user moved.
-            for window in _spaces._live_windows(monitors):
+            live = _spaces._live_windows(monitors)
+            # Re-sync BEFORE switching, in two parts:
+            #   appeared -- enable() snapshots once, so anything opened later
+            #     was never in the model and did not participate at all.
+            #   moved    -- a window dragged from one screen to another still
+            #     belonged to the FIRST screen's space, so that screen's
+            #     Alt+n kept reclaiming a window that had left it. rehome()
+            #     only fires on a real monitor change, so this cannot disturb
+            #     a window's space on the screen it is already on.
+            for window in live:
                 try:
-                    module.window_appeared(window)
+                    if not module.window_appeared(window):
+                        module.window_moved(window)
                 except Exception:  # noqa: BLE001
                     pass
             target = _spaces._pointer_monitor(monitors)
@@ -7257,6 +7277,20 @@ class App:
                 target = monitors[0] if monitors else None
             if target is None:
                 return
+            # Carry the dragged window, so hold-a-title-bar + Alt+n takes it
+            # with you instead of switching out from under it.
+            handle = _dragged_window()
+            if handle is not None:
+                carried = next((w for w in live if w.handle == handle), None)
+                if carried is not None:
+                    space = next(
+                        (s for s in module.model.workspaces_on(target.id)
+                         if s.ordinal == ordinal), None)
+                    if space is not None:
+                        try:
+                            module.model.assign(carried.key, space.id)
+                        except Exception:  # noqa: BLE001
+                            pass
             module.switch_to_ordinal(target.id, ordinal)
 
         host.switch_space_hook = switch
