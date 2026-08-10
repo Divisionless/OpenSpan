@@ -3542,8 +3542,12 @@
     {
       "date": "2026-08-09",
       "entry": "BUILD 3 (EsotericOS-wm3.exe): three switches in Window management - chords (Ctrl+Win+Alt+number), separate Spaces, per-display Alt+scroll zoom with the FALSE ORIGIN fixed. 40 suites green."
+    },
+    {
+      "date": "2026-08-09",
+      "entry": "SHIPPED as EsotericOS.exe (previous kept as .prev). All three features arm at launch: chords (Ctrl+Win+Alt+number), per-display Alt+scroll zoom with the FALSE ORIGIN fixed, and separate Spaces with Alt+1..9 switching \u2014 the old program's own binding and the only keyboard route back to a hidden space. 13 of Doug's 21 picks ported; 40 suites green."
     }
   ],
   "extraCols": [],
-  "rev": 23
+  "rev": 24
 }
