@@ -166,7 +166,7 @@
       "costDrivers": "working C# reference module; was On by Default",
       "estTime": "30m",
       "model": "Codex exec + Claude review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
@@ -3525,5 +3525,5 @@
     }
   ],
   "extraCols": [],
-  "rev": 17
+  "rev": 18
 }
