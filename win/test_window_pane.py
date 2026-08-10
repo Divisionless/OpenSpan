@@ -130,6 +130,17 @@ check("the drag is read from the physical button, not a hooked event",
       "GetAsyncKeyState" in dragged and "GetForegroundWindow" in dragged)
 check("carrying happens before the switch, so the window travels with it",
       dragged.index("model.assign") < dragged.rindex("switch_to_ordinal"))
+
+# No window may span two displays while Spaces is on: a window across a
+# boundary has no unambiguous owner, which is where the ownership bugs come
+# from. The one window that must NOT be snapped is the one in hand.
+confine = ast.get_source_segment(source, method("_confine"))
+check("straddling windows are pulled onto their owning display",
+      "straddles" in confine and "confine_to_work_area" in confine)
+check("the window being dragged is never snapped out from under the user",
+      "window.handle != handle" in attach)
+check("confinement runs before the switch decides what to show",
+      attach.index("_confine") < attach.rindex("switch_to_ordinal"))
 check("a switch with Spaces disabled does nothing rather than raising",
       "module.enabled" in attach)
 check("one feature failing to arm cannot stop the other or the app",

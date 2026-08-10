@@ -276,3 +276,48 @@ check("commands are declarations only and the feature ships disabled",
       and spaces.FEATURE_DECLARATION.default_shortcuts
       == {spaces.NEXT_SPACE_COMMAND: (), spaces.PREVIOUS_SPACE_COMMAND: ()}
       and not spaces.FEATURE_DECLARATION.default_enabled)
+
+# ---- confinement: no window may span two displays ----------------------------
+# Doug, 2026-08-10: macOS forbids a window spanning screens while Displays
+# Have Separate Spaces is on, and that is what makes ownership unambiguous.
+# Geometry is checked on NEGATIVE-origin displays -- his left panel is at
+# x=-1920 and his top panel at y=-1080 -- because a formula verified only on
+# the primary is not verified.
+from window_tracker import PixelRect
+from spaces import confine_to_work_area, straddles
+LEFT = PixelRect(-1920, 0, 1920, 1080)     # his non-primary panel
+PRIMARY = PixelRect(0, 0, 1920, 1080)
+
+inside = PixelRect(-1800, 100, 800, 600)
+check("a window fully on its display is left alone",
+      not straddles(inside, LEFT)
+      and confine_to_work_area(inside, LEFT) == inside)
+
+spanning = PixelRect(-200, 100, 800, 600)   # half on LEFT, half on PRIMARY
+check("a window across the boundary is detected",
+      straddles(spanning, LEFT))
+pulled = confine_to_work_area(spanning, LEFT)
+check("it is pulled fully onto the owning display, size kept",
+      not straddles(pulled, LEFT)
+      and pulled.width == 800 and pulled.height == 600
+      and pulled.x == -1920 + 1920 - 800)
+
+oversized = PixelRect(-1900, 50, 3000, 1200)
+shrunk = confine_to_work_area(oversized, LEFT)
+check("a window larger than the display shrinks to fit, not hangs off",
+      shrunk.width == 1920 and shrunk.height == 1080
+      and not straddles(shrunk, LEFT))
+
+maximized = PixelRect(-1920, 0, 1920, 1080)
+check("a maximized window is not treated as straddling",
+      not straddles(maximized, LEFT)
+      and confine_to_work_area(maximized, LEFT) == maximized)
+
+check("confinement is idempotent",
+      confine_to_work_area(pulled, LEFT) == pulled)
+
+above = PixelRect(4, -1080, 1920, 1080)     # his third panel, negative Y
+hangs_up = PixelRect(100, -1200, 600, 400)
+check("negative-Y displays confine on the Y axis too",
+      straddles(hangs_up, above)
+      and not straddles(confine_to_work_area(hangs_up, above), above))

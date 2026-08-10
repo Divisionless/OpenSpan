@@ -7229,6 +7229,30 @@ class App:
                     "the display under the pointer. Turning it off restores "
                     "every window.")
 
+    def _confine(self, spaces_mod, window, monitors):
+        """Pull a straddling window fully onto the display that owns it.
+
+        Doug's observation, and it is the one that makes the rest coherent:
+        macOS forbids a window spanning two screens while Displays Have
+        Separate Spaces is on. A window lying across a boundary has no
+        unambiguous owner, so every ownership question this feature asks
+        gets two defensible answers -- which is the source of the
+        'Alt+1 moved something that isn't on this screen' class of bug.
+        """
+        owner = next((m for m in monitors
+                      if m.id == window.monitor), None)
+        if owner is None or not spaces_mod.straddles(window.bounds,
+                                                     owner.bounds):
+            return
+        target = spaces_mod.confine_to_work_area(window.bounds, owner.bounds)
+        if target == window.bounds:
+            return
+        try:
+            from window_tracker import WindowService
+            WindowService().place(window.handle, target)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _attach_space_chords(self):
         """Point the hotkey host's space verbs at the live Spaces module."""
         host = self._window_host()
@@ -7266,10 +7290,15 @@ class App:
             #     Alt+n kept reclaiming a window that had left it. rehome()
             #     only fires on a real monitor change, so this cannot disturb
             #     a window's space on the screen it is already on.
+            handle = _dragged_window()
             for window in live:
                 try:
                     if not module.window_appeared(window):
                         module.window_moved(window)
+                    # Confine, unless it is the window in hand -- snapping a
+                    # window the user is actively dragging would fight them.
+                    if window.handle != handle:
+                        self._confine(_spaces, window, monitors)
                 except Exception:  # noqa: BLE001
                     pass
             target = _spaces._pointer_monitor(monitors)
@@ -7279,7 +7308,6 @@ class App:
                 return
             # Carry the dragged window, so hold-a-title-bar + Alt+n takes it
             # with you instead of switching out from under it.
-            handle = _dragged_window()
             if handle is not None:
                 carried = next((w for w in live if w.handle == handle), None)
                 if carried is not None:

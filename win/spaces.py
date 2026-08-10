@@ -760,6 +760,41 @@ def _live_monitors() -> tuple[LiveMonitor, ...]:
     return tuple(result)
 
 
+def straddles(bounds: PixelRect, work_area: PixelRect) -> bool:
+    """True when a window hangs off the display that owns it."""
+    if work_area.width <= 0 or work_area.height <= 0:
+        return False
+    return (bounds.x < work_area.x or bounds.y < work_area.y
+            or bounds.x + bounds.width > work_area.x + work_area.width
+            or bounds.y + bounds.height > work_area.y + work_area.height)
+
+
+def confine_to_work_area(bounds: PixelRect,
+                         work_area: PixelRect) -> PixelRect:
+    """Pull a window fully onto one display, keeping as much size as fits.
+
+    macOS does not let a window span two screens while Displays Have
+    Separate Spaces is on, and that is not cosmetic: a window lying across
+    a boundary has no unambiguous owner, so every question this feature
+    asks -- which space holds it, which screen's switch should move it --
+    has two defensible answers and picks one arbitrarily. Confining the
+    window makes ownership a fact instead of a guess.
+
+    Position is preserved where it can be and clamped where it cannot;
+    size shrinks only when the window is larger than the display.
+    """
+    if (work_area.width <= 0 or work_area.height <= 0
+            or bounds.width <= 0 or bounds.height <= 0):
+        return bounds
+    width = min(bounds.width, work_area.width)
+    height = min(bounds.height, work_area.height)
+    x = min(max(bounds.x, work_area.x),
+            work_area.x + work_area.width - width)
+    y = min(max(bounds.y, work_area.y),
+            work_area.y + work_area.height - height)
+    return PixelRect(x, y, width, height)
+
+
 def _choose_monitor(bounds: PixelRect,
                     monitors: Sequence[LiveMonitor]) -> LiveMonitor | None:
     if not monitors:
