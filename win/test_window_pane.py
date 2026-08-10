@@ -48,6 +48,25 @@ full_stop = ast.get_source_segment(source, method("_full_stop"))
 check("shutdown releases the hook before anything else",
       "_wm_host" in full_stop
       and full_stop.index("_wm_host") < full_stop.index("clip_server"))
+check("shutdown also unzooms: exiting magnified is unrecoverable",
+      "_zoom" in full_stop
+      and full_stop.index("_zoom") < full_stop.index("clip_server"))
+
+zoom_toggle = ast.get_source_segment(source, method("_toggle_screen_zoom"))
+check("the mouse hook starts only from the zoom toggle",
+      "zoom.start()" in zoom_toggle
+      and len([n for n in ast.walk(app)
+               if isinstance(n, ast.Call)
+               and isinstance(n.func, ast.Attribute)
+               and n.func.attr == "start"
+               and isinstance(n.func.value, ast.Name)
+               and n.func.value.id == "zoom"]) == 1)
+check("a refused zoom start says why and installs nothing",
+      "refused" in zoom_toggle and "last_error" in zoom_toggle)
+check("screen_zoom is imported lazily",
+      "import screen_zoom" in ast.get_source_segment(
+          source, method("_screen_zoom"))
+      and not re.search(r"^import screen_zoom", source, re.M))
 
 host_builder = ast.get_source_segment(source, method("_window_host"))
 check("hotkey_host is imported lazily inside its builder",

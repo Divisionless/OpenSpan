@@ -6956,6 +6956,18 @@ class App:
         _wmb.pack(fill="x", pady=(PAD_XS, 0))
         bind_wraplength(_wmb)
 
+        # Zoom rides its own switch: it installs a MOUSE hook, which is a
+        # different risk from the keyboard one and worth failing separately.
+        zrow = tk.Frame(wm, bg=BG)
+        zrow.pack(fill="x", pady=(PAD_SM, 0))
+        self.zoom_state = tk.StringVar(value="off — hold Alt and scroll "
+                                             "does nothing yet")
+        self.zoom_btn = ttk.Button(zrow, text="Turn on Alt+scroll zoom",
+                                   command=self._toggle_screen_zoom)
+        self.zoom_btn.pack(side="left")
+        tk.Label(zrow, textvariable=self.zoom_state, bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
+
         desk = _section(pane_system, "System desk — AI usage")
         self.usage_codex = tk.StringVar(value="Codex  reading local data…")
         self.usage_claude = tk.StringVar(value="Claude  reading local data…")
@@ -7077,6 +7089,7 @@ class App:
         threading.Thread(target=self._usage_worker,
                          name="openspan-usage-monitor", daemon=True).start()
         self._wm_host = None
+        self._zoom = None
         self.ui(self._show_window_chords)
 
     # ---- window management (ported EsotericOS features) --------------------
@@ -7134,7 +7147,42 @@ class App:
             return
         self.wm_state.set("ON — chords are intercepted")
         self.wm_btn.config(text="Turn off window chords")
-        _emit("ok", "window chords on — try Win+Alt+Left on a focused window.")
+        _emit("ok", "window chords on — try Ctrl+Win+Alt+Numpad 4 on a "
+                    "focused window.")
+
+    def _screen_zoom(self):
+        """The zoom module, built on first use. None when unavailable."""
+        if self._zoom is None:
+            try:
+                import screen_zoom
+                self._zoom = screen_zoom.ScreenZoomModule()
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"screen zoom unavailable: {exc}")
+                return None
+        return self._zoom
+
+    def _toggle_screen_zoom(self):
+        """Start or stop the MOUSE hook. The ONE place either happens."""
+        zoom = self._screen_zoom()
+        if zoom is None:
+            self.zoom_state.set("unavailable on this machine")
+            self.zoom_btn.state(["disabled"])
+            return
+        if getattr(zoom, "is_running", False):
+            zoom.stop()   # restores 1.0x before releasing, by contract
+            self.zoom_state.set("off — hold Alt and scroll does nothing yet")
+            self.zoom_btn.config(text="Turn on Alt+scroll zoom")
+            _emit("ok", "screen zoom off — the wheel is untouched.")
+            return
+        if not zoom.start():
+            self.zoom_state.set(
+                f"refused — {zoom.last_error or 'magnification unavailable'}")
+            _emit("err", "screen zoom refused: the Magnification API would "
+                         "not initialize; nothing was installed.")
+            return
+        self.zoom_state.set("ON — hold Alt and scroll to zoom")
+        self.zoom_btn.config(text="Turn off Alt+scroll zoom")
+        _emit("ok", "screen zoom on — hold Alt and scroll the wheel.")
 
     def _usage_worker(self):
         """Refresh local AI usage without ever touching Tk off-thread."""
@@ -8316,6 +8364,15 @@ class App:
         if _host is not None and _host.is_running:
             try:
                 _host.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        # Zoom too, and for a sharper reason: stop() puts magnification back
+        # to 1.0x. Exiting while zoomed would leave the screen magnified with
+        # nothing left running to undo it.
+        _zoom = getattr(self, "_zoom", None)
+        if _zoom is not None and getattr(_zoom, "is_running", False):
+            try:
+                _zoom.stop()
             except Exception:  # noqa: BLE001
                 pass
         if getattr(self, "clip_server", None):
