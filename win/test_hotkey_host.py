@@ -9,6 +9,7 @@ import hotkey_host as host
 from config_store import ConfigStore
 from keyboard_interception import (
     ChordModifiers,
+    KeySequence,
     KeyboardRouter,
     KeyboardRoutingVerdictKind,
     RawKeyboardEvent,
@@ -279,15 +280,22 @@ check("apply rules now reports a completed injected rule pass",
 
 # ---- registry, live binding table, consumer routing, and hook lifetime --------
 
-expected_bindings = {
-    chord: command for command, _argument, chord
-    in (*host.ZONE_COMMANDS, *host.REFINE_COMMANDS)
-}
-expected_bindings["Win+Alt+Numpad 5"] = host.RESTORE_COMMAND
-# Every numpad zone also answers to a laptop chord: the reference bindings
-# alone leave eight dead keys on a keyboard without a numpad.
-for _command, _chord in host.LAPTOP_SHORTCUTS.items():
-    expected_bindings[_chord] = _command
+def _canonical(chord):
+    """The router's spelling, so the table can be compared honestly."""
+    return str(KeySequence.parse(chord))
+
+
+# Every zone answers to three spellings of the same idea: the numpad digit
+# whose position is the zone, the same digit on the number row, and (for the
+# halves) an arrow. All under Doug's triple modifier.
+expected_bindings = {}
+for _command, _argument, _chord in (*host.ZONE_COMMANDS, *host.REFINE_COMMANDS):
+    expected_bindings[_canonical(_chord)] = _command
+for _table in (host.TOP_ROW_DIGITS, host.LAPTOP_SHORTCUTS):
+    for _command, _chord in _table.items():
+        expected_bindings[_canonical(_chord)] = _command
+expected_bindings[_canonical("Ctrl+Win+Alt+Numpad 5")] = host.RESTORE_COMMAND
+expected_bindings[_canonical("Ctrl+Win+Alt+5")] = host.RESTORE_COMMAND
 
 
 class FakeService:
@@ -329,14 +337,16 @@ check("the feature declaration is disabled by default",
 check("the live binding table carries the reference and laptop chords",
       hotkeys.bindings() == expected_bindings)
 check("every zone is reachable without a numpad",
-      all(any(chord in host.LAPTOP_SHORTCUTS.values()
-              and command == bound
-              for chord, bound in hotkeys.bindings().items())
+      all(command in host.TOP_ROW_DIGITS
           for command, _argument, _chord in host.ZONE_COMMANDS))
-check("no laptop chord collides with a reference chord",
-      len(set(host.LAPTOP_SHORTCUTS.values())
-          & {chord for _c, _a, chord in
-             (*host.ZONE_COMMANDS, *host.REFINE_COMMANDS)}) == 0)
+check("every zone chord carries Doug's triple modifier",
+      all(chord.startswith("Ctrl+Win+Alt+")
+          for _c, _a, chord in host.ZONE_COMMANDS)
+      and all(chord.startswith("Ctrl+Win+Alt+")
+              for chord in (*host.TOP_ROW_DIGITS.values(),
+                            *host.LAPTOP_SHORTCUTS.values())))
+check("no alternate chord collides with another binding",
+      len(hotkeys.bindings()) == len(expected_bindings))
 check("collisions delegates to settings_service",
       hotkeys.collisions() == settings.shortcut_collisions())
 check("construction installs and registers nothing",
@@ -347,7 +357,7 @@ started = hotkeys.start()
 consumer = service.registered[-1]
 verdict = consumer.process_key_event(
     RawKeyboardEvent(0x64, 0, True, False, 0, "Numpad4"),
-    ChordModifiers.WIN | ChordModifiers.ALT)
+    ChordModifiers.CTRL | ChordModifiers.WIN | ChordModifiers.ALT)
 verdict.action()
 check("a matching key-down is swallowed with its window action",
       started.performed

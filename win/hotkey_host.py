@@ -45,24 +45,41 @@ from window_tracker import WindowRejection, WindowService
 FEATURE_ID = "halves-quarters-keyboard-tiling"
 CONSUMER_ID = "OpenSpan.HotkeyHost"
 
+# Doug's mapping, which is the one that ships: Ctrl+Win+Alt plus the number
+# whose numpad position IS the zone (7 8 9 / 4 5 6 / 1 2 3 laid over the
+# screen). The C# reference used Win+Alt; the triple modifier is deliberate,
+# because Win+Alt+digit collides with far more third-party software.
 ZONE_COMMANDS: tuple[tuple[str, TileZone, str], ...] = (
     ("esotericos.tile.left-half", TileZone.LEFT_HALF,
-     "Win+Alt+Numpad 4"),
+     "Ctrl+Win+Alt+Numpad 4"),
     ("esotericos.tile.right-half", TileZone.RIGHT_HALF,
-     "Win+Alt+Numpad 6"),
+     "Ctrl+Win+Alt+Numpad 6"),
     ("esotericos.tile.top-half", TileZone.TOP_HALF,
-     "Win+Alt+Numpad 8"),
+     "Ctrl+Win+Alt+Numpad 8"),
     ("esotericos.tile.bottom-half", TileZone.BOTTOM_HALF,
-     "Win+Alt+Numpad 2"),
+     "Ctrl+Win+Alt+Numpad 2"),
     ("esotericos.tile.top-left", TileZone.TOP_LEFT,
-     "Win+Alt+Numpad 7"),
+     "Ctrl+Win+Alt+Numpad 7"),
     ("esotericos.tile.top-right", TileZone.TOP_RIGHT,
-     "Win+Alt+Numpad 9"),
+     "Ctrl+Win+Alt+Numpad 9"),
     ("esotericos.tile.bottom-left", TileZone.BOTTOM_LEFT,
-     "Win+Alt+Numpad 1"),
+     "Ctrl+Win+Alt+Numpad 1"),
     ("esotericos.tile.bottom-right", TileZone.BOTTOM_RIGHT,
-     "Win+Alt+Numpad 3"),
+     "Ctrl+Win+Alt+Numpad 3"),
 )
+
+# The same digits on the number ROW, so the mapping works on a keyboard with
+# no numpad without asking anyone to learn a second layout.
+TOP_ROW_DIGITS: dict[str, str] = {
+    "esotericos.tile.left-half": "Ctrl+Win+Alt+4",
+    "esotericos.tile.right-half": "Ctrl+Win+Alt+6",
+    "esotericos.tile.top-half": "Ctrl+Win+Alt+8",
+    "esotericos.tile.bottom-half": "Ctrl+Win+Alt+2",
+    "esotericos.tile.top-left": "Ctrl+Win+Alt+7",
+    "esotericos.tile.top-right": "Ctrl+Win+Alt+9",
+    "esotericos.tile.bottom-left": "Ctrl+Win+Alt+1",
+    "esotericos.tile.bottom-right": "Ctrl+Win+Alt+3",
+}
 RESTORE_COMMAND = "esotericos.tile.restore"
 REFINE_COMMANDS: tuple[tuple[str, TileDirection, str], ...] = (
     ("esotericos.tile.refine-left", TileDirection.LEFT, "Win+Left"),
@@ -71,29 +88,26 @@ REFINE_COMMANDS: tuple[tuple[str, TileDirection, str], ...] = (
     ("esotericos.tile.refine-down", TileDirection.DOWN, "Win+Down"),
 )
 
-# The reference bindings are numpad-based, which is unreachable on a laptop
-# keyboard -- eight of the thirteen defaults would be dead keys on the machine
-# this ships to first. Each zone therefore carries a second, numpad-free chord;
-# both are bound, so muscle memory from either layout works.
+# Arrow equivalents for the halves, for reaching a zone without hunting for a
+# digit. Quarters stay digit-only: a four-modifier arrow chord is worse than
+# the number whose position already means the corner.
 LAPTOP_SHORTCUTS: dict[str, str] = {
-    "esotericos.tile.left-half": "Win+Alt+Left",
-    "esotericos.tile.right-half": "Win+Alt+Right",
-    "esotericos.tile.top-half": "Win+Alt+Up",
-    "esotericos.tile.bottom-half": "Win+Alt+Down",
-    "esotericos.tile.top-left": "Win+Alt+Shift+Left",
-    "esotericos.tile.top-right": "Win+Alt+Shift+Up",
-    "esotericos.tile.bottom-left": "Win+Alt+Shift+Down",
-    "esotericos.tile.bottom-right": "Win+Alt+Shift+Right",
-    RESTORE_COMMAND: "Win+Alt+Backspace",
+    "esotericos.tile.left-half": "Ctrl+Win+Alt+Left",
+    "esotericos.tile.right-half": "Ctrl+Win+Alt+Right",
+    "esotericos.tile.top-half": "Ctrl+Win+Alt+Up",
+    "esotericos.tile.bottom-half": "Ctrl+Win+Alt+Down",
+    RESTORE_COMMAND: "Ctrl+Win+Alt+Backspace",
 }
 
 DEFAULT_SHORTCUTS = {
-    command: ((chord, LAPTOP_SHORTCUTS[command])
-              if command in LAPTOP_SHORTCUTS else (chord,))
-    for command, _argument, chord in (*ZONE_COMMANDS, *REFINE_COMMANDS)
+    command: tuple(chord for chord in (
+        reference, TOP_ROW_DIGITS.get(command),
+        LAPTOP_SHORTCUTS.get(command)) if chord)
+    for command, _argument, reference in (*ZONE_COMMANDS, *REFINE_COMMANDS)
 }
 DEFAULT_SHORTCUTS[RESTORE_COMMAND] = (
-    "Win+Alt+Numpad 5", LAPTOP_SHORTCUTS[RESTORE_COMMAND])
+    "Ctrl+Win+Alt+Numpad 5", "Ctrl+Win+Alt+5",
+    LAPTOP_SHORTCUTS[RESTORE_COMMAND])
 
 FEATURE_DECLARATION = FeatureDeclaration(
     FEATURE_ID,
