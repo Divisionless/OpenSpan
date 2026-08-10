@@ -7241,6 +7241,17 @@ class App:
             if module is None or not module.enabled:
                 return
             monitors = _spaces._live_monitors()
+            # Re-sync BEFORE switching. enable() takes a one-time snapshot, so
+            # anything opened afterwards was never in the model and simply did
+            # not participate -- which reads as "Alt+1 only affects some of my
+            # windows". window_appeared is idempotent: it returns False for a
+            # window the model already knows, so this is a cheap catch-up, not
+            # a rebuild, and it never re-homes a window the user moved.
+            for window in _spaces._live_windows(monitors):
+                try:
+                    module.window_appeared(window)
+                except Exception:  # noqa: BLE001
+                    pass
             target = _spaces._pointer_monitor(monitors)
             if target is None:
                 target = monitors[0] if monitors else None

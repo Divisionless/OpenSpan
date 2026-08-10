@@ -55,32 +55,24 @@ function Set-WindowsBluetooth($enabled) {
 }
 
 if ($mode -eq 'station') {
+    # THE job of this task, and the only part it can actually do.
+    #
+    # It does NOT start the VM, and the retry loop that used to try was never
+    # capable of it: this task runs as SYSTEM, and VirtualBox registers
+    # machines PER USER. SYSTEM has no VirtualBox registry at all
+    # (%SystemRoot%\System32\config\systemprofile\.VirtualBox is absent), so
+    # `startvm` could not find the machine under any name -- which is why
+    # every boot from 2026-08-02 to 2026-08-10 logged a failure. Fixing the
+    # name in 2026-08-09 made the log honest about the name and no more.
+    #
+    # Starting the VM belongs to the app, which runs as Doug, elevated, and
+    # already does it in station mode. What CANNOT wait for the app is
+    # standing Windows' Bluetooth down: it has to happen before the Windows
+    # stack binds the radios, and only something running at boot can do that.
+    # So the task owns ownership, the app owns the VM, and each runs where it
+    # is actually able to succeed.
     Set-WindowsBluetooth $false
-
-    # At boot the VBox host services/drivers take ~20-40s to be ready, so
-    # startvm can no-op silently. Wait for VBox, then retry until the VM
-    # actually stays running.
-    Start-Sleep -Seconds 25
-    $up = $false
-    for ($i = 0; $i -lt 12; $i++) {
-        # Match the quoted name exactly: a bare substring match would let
-        # "OpenSpan" pass for "OpenSpan-Codex" and vice versa.
-        if (& $VBOX list runningvms | Select-String ('"' + [regex]::Escape($vm) + '"')) {
-            $up = $true; break
-        }
-        & $VBOX startvm $vm --type headless | Out-Null
-        Start-Sleep -Seconds 8
-    }
-    Log ("boot: command-station VM " + $(if ($up) { "running" } else { "start FAILED after retries" }))
-
-    if ($up) {
-        # Say what the VM actually holds. "Started" is not "owns the radios",
-        # and the difference is the whole failure mode this script exists for.
-        $held = (& $VBOX showvminfo $vm 2>$null |
-            Select-String 'Currently attached USB devices' -Context 0,40 |
-            Select-String 'ProductId:' | Measure-Object).Count
-        Log "boot: VM holds $held USB device(s)"
-    }
+    Log "boot: radios reserved for EsotericOS - the app starts the VM"
 } else {
     Set-WindowsBluetooth $true
     Log "boot: windows mode - radios left with Windows"

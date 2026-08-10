@@ -22,14 +22,14 @@ boot = (ROOT / "OpenSpan-boot.ps1").read_text(encoding="utf-8")
 check("the VM name is read from settings, not hardcoded",
       "openspan_settings.json" in boot and "$settings.vm_name" in boot)
 
-# Only real invocations count; the word also appears in the comments that
-# explain why this went wrong.
-literals = re.findall(r"\$VBOX\s+startvm\s+(\S+)", boot)
-check("startvm uses the resolved variable",
-      literals and all(name.startswith("$") for name in literals))
-
-check("running-VM detection matches the quoted name exactly",
-      "regex]::Escape($vm)" in boot)
+# The task runs as SYSTEM, and VirtualBox registers machines PER USER, so
+# SYSTEM cannot see this VM under any name. Attempting the start here can
+# only write a false failure into the log -- which it did at every boot from
+# 2026-08-02 to 2026-08-10.
+check("the boot task does not try to start the VM",
+      not re.search(r"\$VBOX\s+startvm", boot))
+check("the reason is recorded where the next reader will look",
+      "PER USER" in boot and "SYSTEM" in boot)
 
 settings = json.loads((ROOT / "openspan_settings.json").read_text(
     encoding="utf-8"))
@@ -44,7 +44,5 @@ check("station mode stands the Windows Bluetooth service down",
 check("windows mode restores it, so the switch is reversible",
       "Set-WindowsBluetooth $true" in boot
       and "Start-Service bthserv" in boot)
-check("the stand-down happens BEFORE the VM starts",
-      boot.index("Set-WindowsBluetooth $false") < boot.index("startvm"))
-check("the boot log reports what the VM actually holds",
-      "USB device(s)" in boot)
+check("station mode reserves the radios and says so",
+      "radios reserved for EsotericOS" in boot)

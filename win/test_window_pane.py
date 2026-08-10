@@ -112,6 +112,11 @@ check("enabling Spaces attaches the Alt+<n> switch chords",
 attach = ast.get_source_segment(source, method("_attach_space_chords"))
 check("the switch chords act on the display under the pointer",
       "_pointer_monitor" in attach and "switch_to_ordinal" in attach)
+# enable() snapshots once; without a catch-up, windows opened later never
+# join a space and Alt+<n> appears to work on only some applications.
+check("a switch re-syncs windows opened since Spaces was enabled",
+      "window_appeared" in attach
+      and attach.index("window_appeared") < attach.index("switch_to_ordinal"))
 check("a switch with Spaces disabled does nothing rather than raising",
       "module.enabled" in attach)
 check("one feature failing to arm cannot stop the other or the app",
