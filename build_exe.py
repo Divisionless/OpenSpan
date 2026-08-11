@@ -22,7 +22,14 @@ if not os.path.isfile(ICON):
     ICON = os.path.join(ROOT, "openspan.ico")
 DIST = os.path.join(ROOT, "dist")
 BUILD = os.path.join(ROOT, "build")
-NAME = os.environ.get("OPENSPAN_BUILD_NAME", "OpenSpan").strip() or "OpenSpan"
+# The product is EsotericOS. This defaulted to "OpenSpan" long after the
+# rename, so a plain `python build_exe.py` quietly produced the old name --
+# which is how six differently-named binaries ended up in one folder, and why
+# the build stamp has to derive "is this a test build?" from the exe's name.
+# The env var still overrides, for staging a build under a throwaway name.
+NAME = os.environ.get("ESOTERICOS_BUILD_NAME",
+                      os.environ.get("OPENSPAN_BUILD_NAME", "EsotericOS")
+                      ).strip() or "EsotericOS"
 
 args = [
     os.path.join(WIN, "openspan_launcher.py"),

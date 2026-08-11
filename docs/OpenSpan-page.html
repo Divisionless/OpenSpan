@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenSpan — one keyboard, every machine on the desk</title>
+<meta name="description" content="OpenSpan turns a Windows PC into a Bluetooth keyboard and mouse for a nearby iPad and Macs. Free, local, MIT licensed.">
+<meta name="color-scheme" content="dark light">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img, svg { display: block; max-width: 100%; }
+</style>
+</head>
+<body>
+<style>
+  /* ---- tokens ---------------------------------------------------------- */
+  :root {
+    --ink:      #0e1015;
+    --panel:    #171b24;
+    --card:     #1e2430;
+    --line:     #262d3b;
+    --fg:       #e3e8f2;
+    --muted:    #8b93a7;
+    --faint:    #5b6274;
+
+    /* The accent is OpenSpan's own PORTAL violet -- the colour it paints
+       crossing edges with, so they read as routes. Green and amber below are
+       SEMANTIC only: live and waiting. They are states, not decoration. */
+    --route:    #a78bfa;
+    --route-dim:#5b4a9e;
+    --live:     #3fdc8a;
+    --hold:     #f5c451;
+
+    --mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+    --disp: "Bahnschrift", "DIN Alternate", "Franklin Gothic Medium",
+            "Segoe UI Semibold", system-ui, sans-serif;
+    --body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+            sans-serif;
+
+    --shell: 1080px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ink:   #f2f3f7;
+      --panel: #ffffff;
+      --card:  #ffffff;
+      --line:  #d9dde8;
+      --fg:    #161a22;
+      --muted: #5b6274;
+      --faint: #8b93a7;
+      --route: #6d4fd6;
+      --route-dim: #c3b5f2;
+      --live:  #12855a;
+      --hold:  #9a6b06;
+    }
+  }
+  :root[data-theme="light"] {
+    --ink:#f2f3f7; --panel:#fff; --card:#fff; --line:#d9dde8;
+    --fg:#161a22; --muted:#5b6274; --faint:#8b93a7;
+    --route:#6d4fd6; --route-dim:#c3b5f2; --live:#12855a; --hold:#9a6b06;
+  }
+  :root[data-theme="dark"] {
+    --ink:#0e1015; --panel:#171b24; --card:#1e2430; --line:#262d3b;
+    --fg:#e3e8f2; --muted:#8b93a7; --faint:#5b6274;
+    --route:#a78bfa; --route-dim:#5b4a9e; --live:#3fdc8a; --hold:#f5c451;
+  }
+
+  /* ---- ground ---------------------------------------------------------- */
+  body {
+    background: var(--ink);
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: var(--shell); margin: 0 auto; padding: 0 28px; }
+
+  h1, h2, h3 { font-family: var(--disp); font-weight: 600;
+               text-wrap: balance; margin: 0; letter-spacing: .01em; }
+  p { margin: 0; max-width: 66ch; }
+  a { color: var(--route); }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--route); outline-offset: 3px; border-radius: 2px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--faint);
+  }
+
+  /* ---- masthead -------------------------------------------------------- */
+  header { border-bottom: 1px solid var(--line); padding: 84px 0 0; }
+  .mast { display: flex; flex-direction: column; gap: 22px; }
+  h1 {
+    font-size: clamp(46px, 8.5vw, 92px); line-height: .94;
+    letter-spacing: -.015em;
+  }
+  h1 .thin { color: var(--muted); }
+  .lede { font-size: clamp(18px, 2.3vw, 22px); color: var(--muted);
+          max-width: 40ch; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 4px 0 40px;
+    font-family: var(--mono); font-size: 12px; color: var(--faint);
+  }
+  .meta span { display: inline-flex; align-items: center; gap: 7px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
+
+  /* ---- the desk -------------------------------------------------------- */
+  .deskwrap { border-bottom: 1px solid var(--line); padding: 40px 0 56px; }
+  /* aspect is the real world box: 7409 x 3039 desk units */
+  .desk {
+    position: relative; width: 100%; aspect-ratio: 7409 / 3039;
+    background:
+      radial-gradient(120% 90% at 50% 42%,
+        color-mix(in srgb, var(--route) 9%, transparent), transparent 68%),
+      var(--panel);
+    border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
+  }
+  .scr {
+    position: absolute; border: 1px solid var(--route-dim);
+    background: color-mix(in srgb, var(--route) 11%, var(--card));
+    border-radius: 2px; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 5px 7px; gap: 1px;
+    font-family: var(--mono); font-size: 10px; color: var(--fg);
+    letter-spacing: .03em;
+  }
+  .scr em { font-style: normal; font-size: 9px; color: var(--muted);
+            font-variant-numeric: tabular-nums; }
+  .scr.pc {
+    border-color: var(--line);
+    background: color-mix(in srgb, var(--fg) 5%, var(--panel));
+    color: var(--muted);
+  }
+  .scr.tall { justify-content: flex-end; }
+  .scr.tight { font-size: 9px; padding: 4px 5px; }
+  .scr.tight em { font-size: 8px; }
+
+  /* the pointer: the whole product in one moving dot. Every waypoint below is
+     a real coordinate in the arrangement above, and every crossing happens at
+     an edge two of those screens actually share. */
+  .ptr {
+    position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+    border-radius: 50%; background: var(--live);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--live) 22%, transparent),
+                0 0 18px color-mix(in srgb, var(--live) 55%, transparent);
+    animation: cross 15s cubic-bezier(.5,.03,.35,1) infinite;
+  }
+  @keyframes cross {
+    0%   { left: 90%;   top: 86%; }            /* This PC · primary        */
+    10%  { left: 70%;   top: 86%; }            /* the middle PC            */
+    17%  { left: 60.32%;top: 84%; }            /* seam -> iPad             */
+    24%  { left: 55%;   top: 82%; }            /* on the iPad              */
+    31%  { left: 55%;   top: 72.59%; }         /* seam -> Mac Display 3    */
+    40%  { left: 60%;   top: 55%; }            /* on Mac 3, the 144 Hz one */
+    50%  { left: 42.35%;top: 50%; }            /* seam -> Mac Display 2    */
+    58%  { left: 31%;   top: 45%; }            /* on the portrait 4K       */
+    68%  { left: 42.35%;top: 50%; }
+    76%  { left: 60%;   top: 60%; }
+    84%  { left: 55%;   top: 78%; }
+    92%  { left: 70%;   top: 86%; }
+    100% { left: 90%;   top: 86%; }
+  }
+  /* the two edges the pointer actually crosses on this desk */
+  .seam {
+    position: absolute; background: var(--route); opacity: .65;
+  }
+  .seam.v { width: 1px; }
+  .seam.h { height: 1px; }
+  .seam span {
+    position: absolute; white-space: nowrap;
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--route);
+  }
+  .deskcap {
+    display: flex; justify-content: space-between; gap: 18px;
+    padding-top: 12px; font-family: var(--mono); font-size: 11px;
+    color: var(--faint); flex-wrap: wrap;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ptr { animation: none; left: 50.6%; top: 50%; }
+  }
+
+  /* ---- lanes ----------------------------------------------------------- */
+  section { border-bottom: 1px solid var(--line); padding: 60px 0; }
+  .lane { display: grid; grid-template-columns: 132px 1fr; gap: 34px; }
+  .rail { font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+          text-transform: uppercase; color: var(--faint); padding-top: 9px; }
+  .lane h2 { font-size: clamp(26px, 3.4vw, 34px); margin-bottom: 16px;
+             letter-spacing: -.01em; }
+  .lane > div > p + p { margin-top: 14px; }
+  .body-stack { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ---- pieces ---------------------------------------------------------- */
+  .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+           background: var(--line); border: 1px solid var(--line);
+           border-radius: 3px; overflow: hidden; }
+  .cell { background: var(--panel); padding: 20px 22px;
+          display: flex; flex-direction: column; gap: 7px; }
+  .cell h3 { font-size: 17px; }
+  .cell p { font-size: 15px; color: var(--muted); }
+
+  .flow {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.85;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 3px; padding: 20px 22px; overflow-x: auto;
+    color: var(--muted); white-space: pre;
+  }
+  .flow b { color: var(--fg); font-weight: 600; }
+  .flow i { color: var(--route); font-style: normal; }
+
+  ul.ticks { list-style: none; padding: 0; margin: 0;
+             display: flex; flex-direction: column; gap: 11px; }
+  ul.ticks li { display: grid; grid-template-columns: 16px 1fr; gap: 12px;
+                font-size: 16px; }
+  ul.ticks li::before {
+    content: ""; width: 7px; height: 7px; margin-top: 9px; border-radius: 50%;
+    background: var(--route);
+  }
+  ul.ticks b { font-weight: 600; }
+  ul.ticks span { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0;
+           border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em;
+       text-transform: uppercase; color: var(--faint); font-weight: 400; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums;
+         color: var(--fg); white-space: nowrap; }
+  td.was { color: var(--faint); text-decoration: line-through; }
+  .tablewrap { overflow-x: auto; }
+
+  .note {
+    border-left: 2px solid var(--hold); padding: 4px 0 4px 18px;
+    color: var(--muted); font-size: 15.5px;
+  }
+  .note b { color: var(--fg); }
+
+  footer { padding: 54px 0 76px; color: var(--faint);
+           font-family: var(--mono); font-size: 12px;
+           display: flex; flex-wrap: wrap; gap: 10px 30px; }
+
+  @media (max-width: 760px) {
+    .lane { grid-template-columns: 1fr; gap: 10px; }
+    .rail { padding-top: 0; }
+    .grid2 { grid-template-columns: 1fr; }
+    .desk { aspect-ratio: 4 / 3; }
+    header { padding-top: 54px; }
+  }
+</style>
+
+<header>
+  <div class="shell mast">
+    <div class="eyebrow">Windows · iPadOS · macOS — no software on the other machines</div>
+    <h1>One keyboard.<br><span class="thin">Every machine on the desk.</span></h1>
+    <p class="lede">
+      Push your mouse off the edge of the screen and it keeps going — onto the
+      iPad, onto the Mac, onto the laptop. <b>Type in Messages. Scroll Safari.
+      Drag a window on macOS.</b> Same keyboard, same hand, no switch box.
+    </p>
+    <div class="meta">
+      <span><i class="dot"></i>3 radios · 3 devices · 8 screens · 1 keyboard</span>
+      <span>MIT licensed</span>
+      <span>Nothing phones home</span>
+      <span>1,236 tests</span>
+    </div>
+  </div>
+</header>
+
+<div class="deskwrap">
+  <div class="shell">
+    <div class="desk" role="img" aria-label="The real arrangement: a managed Mac's two portrait 4K displays and a 2560 by 1440 centre display on the left, a laptop's two screens across the top, an iPad below the centre, and three PC monitors on the right. A pointer crosses from the PC to the iPad, up to the Mac, and on to the portrait display.">
+      <!-- Managed Mac -->
+      <div class="scr tall tight" style="left:0%;     top:0.89%;  width:21.18%; height:91.77%;">Mac Display 1<em>3840×2160 · 90°</em></div>
+      <div class="scr tall tight" style="left:21.18%; top:0.89%;  width:21.18%; height:91.77%;">Mac Display 2<em>3840×2160 · 90°</em></div>
+      <div class="scr"           style="left:42.35%; top:20.96%; width:37.64%; height:51.63%;">Mac Display 3<em>2560×1440 · 144 Hz</em></div>
+      <!-- Managed Laptop -->
+      <div class="scr tight"     style="left:42.35%; top:0%;     width:15.29%; height:20.96%;">MacAir-E<em>1920×1080</em></div>
+      <div class="scr tight"     style="left:57.65%; top:0%;     width:15.29%; height:20.96%;">MacAir<em>3840×2160</em></div>
+      <!-- iPad -->
+      <div class="scr tight"     style="left:49.30%; top:72.59%; width:11.01%; height:20.14%;">iPad<em>10.2″</em></div>
+      <!-- This PC -->
+      <div class="scr pc tight"  style="left:80%;    top:45.18%; width:20%;    height:27.41%;">This PC<em>1920×1080 · 144 Hz</em></div>
+      <div class="scr pc tight"  style="left:60.32%; top:72.59%; width:20%;    height:27.41%;">This PC<em>1920×1080</em></div>
+      <div class="scr pc tight"  style="left:80%;    top:72.59%; width:20%;    height:27.41%;">This PC · primary<em>1920×1080</em></div>
+
+      <!-- the edges the pointer really crosses -->
+      <div class="seam v" style="left:60.32%; top:72.59%; height:20.14%;"></div>
+      <div class="seam h" style="left:49.30%; top:72.59%; width:11.01%;"><span style="left:0; top:-14px;">iPad ↔ Mac</span></div>
+      <div class="seam v" style="left:42.35%; top:20.96%; height:51.63%;"></div>
+
+      <div class="ptr"></div>
+    </div>
+    <div class="deskcap">
+      <span>Drawn from the live arrangement: 8 screens, 7409 × 3039 desk units.</span>
+      <span>violet = an edge the pointer can cross</span>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="shell lane">
+    <div class="rail">What it does</div>
+    <div class="body-stack">
+      <h2>The pointer leaves this machine.</h2>
+      <p>
+        OpenSpan turns a Windows PC into a Bluetooth keyboard and mouse — the
+        real thing, at the protocol level. The iPad and the Macs see a paired
+        input device. They don't see a PC, and they don't need to: there is no
+        client, no agent, nothing installed on the far side.
+      </p>
+      <div class="grid2">
+        <div class="cell">
+          <h3>Cross an edge</h3>
+          <p>Shove the mouse off a screen border and input follows. Hold a side
+             button to cross, or jump straight to the nearest screen.</p>
+        </div>
+        <div class="cell">
+          <h3>Keep your clipboard</h3>
+          <p>Copy on the PC, paste on the iPad. Two-way, and marked private so
+             it never lands in another app's clipboard history.</p>
+        </div>
+        <div class="cell">
+          <h3>Route your audio</h3>
+          <p>PC sound goes out over the same Bluetooth radio to earbuds, while
+             the keyboard link stays up.</p>
+        </div>
+        <div class="cell">
+          <h3>Run three at once</h3>
+          <p>Three radios, three independent Bluetooth identities — an iPad and
+             two managed Macs, each with its own bond.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shell lane">
+    <div class="rail">The trick</div>
+    <div class="body-stack">
+      <h2>Windows won't do this. So a Linux VM does.</h2>
+      <p>
+        Windows deliberately blocks applications from publishing the Bluetooth
+        HID service — the OS reserves it for itself. Linux's BlueZ has no such
+        opinion. So OpenSpan runs a headless Debian VM that owns the radio over
+        USB passthrough and advertises as a real BLE keyboard. The Windows side
+        captures your input and streams it in.
+      </p>
+      <div class="flow">your keyboard / mouse
+       │  <i>low-level Win32 hooks</i>
+<b>Windows</b>  ──────── TCP :9955 ───────▶  <b>Debian VM</b>
+                                        │  BlueZ GATT (BLE HID)
+                                        ▼
+                                      <b>iPad</b>
+
+       ──────── TCP :9956 ───────▶  second radio ──▶  <b>Mac</b>
+       ──────── TCP :9957 ───────▶  third radio  ──▶  <b>Laptop</b>
+
+PC audio ──▶ WASAPI loopback ── UDP :4010 ──▶ PipeWire ──▶ A2DP ──▶ earbuds</div>
+      <p>
+        Everything is local. No cloud relay, no account, no telemetry — the
+        machines are talking to each other over Bluetooth in the same room.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shell lane">
+    <div class="rail">Built tonight</div>
+    <div class="body-stack">
+      <h2>The window used to need two monitors.</h2>
+      <p>
+        It opened at 2,120 pixels tall and had to be spanned across two screens
+        to see all of it. That wasn't a taste problem — it was two
+        <code>expand</code> flags handing every spare pixel to a canvas that
+        physically could not use them.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th>Window height</th><th>Fits</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="n was">2120 px</td><td>two monitors</td><td>where it started</td></tr>
+            <tr><td class="n">764 px</td><td>one screen, comfortably</td><td>where it ended</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="ticks">
+        <li><b>A proper sidebar.</b> <span>Desk, Devices, Bluetooth, System, Console — one at a time, so the window is as tall as what you're looking at instead of everything at once.</span></li>
+        <li><b>Right-click any screen.</b> <span>Set its resolution, refresh rate, rotation and physical size right on the map. Windows monitors show theirs read-only — the PC already knows those — with a Refresh now that re-reads them without clobbering anything you set by hand.</span></li>
+        <li><b>Buttons that answer you.</b> <span>They darken when pressed, and say "Pairing…" while they're working, with an honest estimate of how long that takes.</span></li>
+        <li><b>One alarm, at the cause.</b> <span>Stop the input bridge and every device dims to a muted green or amber — paused, not broken — while the Start button turns amber. You know instantly why nothing is happening.</span></li>
+        <li><b>Settings that stay set.</b> <span>How a device feels — pointer speed, acceleration, scroll direction — now follows the device, not the desk layout. Switching arrangements no longer quietly undoes your tuning.</span></li>
+      </ul>
+      <div class="note">
+        <b>One it had been lying about.</b> A 144&nbsp;Hz monitor had been
+        reported as 60&nbsp;Hz for as long as the code existed — a default
+        nothing ever overwrote. It now asks Windows.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shell lane">
+    <div class="rail">Good neighbour</div>
+    <div class="body-stack">
+      <h2>It shares the keyboard.</h2>
+      <p>
+        Two apps that both hook the keyboard can't see each other, and Windows
+        hands events to whichever launched last — so which one wins is an
+        accident of startup order. OpenSpan now holds a named lease while it
+        owns your input, and any other input tool can stand down for exactly
+        that window and take the keyboard straight back afterwards.
+      </p>
+      <p>
+        The lease is a mutex rather than a flag on purpose: if the holder dies
+        without releasing it, the next waiter is told, and reclaims it. A flag
+        would have stayed stuck forever, silently.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shell lane">
+    <div class="rail">Honest bits</div>
+    <div class="body-stack">
+      <h2>Two things worth knowing.</h2>
+      <ul class="ticks">
+        <li><b>Run it as administrator.</b> <span>Windows won't deliver
+          low-level input hooks to a lower-privilege app while an elevated
+          window has focus. If you keep an admin terminal open, the mouse just
+          stops crossing — no error, nothing in any log. The app checks at
+          launch and says so.</span></li>
+        <li><b>Press Esc three times to bail.</b> <span>Always. It works when
+          everything else is broken — no sockets, no threads, no reliance on
+          any state the app is tracking.</span></li>
+      </ul>
+      <p>
+        Free, MIT licensed, open source. It is a Tkinter app and a Debian VM
+        doing the one thing Windows refuses to, and it has 1,236 tests standing
+        behind it because the failures in this problem space are silent ones.
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="shell" style="display:flex; flex-wrap:wrap; gap:10px 30px;">
+    <span>OpenSpan</span>
+    <span>github.com/Divisionless/OpenSpan</span>
+    <span>MIT</span>
+    <span>no account · no cloud · no telemetry</span>
+  </div>
+</footer>
+
+</body>
+</html>

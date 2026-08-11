@@ -38,12 +38,24 @@ openspan_settings.json
 # runtime state written by the balance slider
 audio_balance.txt
 
-# PyInstaller build artifacts (the 64MB exe is built on demand, not tracked)
+# PyInstaller build artifacts (the ~70MB exe is built on demand, not tracked)
+#
+# These are PATTERNS, not filenames, and that distinction cost 149 MiB. The
+# rule used to name the single file "OpenSpan.exe" -- but build_exe.py writes
+# "OpenSpan.exe.prev" beside it as the rollback, and that name matched nothing.
+# So the backup binary was tracked, and eight copies of a 68.8 MiB executable
+# are in this repo's history. Ignore the CLASS of file; a build renamed
+# tomorrow must not be able to re-open the same hole.
 build/
 dist/
-OpenSpan.exe
-OpenSpan-Codex*.exe
+*.exe
+*.exe.prev
 *.spec
+
+# runtime state written by the app gain control
+audio_gain.txt
+# editor backup of the plan; plan.json itself is canonical and IS tracked
+docs/plan/plan.json.bak
 
 # personal / machine-specific runtime state (never publish)
 bt_prefs.json
@@ -60,3 +72,4 @@ CODE_REVIEW_2026-07-10.md
 mouse-lag-research-prompt.md
 preview-*.png
 docs/maintenance-*/
+.worktrees/
