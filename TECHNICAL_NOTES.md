@@ -164,13 +164,13 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
 ## 5. Windows launch + lifecycle
 
 - **On-demand only.** Launches from a Start Menu shortcut *or*
-  `D:\OpenSpan\OpenSpan.bat`. The launcher prefers the packaged
+  `D:\_EsotericOS\app\OpenSpan.bat`. The launcher prefers the packaged
   **`OpenSpan.exe`** (single file, built via `build_exe.py` — see BUILD.md)
   when present, and falls back to **`C:\Python313\openspanw.exe
   win\openspan.py`** otherwise.
 - **Single-file packaging (2026-07-12).** `build_exe.py` → PyInstaller →
   one ~64 MB `OpenSpan.exe` that runs in place (data files anchor on
-  `sys.executable`'s folder, which is `D:\OpenSpan`). The GUI's separate
+  `sys.executable`'s folder, which is `D:\_EsotericOS\app`). The GUI's separate
   portal/audio processes become **role flags of the same exe** (`--portal`,
   `--audio`, `--setup`) dispatched by `openspan_launcher.py` (the frozen
   entry script); every module switches its path anchor from `__file__` to

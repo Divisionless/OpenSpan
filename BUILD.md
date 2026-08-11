@@ -6,12 +6,12 @@ OpenSpan ships as source, but it also packages into ONE standalone
 ## Build
 
 ```
-C:\Python313\python.exe D:\OpenSpan\build_exe.py
+C:\Python313\python.exe D:\_EsotericOS\app\build_exe.py
 ```
 
 Needs PyInstaller (`pip install --user pyinstaller`; already present here).
-Produces `D:\OpenSpan\OpenSpan.exe` (~64 MB). It runs **in place** — the app
-anchors every data file on the exe's own folder, and `D:\OpenSpan\` already
+Produces `D:\_EsotericOS\app\OpenSpan.exe` (~64 MB). It runs **in place** — the app
+anchors every data file on the exe's own folder, and `D:\_EsotericOS\app\` already
 holds them, so there's nothing to assemble. `OpenSpan.bat` and the Start-Menu
 shortcut auto-prefer the exe when it exists and fall back to the Python
 entry point otherwise.
@@ -34,7 +34,7 @@ flag — `openspan_launcher.py` is the entry script and dispatches:
 
 ## What must sit next to OpenSpan.exe
 
-Everything the source layout already has at `ROOT` (= `D:\OpenSpan`):
+Everything the source layout already has at `ROOT` (= `D:\_EsotericOS\app`):
 `openspan_settings.json`, `openspan_config.json`, `openspan_keymap.json`,
 `id_openspan`, `mode.txt`, `openspan.ico`, and the `win\` + `guest\` folders
 (the guest scripts are read off disk and streamed to the VM on launch). To

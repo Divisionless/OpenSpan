@@ -3,7 +3,7 @@
 *Companion to CLIPBOARD_DESIGN.md. Your values: PC = `<PC-LAN-IP>` (your PC's
 address on the LAN — `ipconfig`), port = `9966`, and the token is the
 `clipboard_token` value in
-`D:\OpenSpan\openspan_settings.json` (minted at first app launch; that file
+`D:\_EsotericOS\app\openspan_settings.json` (minted at first app launch; that file
 is gitignored — the token must NEVER be committed or published; the first
 minted one was burned during review and has been rotated). To rotate at any
 time: delete the `clipboard_token` line, relaunch, update both shortcuts.

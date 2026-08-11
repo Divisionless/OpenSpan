@@ -20,8 +20,12 @@
 #      that only a restart clears). Station mode now stands the Windows
 #      Bluetooth service down BEFORE the VM starts, and Windows mode puts it
 #      back.
+#   3. ROOT was the literal "D:\OpenSpan". The tree moved to D:\_EsotericOS\app
+#      on 2026-08-11 and a hardcoded root is how a boot script goes quietly
+#      dead. This script sits AT the root, so the root is where it lives --
+#      there is now no second copy of that fact to drift.
 $ErrorActionPreference = 'SilentlyContinue'
-$ROOT = 'D:\OpenSpan'
+$ROOT = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $VBOX = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
 $log  = Join-Path $ROOT 'boot.log'
 function Log($m){ "$(Get-Date -Format s)  $m" | Out-File $log -Append -Encoding ascii }

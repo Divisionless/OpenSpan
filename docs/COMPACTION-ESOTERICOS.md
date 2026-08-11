@@ -6,7 +6,7 @@ then continue as if the break never happened.
 ## What the product IS now
 
 - **EsotericOS** = the living Python/Tk + Linux-VM program formerly named
-  OpenSpan, at **D:\OpenSpan**, rebranded *entirely* to the **Astral Compass**
+  OpenSpan, at **D:\_EsotericOS\app**, rebranded *entirely* to the **Astral Compass**
   identity (commit `df8afa6`): kit-token palette (arcane violet/void ladder;
   functional amber kept for state), two-tone wordmark (Esoteric=Lunar,
   OS=Arcane), kit app icon, hand-assembled tray ico (six exact kit PNGs,
@@ -29,7 +29,7 @@ then continue as if the break never happened.
 
 ## The feature board (the center of the new direction)
 
-- **`D:\OpenSpan\docs\plan\plan.json`** (canonical, v2) +
+- **`D:\_EsotericOS\app\docs\plan\plan.json`** (canonical, v2) +
   **`plan.html`** (Doug's live editor). Server: plan-skill `plan_server.py`
   via the firewalled python on **port 7351** (7350 is squatted by a stale
   shakedown server from another session — left alone). Doug edits at
@@ -71,7 +71,7 @@ Doug is promoting his starter set on the board. The moment he says done:
 ## Product state beneath the board
 
 - Running build = **iteration-3 line + recovery cycle + rebrand**, launched
-  as D:\OpenSpan\EsotericOS.exe (admin — the app enforces its own elevation
+  as D:\_EsotericOS\app\EsotericOS.exe (admin — the app enforces its own elevation
   gate at openspan.py:_elevation_gate for hook survival under UIPI).
   OpenSpan.exe = promoted v3; OpenSpan.exe.prev = sealed v2;
   STABLE-V2.md return path on both disks.

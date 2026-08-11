@@ -464,8 +464,8 @@ same mistake from opposite directions.
 ## 10. How to verify any of this
 
 ```
-C:\Python313\python.exe D:\OpenSpan\win\test_interop.py
-C:\Python313\python.exe D:\OpenSpan\win\test_keymap_safety.py
+C:\Python313\python.exe D:\_EsotericOS\app\win\test_interop.py
+C:\Python313\python.exe D:\_EsotericOS\app\win\test_keymap_safety.py
 ```
 
 Neither creates a window, installs a hook, opens a socket, touches the real
@@ -473,5 +473,5 @@ clipboard, or touches the real lease name — every runtime lease check runs
 against a private `Local\OpenSpan.InteropTest.<pid>.<n>` mutex, so running them
 while EsotericOS is live cannot suspend it for an instant.
 
-Live behaviour is in `D:\OpenSpan\portal.log`: every lease transition, reclaim
+Live behaviour is in `D:\_EsotericOS\app\portal.log`: every lease transition, reclaim
 and timeout prints a `[lease]` line.

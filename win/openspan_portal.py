@@ -375,7 +375,7 @@ kernel32.GetModuleHandleW.argtypes = [wt.LPCWSTR]
 # down; releasing it is how it is told to come back.
 #
 # The other half of the contract is D:\EsotericOS\docs\INTEROP.md. Ours is
-# D:\OpenSpan\docs\INTEROP.md. Neither restates the other.
+# D:\_EsotericOS\app\docs\INTEROP.md. Neither restates the other.
 #
 # WHY A MUTEX AND NOT AN EVENT. A mutex is abandonment-detectable. The OpenSpan
 # GUI hard-kills this process with `taskkill /PID <pid> /T /F`
