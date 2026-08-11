@@ -137,6 +137,36 @@ if not os.path.isfile(ICON):
 TRAY_ICON = os.path.join(ROOT, "brand", "esotericos-tray.ico")  # for the
 # tray's return: size-specific kit frames, never rescaled masters.
 
+# ---- build identity -------------------------------------------------------
+# Bump deliberately. The build TIME comes from the executable itself, because
+# six builds can share a version in one evening and the only question that
+# actually matters at the desk is "am I looking at the change I just made?".
+VERSION = "0.3.0"
+
+
+def build_stamp():
+    """(text, is_test). What the bottom-left corner says about this build.
+
+    A build is a TEST build unless it is the canonical EsotericOS.exe: every
+    staged build is named EsotericOS-next.exe / -wm.exe / and so on, and
+    running from source is not a shipped build either. Deriving it from the
+    executable's own name means nothing has to be remembered at build time
+    and the label cannot lie about what is actually running.
+    """
+    if getattr(sys, "frozen", False):
+        name = os.path.basename(sys.executable)
+        is_test = name.lower() != f"{APP_LABEL.lower()}.exe"
+        try:
+            built = time.strftime(
+                "%b %d %H:%M", time.localtime(os.path.getmtime(sys.executable)))
+        except OSError:
+            built = "unknown"
+        label = f"v{VERSION} · {built}"
+        if is_test:
+            label += f" · {name}"
+        return label, is_test
+    return f"v{VERSION} · source", True
+
 PYW = sys.executable
 if PYW.lower().endswith("python.exe"):
     _c = PYW[:-len("python.exe")] + "pythonw.exe"
@@ -192,6 +222,11 @@ IPAD_OFF_LINE = "#3E3A4A"
 IPAD_IDLE_FILL = "#413615"  # connected but portal OFF -> amber (idle/paused)
 IPAD_IDLE_LINE = "#f5c451"
 PORTAL = "#B28DFF"       # crossing edges -- violet, so they read as routes
+# The build stamp, bottom-left of every pane. Blue because nothing else in
+# this palette is blue: it must never be mistaken for a state colour, and a
+# version string that reads as "state" is worse than no version string.
+BUILD_BLUE = "#5AA9FF"
+BUILD_TEST_YELLOW = "#f5c451"   # the kit's functional amber, already in use
 HOVER_FILL = "#0B0B11"   # the detail card that appears on mouseover
 HOVER_LINE = "#4A4556"
 DANGER = "#FF5CA8"
@@ -7009,9 +7044,22 @@ class App:
         # ...and now open on the pane he was last using.
         self.select_pane(load_last_pane(), rederive=False, remember=False)
 
-        tk.Label(full, text="open source · MIT · nothing phones home",
-                 bg=BG, fg="#6E687A", font=(FONT_UI, 8)).pack(
-            side="bottom", pady=PAD_MD)
+        # ---- footer: which build am I looking at? --------------------------
+        # It lives in the window CHROME, not in a pane, so it is on every pane
+        # by construction rather than by five copies that drift apart. Blue is
+        # reserved for it: nothing else in this palette is blue, so a version
+        # string can never be misread as a state colour.
+        foot = tk.Frame(full, bg=BG)
+        foot.pack(side="bottom", fill="x", padx=16, pady=PAD_MD)
+        _stamp, _is_test = build_stamp()
+        if _is_test:
+            tk.Label(foot, text="TEST BUILD", bg=BG, fg=BUILD_TEST_YELLOW,
+                     font=(FONT_UI_SEMI, 8)).pack(side="left", padx=(0, 6))
+        self.build_lbl = tk.Label(foot, text=_stamp, bg=BG, fg=BUILD_BLUE,
+                                  font=("Consolas", 8))
+        self.build_lbl.pack(side="left")
+        tk.Label(foot, text="open source · MIT · nothing phones home",
+                 bg=BG, fg="#6E687A", font=(FONT_UI, 8)).pack(side="right")
 
         # clipboard relay for the iPad shortcuts (CLIPBOARD_DESIGN.md);
         # fail-soft: without it everything else works, and Ctrl+Alt+V
