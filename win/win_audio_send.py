@@ -135,14 +135,46 @@ def _volume_watcher():
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 p = pa.PyAudio()
-wasapi = p.get_host_api_info_by_type(pa.paWASAPI)
-default_out = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
+
+
+def _default_output(attempts=30, wait=1.0):
+    """The WASAPI default output endpoint, waited for rather than assumed.
+
+    This process can start before Windows has finished enumerating an audio
+    endpoint -- reliably so on a cold boot, where the app launches seconds
+    after login. `defaultOutputDevice` is then an index that resolves to
+    nothing, and this used to raise OSError -9996 "Invalid device info" at
+    import time. The lane died there and never retried: audio was simply
+    absent afterwards, with the traceback buried in audio_send.log where
+    nobody looks until they notice the earbuds are silent.
+
+    Waiting is the right response because the endpoint is not missing, only
+    late. Returning (None, None) after the wait is also correct -- the
+    loopback search below has always had a fallback for "no name to match",
+    and reaching it beats dying before it.
+    """
+    for attempt in range(attempts):
+        try:
+            host = p.get_host_api_info_by_type(pa.paWASAPI)
+            return host, p.get_device_info_by_index(host["defaultOutputDevice"])
+        except Exception as exc:
+            if attempt == attempts - 1:
+                print(f"no WASAPI default output after {attempts}s ({exc}) -- "
+                      "falling back to the first loopback device",
+                      file=sys.stderr)
+                return None, None
+            time.sleep(wait)
+    return None, None
+
+
+wasapi, default_out = _default_output()
 
 lb = None
-for d in p.get_loopback_device_info_generator():
-    if default_out["name"] in d["name"]:
-        lb = d
-        break
+if default_out is not None:
+    for d in p.get_loopback_device_info_generator():
+        if default_out["name"] in d["name"]:
+            lb = d
+            break
 if lb is None:
     for d in p.get_loopback_device_info_generator():
         lb = d
