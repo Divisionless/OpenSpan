@@ -95,7 +95,13 @@ print(f"\nOK -> {target}  ({size_mb:.0f} MB)")
 if staged:
     print(f"\n{NAME}.exe is RUNNING, so this build was staged beside it.")
     print("When you are ready to swap, with the app closed:")
-    print(f"    cd /d/{os.path.basename(ROOT)} && "
+    # The whole path, not its last component. This printed "cd /d/app" after
+    # the tree moved to D:\_EsotericOS\app, because basename() had been right
+    # only while the root sat directly on D:. A swap command that silently
+    # names the wrong directory is worse than none: it runs, and mv reports
+    # nothing useful about a folder you did not mean.
+    posix_root = "/" + ROOT[0].lower() + ROOT[2:].replace("\\", "/")
+    print(f"    cd {posix_root} && "
           f"mv -f {NAME}.exe {NAME}.exe.prev && "
           f"mv -f {NAME}-next.exe {NAME}.exe && (./{NAME}.exe &)")
 print(f"Runs in place ({ROOT} holds the data files it needs).")
