@@ -1006,13 +1006,22 @@ class Portal:
         Distance is measured from the point to the rectangle itself, so a big
         screen further off-axis does not beat a small one directly ahead. Only
         surfaces actually lying in the direction of travel are considered --
-        holding the button and pushing left should never send you right."""
+        holding the button and pushing left should never send you right.
+
+        THE BUTTON TRAVELS BETWEEN DEVICES, NOT BETWEEN SCREENS. Doug,
+        2026-08-11. This used to skip only the screen you were standing on, so
+        every OTHER screen of the same device stayed a candidate -- and on a
+        multi-display Mac the nearest candidate is usually one of them. The
+        button then "hopped" to a seam the pointer can simply be walked across,
+        spending a deliberate press on a move that needed no press at all, and
+        making the button feel unreliable for the thing it exists for.
+        Skipping the whole device leaves only the surfaces a pointer cannot
+        reach by moving: the PC, and other devices."""
         step_x, step_y = self._DIR[side]
         px, py = point
         best = None
         for kind, device, ident, item in self._surfaces():
-            if kind == "target" and (device, ident) == (
-                    self.active_target, self.active_display):
+            if kind == "target" and device == self.active_target:
                 continue
             if kind == "target" and not self.target_ready.get(device, False):
                 continue
@@ -1741,25 +1750,50 @@ class Portal:
         display = destination.get("display")
         old_target = self.active_target
         old_display = self.active_display
-        # Leaving a DEVICE (not just one of its screens) pins the axis you
-        # left by, exactly as when handing control back to the PC.
-        pinned = False
-        if old_target is not None and target != old_target \
-                and from_side is not None:
-            pinned = self._pin_axis(old_target, from_side)
-        if old_target is not None and not pinned:
-            # Record UNCONDITIONALLY otherwise, including a same-device screen
-            # handoff. Skipping those let a device's saved position go
-            # arbitrarily stale while the user wandered across its other
-            # screens. A pin already recorded a BETTER value -- a measured one.
-            self._last_seen[old_target] = (old_display, self.vx, self.vy)
-        if target != old_target:
-            # One Windows hook broker, independent target channels. Release the
-            # old HID lane before changing sockets so no modifier can stick.
-            self.q.put((old_target, "k", 0, [], 0))
-            self.q.put((old_target, "b", 0, 0, 0))
-        self._place(target, display,
-                    *self._position_inside(destination, to_side, along, band))
+        if old_target is not None and target == old_target:
+            # A SEAM BETWEEN TWO SCREENS OF ONE DEVICE IS NOT A CROSSING.
+            # Doug, 2026-08-11: moving left across the Mac's internal seam
+            # jumped. It jumped because this used to call _place() here, and
+            # _place is "the ONLY discontinuous assignment of the model
+            # position" -- it warps the pointer from where it was to a landing
+            # point computed by _position_inside.
+            #
+            # That warp is not merely unnecessary across an internal seam, it
+            # is wrong. The target's own window server ALREADY carried its
+            # pointer across, continuously, before we were asked. Re-placing
+            # overrides a position that was correct, and every disagreement
+            # between the computed landing and where macOS actually put the
+            # pointer is a visible jerk at exactly the same screen column --
+            # which is what a "vertical seam" feels like under the hand.
+            #
+            # _route_motion has already assigned the true position (`self.vx,
+            # self.vy = nx, ny`) before any crossing is considered, and the
+            # displays of one device share a coordinate space. So there is
+            # nothing to compute: keep the position, change which rectangle we
+            # think we are in. This is the same law the momentum gate follows
+            # -- POSITION_MODEL Law 4, "the gate never applies to a seam
+            # between two screens of the same device, where the target's
+            # pointer really does flow across."
+            self.active_display = display
+            self._last_seen[target] = (display, self.vx, self.vy)
+        else:
+            # Leaving a DEVICE (not just one of its screens) pins the axis you
+            # left by, exactly as when handing control back to the PC.
+            pinned = False
+            if old_target is not None and from_side is not None:
+                pinned = self._pin_axis(old_target, from_side)
+            if old_target is not None and not pinned:
+                # A pin already recorded a BETTER value -- a measured one.
+                self._last_seen[old_target] = (old_display, self.vx, self.vy)
+            if old_target is not None:
+                # One Windows hook broker, independent target channels. Release
+                # the old HID lane before changing sockets so no modifier can
+                # stick.
+                self.q.put((old_target, "k", 0, [], 0))
+                self.q.put((old_target, "b", 0, 0, 0))
+            self._place(target, display,
+                        *self._position_inside(destination, to_side, along,
+                                               band))
         # The exit portal must follow the surface we are ACTUALLY on. self.cur
         # was set once by enter() and never updated, so bailing out after a
         # device-to-device handoff dropped the real cursor back through the
