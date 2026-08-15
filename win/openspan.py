@@ -7154,6 +7154,11 @@ class App:
         self._wm_host = None
         self._zoom = None
         self._spaces = None
+        # None means "no reading yet", so the first poll records rather than
+        # reports. Otherwise every launch would announce a change against
+        # nothing.
+        self._display_sig = None
+        self.ui(self._watch_displays)
         self.ui(self._show_window_chords)
         self.ui(self._autostart_window_features)
 
@@ -10372,15 +10377,25 @@ class App:
         # deleted global button came to resolve to the first device.
         self._edit_device_displays(device_id)
 
-    def _menu_refresh_monitors(self):
+    def _menu_refresh_monitors(self, automatic=False):
         """Re-read Windows, MERGING rather than replacing.
 
         Matched by monitor name. diagonal_in and the hand-placed layout
         position survive for every monitor that is still attached -- a refresh
         that reset diagonal_in would destroy the only field the user can supply,
-        which is the whole point of the merge."""
+        which is the whole point of the merge.
+
+        `automatic` means the display watcher called this, not a person. The
+        only difference is that a background poll must never raise a modal:
+        a dialog nobody asked for, on top of whatever they were doing, over a
+        screen change they can already see, is worse than the problem.
+        """
         live = enum_monitors()
         if not live:
+            if automatic:
+                _emit("err", "Windows reported no monitors — leaving the "
+                             "arrangement alone.")
+                return
             dark_alert(self.root, "No monitors reported",
                        "Windows returned no monitors. Nothing was changed.")
             return
@@ -10405,11 +10420,66 @@ class App:
             summary += " — portal reloading, input back in ~8s"
         self.canvas.redraw()
         self.canvas.save()
-        _emit("event", f"Windows screens re-read — {summary}.")
+        lead = ("Windows screens changed" if automatic
+                else "Windows screens re-read")
+        _emit("event", f"{lead} — {summary}.")
         try:
-            self.status.set(f"Windows screens re-read — {summary}")
+            self.status.set(f"{lead} — {summary}")
         except tk.TclError:
             pass
+
+    # ---- the desk is READ, not remembered ---------------------------------
+
+    DISPLAY_POLL_MS = 4000
+
+    @staticmethod
+    def _display_signature(monitors):
+        """Which screens are attached, and where. Order-independent."""
+        return tuple(sorted(
+            (str(m.get("name", "")), int(m.get("x", 0)), int(m.get("y", 0)),
+             int(m.get("w", 0)), int(m.get("h", 0)), bool(m.get("primary")))
+            for m in monitors))
+
+    def _watch_displays(self):
+        """Notice a screen arriving or leaving, without being asked.
+
+        Doug, 2026-08-15: his Mac 2k arrangement "lost its third display".
+        It was never lost. The arrangement is a SNAPSHOT taken when it was
+        saved, and DISPLAY4 was detached at that moment; when it came back,
+        nothing re-read the desk, so the saved two-monitor picture went on
+        being treated as the truth. Windows had three.
+
+        The same shape as every other fault of this day: a fact captured once
+        instead of derived. The merge that fixes it already existed and was
+        careful -- it keeps diagonal_in and every hand-placed position -- and
+        was simply never reached except by pressing a button.
+
+        A poll rather than a WM_DISPLAYCHANGE hook because Tk offers no clean
+        WndProc and EnumDisplayMonitors costs microseconds. If a message hook
+        ever exists here for another reason, this should move onto it: an
+        event is exact where a poll is merely frequent.
+        """
+        if getattr(self, "_closing", False):
+            return
+        try:
+            live = enum_monitors()
+            if live and getattr(self, "canvas", None) is not None:
+                signature = self._display_signature(live)
+                if self._display_sig is None:
+                    self._display_sig = signature      # first look, not a change
+                elif signature != self._display_sig:
+                    self._display_sig = signature
+                    self._menu_refresh_monitors(automatic=True)
+        except Exception as exc:  # noqa: BLE001
+            # A watcher that dies takes the desk's only link to reality with
+            # it, so it reports and keeps going rather than raising out of a
+            # timer callback.
+            _emit("err", f"display watch: {type(exc).__name__}: {exc}")
+        finally:
+            try:
+                self.root.after(self.DISPLAY_POLL_MS, self._watch_displays)
+            except tk.TclError:
+                pass
 
     def _menu_display_settings(self):
         try:
