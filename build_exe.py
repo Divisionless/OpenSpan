@@ -95,6 +95,23 @@ if _locked(target):
 else:
     staged = False
 
+# NOTHING IS OVERWRITTEN WITHOUT BEING KEPT. On 2026-08-15 this script wrote
+# straight over EsotericOS.exe -- the declared benchmark, sha b13ac1d0... --
+# because the app happened to be closed, so the lock check passed and the
+# staging path never ran. Those bytes are gone. The rollback the manual swap
+# instructions describe (mv EsotericOS.exe EsotericOS.exe.prev) only ever
+# happened when the user typed it, which is exactly the moment a build does
+# not need it: a build landing in place is when the outgoing binary is about
+# to disappear.
+if not staged and os.path.exists(target):
+    keep = os.path.join(ROOT, f"{NAME}.exe.prev")
+    try:
+        shutil.copy2(target, keep)
+        print(f"kept the outgoing build as {os.path.basename(keep)}")
+    except OSError as exc:
+        sys.exit(f"REFUSING to overwrite {target}: could not preserve it first "
+                 f"({exc}). Move it aside yourself, then build again.")
+
 shutil.copy2(built, target)
 size_mb = os.path.getsize(target) / (1024 * 1024)
 print(f"\nOK -> {target}  ({size_mb:.0f} MB)")
