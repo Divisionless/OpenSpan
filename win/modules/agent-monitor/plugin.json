@@ -1,0 +1,9 @@
+{
+  "id": "agent-monitor",
+  "displayName": "Agent monitor",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "entryPoint": "agent_monitor.py:AgentMonitor",
+  "requestedCapabilities": ["commands"],
+  "enabledByDefault": true
+}
