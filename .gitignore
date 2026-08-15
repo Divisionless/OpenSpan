@@ -54,6 +54,10 @@ dist/
 
 # runtime state written by the app gain control
 audio_gain.txt
+# what the optional modules have OBSERVED on this machine -- the agent
+# monitor's record of resets it actually watched happen. Per-machine, and
+# a picture of when the user was working.
+module_settings.json
 # editor backup of the plan; plan.json itself is canonical and IS tracked
 docs/plan/plan.json.bak
 
