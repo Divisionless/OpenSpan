@@ -140,6 +140,11 @@ tr.grp-hd td{background:#0D0D12;color:#B28DFF;font-size:11px;
   letter-spacing:1.4px;text-transform:uppercase;font-weight:700;
   padding:14px 12px 8px;border-bottom:1px solid var(--bd)}
 tr.grp-hd{scroll-margin-top:calc(var(--frozen2-h, 0px) + 6px)}
+/* The finished section reads as a record, not a queue: green like the done
+   chip, and set apart by a rule above it so the eye stops at the boundary
+   between what is left and what is behind. */
+tr.grp-hd.grp-done td{color:var(--done);border-top:2px solid var(--bd);
+  padding-top:26px}
 
 /* the filter box lives in the frozen bar */
 #itSearch{background:#0B0B11;border:1px solid var(--bd);border-radius:6px;
@@ -929,18 +934,41 @@ function renderItems() {
     const td = el("td");
     td.colSpan = ncols;
     const lit = rows.filter(r => r.status !== "deferred").length;
-    td.textContent = title + "  ·  " + rows.length
-      + (lit ? "  ·  " + lit + " chosen" : "");
+    // "chosen" counts what was picked OUT of a deferred catalogue -- a
+    // meaningless distinction once everything in the group is finished.
+    td.textContent = sid === "done"
+      ? title + "  ·  " + rows.length
+      : title + "  ·  " + rows.length
+        + (lit ? "  ·  " + lit + " chosen" : "");
+    if (sid === "done") tr.classList.add("grp-done");
     tr.appendChild(td);
     tb.appendChild(tr);
   };
+  // FINISHED WORK GETS ITS OWN SECTION. Doug, 2026-08-11. SORT_RANK puts
+  // done at 0, so every milestone OPENED with what was already behind us and
+  // the live work sat underneath it -- on a 102-row board that is a lot of
+  // scrolling past the past. A board is read to answer "what is next";
+  // completed rows are a record, not a queue.
+  //
+  // Nothing is hidden and nothing is moved in the data: each row keeps its
+  // milestone tag, so where it belonged is still on its face, and the
+  // milestones table above still counts done against total. A milestone whose
+  // work is entirely finished simply stops appearing in the work table, which
+  // is the honest answer to "what is left in it".
+  const isDone = it => it.status === "done";
   const grouped = DOC.milestones.map((m, i) => (
     { sid: m.sid, title: m.title || "untitled",
-      rows: DOC.items.filter(it => it.milestone === m.sid), n: i + 1 }));
+      rows: DOC.items.filter(it => it.milestone === m.sid && !isDone(it)),
+      n: i + 1 }));
   const loose = DOC.items.filter(
-    it => !DOC.milestones.some(m => m.sid === it.milestone));
+    it => !isDone(it) && !DOC.milestones.some(m => m.sid === it.milestone));
   if (loose.length) {
     grouped.push({ sid: "none", title: "Ungrouped", rows: loose,
+                   n: grouped.length + 1 });
+  }
+  const finished = DOC.items.filter(isDone);
+  if (finished.length) {
+    grouped.push({ sid: "done", title: "✓ Done", rows: finished,
                    n: grouped.length + 1 });
   }
   grouped.forEach(g => {
