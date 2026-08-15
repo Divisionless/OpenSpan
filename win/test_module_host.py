@@ -223,6 +223,36 @@ check("it activates", rec.state is ps.PluginState.ACTIVE)
 rows = real.report("agent-monitor")
 check("it reports two rows, one per agent", rows is not None and len(rows) == 2)
 check("labelled Codex and Claude", [label for label, _ in rows] == ["Codex", "Claude"])
+
+# Doug, 2026-08-15: providers issue unannounced resets, so a published reset
+# window is a claim and the meter is the measurement. They must not read as
+# the same kind of fact.
+codex_value = dict(rows)["Codex"]
+if "%" in codex_value:
+    check("the measured percentage is stated plainly, not hedged",
+          "% used" in codex_value)
+    check("a provider's reset window is marked as a claim, not stated as fact",
+          "claims" in codex_value)
+
+# An observed reset -- the meter actually falling -- is recorded and outranks
+# any published date, because it is the only one witnessed on this machine.
+watched = module_host.ModuleHost(root=module_host.bundled_root())
+watched.discover()
+watched.start()
+inst = watched.record("agent-monitor")._instance
+inst._host.set_setting("codex-last-percent", 90.0)
+inst._note_reset(4.0)
+check("a fall in the meter is recorded as an observed reset",
+      inst._host.get_setting("codex-last-reset") is not None)
+before = inst._host.get_setting("codex-last-reset")
+inst._note_reset(6.0)          # a rise is not a reset
+check("a rise in the meter is not mistaken for a reset",
+      inst._host.get_setting("codex-last-reset") == before)
+inst._host.set_setting("codex-last-percent", 50.0)
+inst._note_reset(48.0)         # small wobble, under the threshold
+check("ordinary sampling wobble is not a reset",
+      inst._host.get_setting("codex-last-reset") == before)
+watched.stop()
 # Whether THIS machine has usage data is not this test's business; that every
 # outcome is a sentence rather than a blank or a traceback, is.
 check("each row says something, with or without local data",

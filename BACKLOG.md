@@ -99,6 +99,51 @@ scales the input magnitude before the curve, scales the output after it, or
 selects a different curve entirely, decides how the compensation must be
 adjusted. Establish that from IOHIDFamily / measurement, then mirror it.
 
+## A device's displays are contiguous in ITS space, not in desk space
+
+Found 2026-08-11 by `test_portal_invariants`, which runs against the live
+config and started failing when Doug saved a new arrangement. Not a
+regression: the same two checks fail with the portal source from `db87f49`,
+`66c88e6` and `621e7ef`, all of which predate it. **His desk works fine in
+practice** — this is the model being unable to express it, not the desk being
+wrong.
+
+The Managed Mac has three displays:
+
+| screen | resolution | desk rect | points per desk unit |
+|---|---|---|---|
+| Mac Display 1 | 3840×2160 portrait | 1569×2789 at x −4655 | 2.447 |
+| Mac Display 2 | 3840×2160 portrait | 1569×2789 at x −3086 | 2.447 |
+| Mac Display 3 | 2560×1440 | 1482×833 at x −210 | 1.727 |
+
+Two things the model cannot currently say:
+
+1. **Display 3 is detached by 1307 desk units**, and the iPad and both MacAir
+   screens sit in that gap. `_warp` walks the straight desk-space path in 64
+   steps and `continue`s on any step that lands on no screen — so 61% of that
+   path is silently unpaid, and the pointer arrives ~1373 units short of where
+   the model put it. The gap is real on the desk and does not exist for the
+   Mac's own pointer, which crosses its three screens continuously.
+2. **One device, two pixel densities**, differing by 1.417×. POSITION_MODEL
+   already states the general form of this: "a similarity transform has one
+   scale factor and this needs two". `_warp` handles it correctly *within*
+   contiguous screens by converting per step; it is the gap, not the density,
+   that breaks.
+
+So the model needs a device's screens to be adjacent in a device-local space,
+independent of where they sit on the desk. Desk geometry decides where
+crossings happen; device geometry should decide what a warp costs. Today one
+set of rectangles is asked to do both.
+
+Worth doing *before* this: `_warp` should not skip unpaid steps in silence. A
+warp that cannot pay for its path should say so, because the failure mode is a
+model and a pointer that quietly disagree, which is indistinguishable from
+every other desync.
+
+Also seen in the same run and not yet explained: `_park_at_door("mac")`
+produced nothing on the wire at all.
+
+
 ## Per-device crossing pressure
 
 `CROSS_SPEED` is one global constant in raw mouse counts per second. It should

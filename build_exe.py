@@ -46,6 +46,12 @@ args = [
     "--hidden-import", "win_audio_send",
     "--hidden-import", "openspan_setup",
     "--hidden-import", "openspan_targets",
+    # The optional modules ship WITH the app. They are discovered by reading
+    # plugin.json off disk, so they must exist as real files at runtime --
+    # a hidden-import would not do, because nothing imports them by name.
+    # module_host.bundled_root() looks in sys._MEIPASS/modules when frozen,
+    # which is exactly where --add-data puts this.
+    "--add-data", os.path.join(WIN, "modules") + os.pathsep + "modules",
     # dependency trees PyInstaller can under-collect (COM codegen, native)
     "--collect-all", "pycaw",
     "--collect-all", "comtypes",

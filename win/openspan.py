@@ -7016,15 +7016,17 @@ class App:
         tk.Label(zrow, textvariable=self.zoom_state, bg=BG, fg=MUTED,
                  font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
 
-        desk = _section(pane_system, "System desk — AI usage")
-        self.usage_codex = tk.StringVar(value="Codex  reading local data…")
-        self.usage_claude = tk.StringVar(value="Claude  reading local data…")
-        tk.Label(desk, textvariable=self.usage_codex, bg=BG, fg=MUTED,
-                 font=("Consolas", 8), anchor="w", justify="left").pack(
-            fill="x")
-        tk.Label(desk, textvariable=self.usage_claude, bg=BG, fg=MUTED,
-                 font=("Consolas", 8), anchor="w", justify="left").pack(
-            fill="x")
+        # ---- Modules -------------------------------------------------------
+        # EsotericOS's optional modules, drawn by the HOST. A module publishes
+        # rows and never touches Tk, so nothing built here can be reached by
+        # module code -- which is the only reason "an optional module can fail
+        # without taking the host down" is a true statement rather than a hope.
+        # The AI usage readout used to be two hardcoded labels right here; it
+        # is now the agent-monitor module, and this section would draw a second
+        # module the same way without knowing anything about it.
+        self.modules_box = _section(pane_system, "Modules")
+        self.module_rows = {}
+        self._module_host = None
 
         # THE designated spacer, and the only expanding child of `bridge`.
         # Nothing is drawn in it. It exists so the window can still be dragged
@@ -7147,8 +7149,8 @@ class App:
                          f"{content_h}px. The bottom {content_h - avail_h}px "
                          "cannot be shown — panels below the fold are cut off.")
         self._tick()
-        threading.Thread(target=self._usage_worker,
-                         name="openspan-usage-monitor", daemon=True).start()
+        threading.Thread(target=self._module_worker,
+                         name="esotericos-modules", daemon=True).start()
         self._wm_host = None
         self._zoom = None
         self._spaces = None
@@ -7405,59 +7407,100 @@ class App:
         self.zoom_btn.config(text="Turn off Alt+scroll zoom")
         _emit("ok", "screen zoom on — hold Alt and scroll the wheel.")
 
-    def _usage_worker(self):
-        """Refresh local AI usage without ever touching Tk off-thread."""
+    def _module_settings_path(self):
+        """Where a module's settings persist.
+
+        On ROOT, which is the exe's own folder -- never __file__, which in a
+        frozen build points into a temp bundle Windows deletes on exit. A
+        module that records what it observed must find it again next launch.
+        """
+        return os.path.join(ROOT, "module_settings.json")
+
+    def _load_module_settings(self):
+        try:
+            with open(self._module_settings_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _save_module_settings(self, settings):
+        try:
+            path = self._module_settings_path()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(settings, fh, indent=2, sort_keys=True)
+            os.replace(tmp, path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _module_worker(self):
+        """Run the optional modules and draw what they publish.
+
+        Every module call below is already behind plugin_system's fault
+        barrier, so a module that raises becomes a faulted row rather than an
+        exception on this thread. The broad except here is for the mods's own
+        mistakes -- discovery, disk, Tk teardown mid-refresh -- not the
+        modules'.
+        """
+        settings = self._load_module_settings()
+        try:
+            import module_host
+            import plugin_system
+            faulted = plugin_system.PluginState.FAULTED
+            mods = module_host.ModuleHost(
+                settings=settings,
+                enabled=settings.get("_enabled", {}),
+                on_log=lambda line: _emit("event", line))
+            mods.discover()
+            mods.start()
+            self._module_host = mods
+        except Exception as exc:  # noqa: BLE001
+            self.ui(lambda: self._draw_modules(
+                [("Modules", f"could not start: {type(exc).__name__}")]))
+            return
+
         while not self._closing:
-            codex_text = "Codex   … usage read failed"
-            claude_text = "Claude  … usage read failed"
+            rows = []
             try:
-                import usage_monitor
-            except Exception:  # noqa: BLE001
-                pass
-            else:
-                try:
-                    snapshot = usage_monitor.codex_snapshot()
-                    if snapshot is None:
-                        codex_text = (
-                            "Codex   no local data (has it run on this machine?)")
-                    else:
-                        reset = time.strftime(
-                            "%b %d", time.localtime(float(snapshot["resets_at"])))
-                        codex_text = (
-                            f"Codex   ● {float(snapshot['used_percent']):.1f}% "
-                            f"of weekly window · resets {reset} · "
-                            f"plan {snapshot['plan_type']}")
-                except Exception:  # noqa: BLE001
-                    codex_text = "Codex   … usage read failed"
-
-                try:
-                    burn = usage_monitor.claude_burn(7)
-                    if not burn.get("days"):
-                        claude_text = "Claude  no local data"
-                    else:
-                        today = time.strftime("%Y-%m-%d", time.gmtime())
-                        bucket = burn["days"].get(today, {})
-                        main = bucket.get(
-                            "main", {"fresh": 0, "cache": 0, "out": 0})
-                        subagents = bucket.get(
-                            "subagents", {"fresh": 0, "cache": 0, "out": 0})
-                        today_out = main["out"] + subagents["out"]
-                        today_fresh = main["fresh"] + subagents["fresh"]
-                        totals = burn["totals"]
-                        spend = totals["fresh"] + totals["out"]
-                        claude_text = (
-                            f"Claude  today {today_out / 1_000_000:.1f}M out + "
-                            f"{today_fresh / 1_000:.1f}k fresh · 7d spend "
-                            f"{spend / 1_000_000:.1f}M "
-                            f"(cache {totals['cache'] / 1_000_000_000:.1f}B)")
-                except Exception:  # noqa: BLE001
-                    claude_text = "Claude  … usage read failed"
-
+                for record, reported in mods.reports():
+                    rows.append((record.display_name.upper(), ""))
+                    for label, value in reported or []:
+                        rows.append((label, value))
+                    if reported is None:
+                        rows.append(("", "reported nothing this cycle"))
+                for record in mods.records:
+                    # A module that failed to load is SHOWN, with its reason.
+                    # Silently omitting it is how a module you rely on goes
+                    # missing without anyone noticing.
+                    if record.state is faulted:
+                        rows.append((record.display_name.upper(),
+                                     record.reason or "faulted"))
+                if not rows:
+                    rows = [("Modules", "none installed")]
+            except Exception as exc:  # noqa: BLE001
+                rows = [("Modules", f"refresh failed: {type(exc).__name__}")]
             if self._closing:
                 return
-            self.ui(lambda codex=codex_text, claude=claude_text: (
-                self.usage_codex.set(codex), self.usage_claude.set(claude)))
+            self.ui(lambda r=rows: self._draw_modules(r))
+            self._save_module_settings(settings)
             time.sleep(600)
+
+    def _draw_modules(self, rows):
+        """Paint module rows. The ONLY place module output reaches a widget."""
+        box = getattr(self, "modules_box", None)
+        if box is None:
+            return
+        try:
+            for child in box.winfo_children():
+                child.destroy()
+            for label, value in rows:
+                text = f"{label:<10}{value}" if label else f"{'':<10}{value}"
+                tk.Label(box, text=text, bg=BG, fg=MUTED,
+                         font=("Consolas", 8), anchor="w",
+                         justify="left").pack(fill="x")
+        except tk.TclError:
+            pass          # the window went away mid-refresh; nothing to draw on
 
     # ---- the rail: one pane at a time ------------------------------------
     def select_pane(self, key, rederive=True, remember=True):
@@ -8603,6 +8646,18 @@ class App:
         if _spc is not None and getattr(_spc, "enabled", False):
             try:
                 _spc.disable()
+            except Exception:  # noqa: BLE001
+                pass
+        # Modules get their deactivate() called, and their settings written.
+        # A module records what it OBSERVED -- the agent monitor remembers
+        # resets it actually watched happen -- and losing that on exit would
+        # leave only the provider's claims, which is the thing it exists to
+        # cross-check.
+        _mods = getattr(self, "_module_host", None)
+        if _mods is not None:
+            try:
+                _mods.stop()
+                self._save_module_settings(_mods._settings)
             except Exception:  # noqa: BLE001
                 pass
         if getattr(self, "clip_server", None):

@@ -45,6 +45,41 @@ class AgentMonitor:
         host.register_command("report", "Refresh agent usage", self.report)
         host.log("info", "reading local Claude and Codex usage")
 
+    # ---- observed resets ---------------------------------------------------
+    #
+    # Doug, 2026-08-15: "OpenAI issues what appear to be random or otherwise
+    # unspecified resets, which is why it is so important that we faithfully
+    # poll and report the actual state and not rely on reset window claims by
+    # them, or even Anthropic."
+    #
+    # So the percentage is a MEASUREMENT and the reset date is a CLAIM, and
+    # they are not shown as the same kind of fact. A reset the module has
+    # actually watched happen -- the meter falling -- outranks any date a
+    # provider published, because it is the only one that was witnessed on
+    # this machine.
+
+    RESET_DROP = 5.0   # points. Below this is ordinary sampling wobble.
+
+    def _note_reset(self, percent):
+        """Record a fall in the meter as an observed reset. Returns its text."""
+        host = self._host
+        if host is None:
+            return None
+        try:
+            previous = host.get_setting("codex-last-percent")
+            if previous is not None and float(percent) < float(previous) - self.RESET_DROP:
+                host.set_setting("codex-last-reset", time.time())
+                host.log("info", f"observed a Codex reset: "
+                                 f"{float(previous):.1f}% -> {float(percent):.1f}%")
+            host.set_setting("codex-last-percent", float(percent))
+            seen = host.get_setting("codex-last-reset")
+            if seen:
+                return time.strftime("%b %d %H:%M", time.localtime(float(seen)))
+        except Exception:  # noqa: BLE001
+            # Bookkeeping must never cost the reading it annotates.
+            return None
+        return None
+
     def deactivate(self):
         # The bridge disposes the registration itself; there is nothing of our
         # own to release. No thread, no file handle, no socket -- on purpose.
@@ -67,10 +102,16 @@ class AgentMonitor:
         if snapshot is None:
             return ("Codex", "no local data — has it run on this machine?")
         try:
-            resets = time.strftime(
+            percent = float(snapshot["used_percent"])
+            observed = self._note_reset(percent)
+            claimed = time.strftime(
                 "%b %d", time.localtime(float(snapshot["resets_at"])))
-            return ("Codex", f"{float(snapshot['used_percent']):.1f}% of the "
-                             f"weekly window · resets {resets} · "
+            # Measured first and unqualified; the provider's date is marked as
+            # the claim it is. Where we have actually watched a reset happen,
+            # that is shown too -- it is the only reset anyone here witnessed.
+            tail = (f"last reset seen {observed} · claims {claimed}"
+                    if observed else f"claims reset {claimed}")
+            return ("Codex", f"{percent:.1f}% used · {tail} · "
                              f"plan {snapshot['plan_type']}")
         except (KeyError, TypeError, ValueError):
             return ("Codex", "local data is present but not in a shape this "
