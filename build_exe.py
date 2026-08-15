@@ -52,6 +52,20 @@ args = [
     # module_host.bundled_root() looks in sys._MEIPASS/modules when frozen,
     # which is exactly where --add-data puts this.
     "--add-data", os.path.join(WIN, "modules") + os.pathsep + "modules",
+    # WHAT THE MODULES THEMSELVES IMPORT MUST BE DECLARED HERE.
+    #
+    # A module ships as DATA, so PyInstaller never analyses it and cannot see
+    # its imports. On 2026-08-15 the agent monitor shipped and loaded and did
+    # nothing: replacing _usage_worker removed the last statically visible
+    # `import usage_monitor` from analysed code, so usage_monitor was dropped
+    # from the bundle entirely and every row came back ModuleNotFoundError.
+    # Nothing failed loudly -- the panel simply reported that it could not
+    # read anything.
+    #
+    # test_module_deps.py enforces this list against what the modules
+    # actually import, so a new module cannot quietly ship without its
+    # dependencies.
+    "--hidden-import", "usage_monitor",
     # dependency trees PyInstaller can under-collect (COM codegen, native)
     "--collect-all", "pycaw",
     "--collect-all", "comtypes",
@@ -103,8 +117,14 @@ else:
 # happened when the user typed it, which is exactly the moment a build does
 # not need it: a build landing in place is when the outgoing binary is about
 # to disappear.
-if not staged and os.path.exists(target):
-    keep = os.path.join(ROOT, f"{NAME}.exe.prev")
+if os.path.exists(target):
+    # ANY existing target, staged or not. The first version of this guard was
+    # written `if not staged`, which is the very mistake it was added to fix:
+    # a safety conditioned on a narrow trigger. The staged path then quietly
+    # overwrote EsotericOS-next.exe -- which was the seam-fix build -- and it
+    # survived only because a copy had been made by hand hours earlier. That
+    # is luck, not structure.
+    keep = target + ".prev"
     try:
         shutil.copy2(target, keep)
         print(f"kept the outgoing build as {os.path.basename(keep)}")

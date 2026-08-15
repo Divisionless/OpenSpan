@@ -192,13 +192,18 @@ if tracked is not None:
 build_src = (ROOT / "build_exe.py").read_text(encoding="utf-8")
 build_code = code_only(ROOT / "build_exe.py")
 overwrite = build_code.find("shutil.copy2(built, target)")
-preserve = build_code.find(".exe.prev")
+preserve = build_code.find('target + ".prev"')
 check("the build preserves the outgoing binary before overwriting it",
       0 <= preserve < overwrite,
       f"preserve at {preserve}, overwrite at {overwrite}")
-check("preservation is unconditional, not gated on the target being locked",
-      re.search(r"if not staged and os\.path\.exists\(target\)", build_src)
-      is not None)
+# This check itself was written too narrowly the first time: it asserted
+# `if not staged and ...`, which is to say it enforced the bug. The staged
+# path overwrote the seam-fix build under an assertion that everything was
+# preserved. ANY existing target, or the guard is decoration.
+check("preservation covers ANY existing target, staged or not",
+      re.search(r"^if os\.path\.exists\(target\):", build_src, re.M)
+      is not None,
+      "gated again -- the staged path can destroy a binary")
 check("a build that cannot preserve refuses rather than proceeding",
       "REFUSING to overwrite" in build_src)
 
