@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 133,
+  "nextSid": 135,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -1956,10 +1956,12 @@
       "costDrivers": "consent-gated machine change; audit list grows on contact",
       "estTime": "2h",
       "model": "Doug + main session",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "done",
+      "actualTokens": "in-session",
+      "actualTime": "~40m",
+      "extra": {
+        "note": "Done 16 Aug on Doug's repeated direct order (overrode the v3.114 Forge park). Per-user HKCU Winlogon Shell -> the fork; Explorer suppressed for this user; HKLM explorer.exe kept as net; app autostarts via Cairo StartupRunner. Takes effect next sign-in. autostart-shell.ps1 -Shell/-Undo; restore-explorer-shell.ps1 recovery."
+      }
     },
     {
       "sid": "v3.111",
@@ -2032,7 +2034,7 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "Doug 2026-08-16: 'ensure compatibility with The Esoteric Forge - my IDE running currently.' electron.exe from E:\\esoteric-path-core\\forge. Blocks the swap."
+        "note": "De-blocked 16 Aug: Doug ordered the swap ahead of the audit. Now a POST-HOC check (does the Forge behave under Cairo-as-shell), run after his next sign-in, not a gate."
       }
     },
     {
@@ -2368,6 +2370,38 @@
         "doug": "16 Aug interview: 1 arbitrary grid, add/remove at will · 2 orientation user-defined · 3 tabs per panel, drag anywhere incl. other window · 4 no windows bar on top · 5 motion later · 6 restore exactly · 7 adopt Windows/Mac keys, surface collisions",
         "note": "PAUSED by Doug 16 Aug 16:2x ('Let's pause this development for now'). Agent stopped after ~20 min; skeleton parked on shell branch wip/files-grid (15dbe16); master clean at 314f2d8. Resume = new Opus agent from the same spec, starting from that branch."
       }
+    },
+    {
+      "sid": "v3.133",
+      "hcidx": 133,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Tour off + WinSparkle off: Cairo's foreign self-assertion stripped (ENABLEFIRSTRUN out of Release; upstream update feed that offers stock Cairo over the fork disabled)  [strip-cairo]",
+      "why": "Cairo serves us, not itself",
+      "estTokens": "in-session",
+      "costDrivers": "read every dependency's licence; SPDX list",
+      "estTime": "~15m",
+      "model": "main session",
+      "status": "done",
+      "actualTokens": "in-session",
+      "actualTime": "~15m",
+      "extra": {}
+    },
+    {
+      "sid": "v3.134",
+      "hcidx": 134,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Dependency-licence audit: verify nothing GPL-2.0-only is combined into the AGPL-3.0 app; record each vendored component's terms in NOTICE; same pass for the shell fork's Apache-2.0 lineage  [licence-audit]",
+      "why": "strict copyleft, provably clean",
+      "estTokens": "80k-150k",
+      "costDrivers": "read every dependency's licence; SPDX list",
+      "estTime": "2-3h",
+      "model": "Sonnet subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
     }
   ],
   "history": [
@@ -5975,6 +6009,10 @@
     {
       "date": "2026-08-16",
       "entry": "Sign-in: EsotericOS Shell Run value added (autostart-shell.ps1), dead OpenSpan Run value removed, WinSparkle auto-check off. Doug restarts cold on his own schedule (TEST-WINDOW #8)."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Boot takeover: v3.110 DONE (per-user shell swap, next sign-in), v3.114 de-blocked to post-hoc check, v3.133 strip-cairo DONE, v3.134 licence-audit added. App relicensed MIT->AGPL-3.0-or-later (eb4d162). Strict copyleft is now law."
     }
   ],
   "extraCols": [],

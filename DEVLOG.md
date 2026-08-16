@@ -1,5 +1,50 @@
 # OpenSpan — Devlog
 
+## 2026-08-16 evening — the boundary drawn at boot, and copyleft made law
+
+Doug re-centred the whole endeavour. Verbatim direction, across several messages:
+"i want EsotericOS to take over from the beginning"; "bring up the entire thing
+on the desktop too, the displays, bluetooth, all of this is mission critical and
+must load in as fast as possible"; "windows boots into [EsotericOS Stable] and
+immediately we control bluetooth, suppress explorer, take over everything right
+from the beginning ... in a way that is inviolable from windows -- we are drawing
+our boundaries further and further, make sure they stick"; "Cairo is equal to
+windows, a foreign architect that we are using to our own ends only"; and the
+charter — "FRAMEWORK FIRST. Modularity, Extensibility, Anti-Capture Universalism."
+And a law: "Maintain strict copyleft, i don't want any corporate pigs feasting on
+this" / "STRICT COPYLEFT == SCRIPTURE STITCHED INTO SOUL."
+
+**What was set (applies at his next sign-in; he restarts cold from the Forge on
+his own schedule):**
+
+* **The fork becomes the shell.** Per-user `HKCU\...\Winlogon\Shell` = the fork's
+  `CairoDesktop.exe`. Windows starts it AS the shell and never starts Explorer for
+  this user. Chosen per-user, not machine, on purpose: HKCU wins over HKLM AND
+  Windows Update / SFC do not touch it, so it is the value that *sticks*; HKLM
+  stays `explorer.exe` as the safety net. Verified the fork's `StartupRunner`
+  reads the HKCU Run key, so **EsotericOS.exe still autostarts** under the new
+  shell — displays, the Bluetooth stand-down, and the bridge VM all come up as
+  they do today (boot.log confirmed the app did exactly that at the 16:47 boot).
+* **Cairo's self-assertion stripped.** `ENABLEFIRSTRUN` removed from the Release
+  build so the upstream "Welcome" tour service is never registered; WinSparkle's
+  update check turned off (it offers to install *stock* Cairo over the fork). A
+  foreign architecture does not get to reintroduce itself at our boot.
+* **Recovery is intact:** Task Manager → Run `explorer.exe`; `restore-explorer-
+  shell.ps1`; `autostart-shell.ps1 -Undo`. The one untested surface is the Forge
+  (Electron) under Cairo-as-shell — the old v3.114 audit, now a post-hoc check at
+  his next sign-in rather than a gate, because he ordered the swap ahead of it.
+
+**Copyleft made law.** The app carried an MIT LICENSE ("OpenSpan contributors").
+Relicensed to **AGPL-3.0-or-later** (verbatim text; NOTICE with copyright Douglas
+Knoll / Divisionless and the reasoning). AGPL because EsotericOS runs over the
+network — LAN nodes, clipboard relay, input portal — and section 13 closes the
+SaaS door a plain GPL leaves open. First-party code only; all copyright the
+author, his to relicense. The shell fork was already GPL-3.0-or-later over its
+Apache-2.0 lineage. A dependency-licence audit (nothing GPL-2.0-only combined in;
+every vendored component's terms recorded) is board row v3.134.
+
+---
+
 The honest build log: what it took, what broke, what I threw away. OpenSpan
 was built in about a week (early–mid July 2026) in close collaboration with
 Claude (Anthropic) as my engineering partner — I set direction and tested
