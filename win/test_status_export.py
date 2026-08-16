@@ -25,8 +25,12 @@ def check(name, cond):
 
 
 NOW = datetime.datetime(2026, 8, 16, 7, 0, 0)
+# "peers" arrived with v3.121 (LAN nodes) and is ADDITIVE: every key above it
+# keeps its name, its type and its meaning, and a reader that does not know
+# about peers is unaffected. `vm` also gained a fourth value, "none", for a
+# machine with no bridge at all -- see test_portable.py, which owns that case.
 KEYS = {"written", "pid", "version", "vm", "daemon", "portal", "audio",
-        "devices", "broadcasting", "line", "ready"}
+        "devices", "broadcasting", "line", "ready", "peers"}
 
 up = A.status_document(running=True, ready_state="ready", ready_text="●  READY — connect headphones",
                        portal_on=True, audio_on=True, devices_live=2, devices_total=3,

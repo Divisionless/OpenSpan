@@ -334,16 +334,34 @@ def device_whitelist():
         tree = ast.parse(fh.read())
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "normalize_config")
+    fields = set()
     for node in ast.walk(fn):
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "append"
                 and getattr(node.func.value, "id", "") == "devices"
                 and node.args and isinstance(node.args[0], ast.Dict)):
-            return {key.value for key in node.args[0].keys
-                    if isinstance(key, ast.Constant)
-                    and isinstance(key.value, str)}
-    return set()
+            fields |= {key.value for key in node.args[0].keys
+                       if isinstance(key, ast.Constant)
+                       and isinstance(key.value, str)}
+        # ...and the fields normalize_config sets CONDITIONALLY, after the
+        # literal. A device record can hold those too, and a field that only
+        # some devices carry is exactly the sort that gets forgotten: the LAN
+        # node fields (kind/lane/node_id) are absent on every Bluetooth device
+        # and present on every node, so reading only the dict literal would
+        # have declared them "never built" while a node device carried three
+        # unclassified values straight into a saved arrangement.
+        #
+        # Still DERIVED, not restated: the names come out of the shipped
+        # source, so a new conditional group is classified on the day it lands.
+        if (isinstance(node, ast.For)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "field"
+                and isinstance(node.iter, (ast.Tuple, ast.List))):
+            fields |= {element.value for element in node.iter.elts
+                       if isinstance(element, ast.Constant)
+                       and isinstance(element.value, str)}
+    return fields
 
 
 WHITELIST = device_whitelist()

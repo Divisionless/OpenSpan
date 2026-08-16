@@ -1146,6 +1146,25 @@ def normalize_config(raw, live_monitors, sizes=None):
                 if isinstance(target.get("modifier_remap"), dict) else None),
             "displays": displays,
         })
+        # ---- LAN node fields, carried ONLY when a device actually has them.
+        #
+        # ADDED CONDITIONALLY, and that is not tidiness. v2 configs carried a
+        # hardcoded ipad/mac `kind` which this model deliberately deleted, and
+        # test_targets asserts a migrated device has no `kind` at all -- an
+        # unconditional `"kind": ""` re-introduces the very key whose absence
+        # is the invariant. test_profiles then has a second, independent claim:
+        # every field a device record can hold must be classified as belonging
+        # to the live DEVICE or to a saved ARRANGEMENT. These three are device
+        # facts (see DEVICE_FIELDS in openspan.py) -- a saved arrangement must
+        # never be able to re-point a pairing at another machine.
+        #
+        # Whitelisted rather than passed through, for the reason the top-level
+        # settings were lost once already: normalize_config builds its result
+        # from named keys, so anything not named here is dropped on every load.
+        for field in ("kind", "lane", "node_id"):
+            value = str(target.get(field, "") or "")
+            if value:
+                devices[-1][field] = value
 
     # The PC's own screens are arranged in Windows Display Settings, so their
     # positions relative to each other are re-derived from Windows on every

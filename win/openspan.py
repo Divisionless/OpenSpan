@@ -29,6 +29,17 @@ from tkinter import ttk
 # reuse the monitor enumeration + presets from the setup module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
+import lan_nodes  # noqa: E402
+
+
+def _this_program():
+    """The executable a firewall rule has to name.
+
+    Frozen: the exe itself. From source: the interpreter that is running it --
+    which is the honest answer, because that really is the program Windows
+    sees opening the socket.
+    """
+    return os.path.abspath(sys.executable)
 
 
 def monitor_sizes():
@@ -70,8 +81,51 @@ if getattr(sys, "frozen", False):
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     ROOT = os.path.abspath(os.path.join(HERE, ".."))
-VBOX = r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 SETTINGS = os.path.join(ROOT, "openspan_settings.json")
+
+
+def find_vboxmanage():
+    """Where VBoxManage IS on this machine, or "" when it is not installed.
+
+    This used to be one hardcoded path, which was true on the machine it was
+    written on and is an assumption everywhere else. A LAN node -- the whole
+    point of M10 -- is a laptop that will very often have no VirtualBox at all,
+    and the honest answer there is "", not a path that does not exist.
+
+    Order is deliberate: an explicit override, then VirtualBox's own installer
+    variable (which is right even for a non-default install location), then the
+    standard Program Files layouts, then PATH. Every candidate is checked
+    against the filesystem -- nothing is assumed from the fact that a variable
+    is set.
+    """
+    candidates = []
+    override = os.environ.get("ESOTERICOS_VBOXMANAGE", "").strip()
+    if override:
+        candidates.append(override)
+    for var in ("VBOX_MSI_INSTALL_PATH", "VBOX_INSTALL_PATH"):
+        base = os.environ.get(var, "").strip()
+        if base:
+            candidates.append(os.path.join(base, "VBoxManage.exe"))
+    for var, default in (("ProgramW6432", r"C:\Program Files"),
+                         ("ProgramFiles", r"C:\Program Files"),
+                         ("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+        base = os.environ.get(var, default)
+        if base:
+            candidates.append(os.path.join(base, "Oracle", "VirtualBox",
+                                           "VBoxManage.exe"))
+    on_path = shutil.which("VBoxManage")
+    if on_path:
+        candidates.append(on_path)
+    for path in candidates:
+        try:
+            if path and os.path.isfile(path):
+                return path
+        except OSError:
+            continue
+    return ""
+
+
+VBOX = find_vboxmanage()
 
 
 def _load_boot_settings():
@@ -152,6 +206,17 @@ LOG = os.path.join(ROOT, "portal.log")
 AUDIO_SEND = os.path.join(HERE, "win_audio_send.py")
 AUDIO_LOG = os.path.join(ROOT, "audio_send.log")
 BT_PREFS = os.path.join(ROOT, "bt_prefs.json")
+# ---- LAN node identity + peer store ---------------------------------------
+# Both are PER MACHINE and neither is ever published: node.json is this
+# machine's private key, peers.json is the list of machines it has been
+# introduced to. .gitignore covers them and make-portable.ps1 excludes them,
+# so a portable copy is a fresh node rather than a clone of this one.
+NODE_FILE = os.path.join(ROOT, "node.json")
+PEERS_FILE = os.path.join(ROOT, "peers.json")
+# Whether THIS launch found a config. Read once, at import, before anything in
+# the app can create one -- asked later it is always False, because building
+# the desk canvas writes the file it is asking about.
+FIRST_RUN = not os.path.isfile(CONFIG)
 # Astral Compass app icon (brand kit export). The legacy openspan.ico is the
 # fallback so a stray copy of the exe without brand/ still shows an icon.
 ICON = os.path.join(ROOT, "brand", "esotericos-app.ico")
@@ -177,9 +242,21 @@ STATUS = os.path.join(ROOT, "status.json")
 
 def status_document(*, running, ready_state, ready_text, portal_on, audio_on,
                     devices_live, devices_total, advertising, line,
-                    daemon_up, now=None, pid=None):
-    """The one place the status.json shape is decided. Pure; tested."""
-    if not running:
+                    daemon_up, now=None, pid=None, bridge=True,
+                    peers_seen=0, peers_paired=0):
+    """The one place the status.json shape is decided. Pure; tested.
+
+    `vm` gained a FOURTH value, "none", and it is not a synonym for "down":
+    down means there is a bridge here and it is stopped, none means this
+    machine has no bridge to stop. A reader that renders "down" for a LAN-only
+    node is telling its user something is broken when nothing is.
+
+    `peers` is additive -- the shell ignores keys it does not know, and every
+    existing key keeps its meaning and its type.
+    """
+    if not bridge:
+        vm = "none"
+    elif not running:
         vm = "down"
     elif ready_state == "ready":
         vm = "up"
@@ -201,6 +278,7 @@ def status_document(*, running, ready_state, ready_text, portal_on, audio_on,
         "broadcasting": bool(advertising),
         "line": line,
         "ready": ready_text,
+        "peers": {"seen": int(peers_seen), "paired": int(peers_paired)},
     }
 
 
@@ -1758,7 +1836,13 @@ DEVICE_KEY = "id"
 DEVICE_FIELDS = ("radio", "port", "name", "enabled", "clipboard",
                  "sensitivity", "pointer_accel", "scroll_invert",
                  "pointer_gain", "compensate_target_accel",
-                 "keyboard_verbatim", "modifier_remap")
+                 "keyboard_verbatim", "modifier_remap",
+                 # A LAN node's transport and identity (v3.121). These belong
+                 # to the DEVICE, emphatically not to an arrangement: an
+                 # arrangement is a picture of where screens sit, and letting
+                 # one restore `node_id` would let a saved desk re-point a
+                 # pairing at a different machine. Same argument as `radio`.
+                 "kind", "lane", "node_id")
 ARRANGEMENT_FIELDS = ("displays",)
 
 
@@ -2157,6 +2241,15 @@ def _emit(kind, text):
 
 
 def vbox(*args, quiet=False):
+    # No VirtualBox on this machine is a NORMAL state, not an error: a LAN-only
+    # node never has one. Answering here means no caller has to learn a second
+    # way to ask, and no code path spawns a process against a path that is "".
+    if not VBOX:
+        class NoBridge:
+            returncode = 1
+            stdout = ""
+            stderr = "VBoxManage not installed on this machine"
+        return NoBridge()
     if not quiet:
         _emit("cmd", "VBoxManage " + " ".join(str(a) for a in args))
     try:
@@ -3140,7 +3233,50 @@ def stop_virtualbox_backend(timeout=20.0):
     return state or "unknown"
 
 
+# ---- is there a Bluetooth bridge on THIS machine at all? -------------------
+# One predicate, consulted by the handful of places that used to assume the
+# answer was yes. A machine with no VirtualBox, or with VirtualBox but not the
+# guest VM, is a LAN-ONLY NODE: it can still do everything that runs over the
+# network, and it can do nothing over Bluetooth. That is a fact about the
+# machine, not a failure, and the app says so in those words.
+_BRIDGE_STATE = {"checked": False, "vbox": "", "vm": False}
+BRIDGE_ABSENT_TEXT = ("no bridge on this node — Bluetooth lanes need "
+                      "VirtualBox + the guest VM; LAN lanes do not")
+LAN_ONLY_BANNER = "◈  LAN node — no bridge here"
+
+
+def bridge_available(recheck=False):
+    """True when VBoxManage exists AND the configured VM is registered here.
+
+    Cached: the answer is a property of the installation, and re-shelling
+    `VBoxManage list vms` on a 3-second tick to re-learn it would be the exact
+    polling this predicate exists to stop. `recheck=True` after an install.
+    """
+    if _BRIDGE_STATE["checked"] and not recheck:
+        return bool(_BRIDGE_STATE["vbox"] and _BRIDGE_STATE["vm"])
+    _BRIDGE_STATE["vbox"] = VBOX
+    _BRIDGE_STATE["vm"] = bool(
+        VBOX and f'"{VM}"' in (vbox("list", "vms", quiet=True).stdout or ""))
+    _BRIDGE_STATE["checked"] = True
+    return bool(_BRIDGE_STATE["vbox"] and _BRIDGE_STATE["vm"])
+
+
+def bridge_absence_reason():
+    """Why there is no bridge, in one sentence, or "" when there is one."""
+    if bridge_available():
+        return ""
+    if not _BRIDGE_STATE["vbox"]:
+        return ("VirtualBox is not installed on this machine, so there is no "
+                "Bluetooth bridge here. " + BRIDGE_ABSENT_TEXT + ".")
+    return (f"VirtualBox is installed but the guest VM “{VM}” is not "
+            f"registered on this machine. " + BRIDGE_ABSENT_TEXT + ".")
+
+
 def vm_running():
+    # Asked on every tick. Without the guard, a LAN-only node spawns a
+    # VBoxManage process 20 times a minute forever to be told the same thing.
+    if not bridge_available():
+        return False
     return f'"{VM}"' in (vbox("list", "runningvms", quiet=True).stdout or "")
 
 
@@ -7257,6 +7393,7 @@ class App:
         # so its construction order relative to self.canvas is load-bearing and
         # is left alone. It carries no heading label of its own any more; the
         # rail says "Bluetooth".
+        self._bridge_notice(pane_bluetooth)
         self._build_audio_panel(pane_bluetooth)
         self.bt_panel = BtPanel(pane_bluetooth, app=self)
         self.bt_panel.pack(fill="both", expand=False)
@@ -7471,6 +7608,30 @@ class App:
             side="left", padx=(10, 0))
         self._rebuild_device_rows()
 
+        # ---- Nodes on this network (v3.121) --------------------------------
+        # The OTHER kind of device: a machine running EsotericOS, reached over
+        # the LAN instead of over a radio. Bluetooth exists here for managed
+        # machines that refuse an install; a machine you own gets the better
+        # lane. Both end up as devices on the same desk.
+        node_frame = _section(pane_devices, "Nodes on this network",
+                              pady=(PAD_MD, PAD_XS))
+        self._node_id_lbl = tk.Label(
+            node_frame, text="Starting the LAN node…", bg=BG, fg=MUTED,
+            font=(FONT_UI, 8), anchor="w", justify="left")
+        self._node_id_lbl.pack(fill="x", pady=(0, PAD_XS))
+        bind_wraplength(self._node_id_lbl)
+        self._node_body = tk.Frame(node_frame, bg=BG)
+        self._node_body.pack(fill="x")
+        _node_note = tk.Label(
+            node_frame,
+            text="Pairing shows a six-digit code on BOTH screens; press “Same "
+                 "code” on each. Identity is a key, not an address — a node "
+                 "keeps its pairing across a rename, a new IP, or a different "
+                 "network.",
+            bg=BG, fg=MUTED, font=(FONT_UI, 8), anchor="w", justify="left")
+        _node_note.pack(fill="x", pady=(PAD_XS, 0))
+        bind_wraplength(_node_note)
+
         # ---- System control: every backend action, nothing hidden ----
         # The title names what the line under it actually reports. It used to
         # say "System control" over a readout claiming five things, four of
@@ -7478,6 +7639,7 @@ class App:
         # could never be true. What is left is the daemon roll-up, so that is
         # what the title says.
         sysf = _section(pane_system, "System control — device daemons")
+        self._bridge_notice(sysf)
         self.sys_status = tk.StringVar(value="…")
         tk.Label(sysf, textvariable=self.sys_status, bg=BG, fg=MUTED,
                  font=("Consolas", 8), anchor="w", justify="left").pack(
@@ -7498,9 +7660,16 @@ class App:
             self._sysbtn[label] = _b
         for c in range(3):
             sg.columnconfigure(c, weight=1)
+        if not bridge_available():
+            # Disabled, not hidden. A control that vanishes teaches nothing;
+            # a greyed one beside the sentence above says exactly what is
+            # missing and what would bring it back.
+            for _b in self._sysbtn.values():
+                _b.state(["disabled"])
 
         # ---- Radio ownership mode (switched via a clean reboot) ----
         mode = _section(pane_system, "Bluetooth radio")
+        self._bridge_notice(mode)
         self.mode_lbl = tk.Label(mode, bg=BG, fg=FG, font=(FONT_UI, 10),
                                  anchor="w")
         self.mode_lbl.pack(fill="x")
@@ -7642,16 +7811,24 @@ class App:
         except Exception:  # noqa: BLE001
             self.clip_server = None
 
-        # only the app owns the radio in Station mode; never grab it in
-        # Windows mode
-        if current_mode() == "station" and not vm_running():
-            threading.Thread(target=start_vm_clean, daemon=True).start()
-        # keep the Windows->VM audio sender running whenever the app is open,
-        # so connecting headphones is all it takes -- nothing else to launch
-        self._ensure_audio()
-        # push app-bundled guest scripts to the VM so a fix in the app also
-        # updates the VM-side connection logic (no manual deploy, no reliance)
-        self._sync_guest_scripts()
+        # EVERY VM-side startup action is behind the one predicate. On a node
+        # with no bridge none of them are attempted -- not the VM start, not
+        # the audio sender, not the guest script push -- because all three are
+        # operations ON the guest, and a machine without one has nothing for
+        # them to fail against.
+        if bridge_available():
+            # only the app owns the radio in Station mode; never grab it in
+            # Windows mode
+            if current_mode() == "station" and not vm_running():
+                threading.Thread(target=start_vm_clean, daemon=True).start()
+            # keep the Windows->VM audio sender running whenever the app is
+            # open, so connecting headphones is all it takes
+            self._ensure_audio()
+            # push app-bundled guest scripts to the VM so a fix in the app also
+            # updates the VM-side connection logic (no manual deploy)
+            self._sync_guest_scripts()
+        self._start_lan_node()
+        self._report_first_run()
         # FRAMELESS, the crash-safe way. The earlier frameless treatment
         # subclassed GWLP_WNDPROC with a Python ctypes callback; heavy pointer
         # traffic (WM_NCHITTEST fires on every move) faulted it in _ctypes.pyd
@@ -9302,9 +9479,20 @@ class App:
                 pass
         if getattr(self, "clip_server", None):
             self.clip_server.stop()  # clipboard offline before teardown
+        # DEREGISTER THE ADVERTISEMENT. A service record that outlives the
+        # process leaves this node advertising a port nothing is listening on,
+        # and every peer's list then shows a machine that cannot be paired
+        # with. The OS does expire it eventually; eventually is not while
+        # somebody is looking at the list.
+        if getattr(self, "node", None) is not None:
+            try:
+                self.node.stop()
+            except Exception:  # noqa: BLE001
+                pass
         # best-effort: flush the guest journal to disk before the hard power
         # cut, so the last minutes of Bluetooth events survive for post-mortem
-        ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
+        if bridge_available():
+            ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
         if self._tray:
             self._tray.destroy()
             self._tray = None
@@ -11541,6 +11729,271 @@ class App:
         if self._portal_live():
             self.toggle_portal()
 
+    def _bridge_notice(self, parent):
+        """One line, in secondary text, wherever a bridge control lives.
+
+        Secondary text, and no error colour or error tone anywhere near it: a
+        laptop with no VirtualBox is not a broken EsotericOS, it is a LAN node.
+        The sentence says which half of the app is unavailable AND which half
+        is not, because "no bridge" on its own reads as "nothing works".
+        """
+        if bridge_available():
+            return None
+        label = tk.Label(parent, text="◈  " + BRIDGE_ABSENT_TEXT, bg=BG,
+                         fg=MUTED, font=(FONT_UI, 9), anchor="w",
+                         justify="left")
+        label.pack(fill="x", pady=(0, PAD_SM))
+        bind_wraplength(label)
+        return label
+
+    # ---- LAN nodes (v3.121) --------------------------------------------
+    def _start_lan_node(self):
+        """Put this machine on the LAN as a discoverable node.
+
+        Fail-soft in the strongest sense: every other feature in this app works
+        with no node service at all, so a discovery API that is missing, a
+        firewall that refuses the bind, or a network that has no multicast
+        costs a Console line and nothing else.
+        """
+        self.node = None
+        self._node_error = ""
+        try:
+            identity = lan_nodes.load_identity(NODE_FILE)
+            saved = load_setting("node_name", "")
+            if saved and saved != identity.get("name"):
+                identity = lan_nodes.rename_node(NODE_FILE, saved)
+            self.node = lan_nodes.NodeService(
+                identity, PEERS_FILE, version=VERSION,
+                notify=lambda kind, text: _emit(kind, text),
+                on_change=lambda: self.ui(self._refresh_node_rows))
+        except Exception as exc:  # noqa: BLE001
+            self._node_error = str(exc)
+            _emit("err", f"LAN node identity could not be prepared: {exc}")
+            return False
+
+        def work():
+            ok = False
+            try:
+                ok = self.node.start()
+            except Exception as exc:  # noqa: BLE001
+                self._node_error = str(exc)
+                _emit("err", f"LAN node could not start: {exc}")
+            if not ok:
+                # A blocked bind and a missing discovery API look identical
+                # from the outside, so say what to DO rather than guessing
+                # which one it was -- and the thing to do is the same either
+                # way, because the rule allows the program.
+                _emit("err", lan_nodes.firewall_explanation(_this_program()))
+            self.ui(self._refresh_node_rows)
+
+        threading.Thread(target=work, name="esotericos-node-start",
+                         daemon=True).start()
+        return True
+
+    def _peer_counts(self):
+        """{'peers_seen': n, 'peers_paired': n} for status_document."""
+        node = getattr(self, "node", None)
+        if node is None:
+            return {"peers_seen": 0, "peers_paired": 0}
+        counts = node.status_counts()
+        return {"peers_seen": counts["seen"], "peers_paired": counts["paired"]}
+
+    def _refresh_node_rows(self):
+        """Repaint the "Nodes on this network" section. Tk thread ONLY.
+
+        Reached from network threads exclusively through `self.ui(...)`, which
+        is the marshal every worker in this file goes through: a background
+        thread touching Tk -- even via after() -- hard-crashes the interpreter,
+        and this section is repainted by discovery callbacks that arrive on OS
+        threads we do not own.
+        """
+        body = getattr(self, "_node_body", None)
+        if body is None:
+            return
+        for child in body.winfo_children():
+            child.destroy()
+        node = getattr(self, "node", None)
+        if node is None or not node.port:
+            tk.Label(body, text=self._node_error
+                     or "Looking for other EsotericOS machines…",
+                     bg=BG, fg=MUTED, font=(FONT_UI, 9), anchor="w").pack(
+                fill="x")
+            if self._node_error:
+                ttk.Button(body, text="Allow EsotericOS through the firewall",
+                           command=self._allow_firewall).pack(anchor="w",
+                                                              pady=(4, 0))
+            return
+        self._sync_node_devices()
+        self._node_id_lbl.config(
+            text=f"This node: “{node.identity.get('name')}” · "
+                 f"{node.identity['id'][:8]}… · discovery "
+                 f"{node.discovery_path or '…'} · service port {node.port} "
+                 "(assigned by the OS, new every launch)")
+        rows = 0
+        for peer in sorted(node.unpaired(), key=lambda p: p["name"].lower()):
+            rows += 1
+            self._node_row(body, peer, paired=False)
+        for peer_id, record in sorted(node.peers.items(),
+                                      key=lambda kv: kv[1]["name"].lower()):
+            rows += 1
+            live = node.table.get(peer_id)
+            self._node_row(body, {"id": peer_id, "name": record["name"],
+                                  "address": (live or {}).get("address", ""),
+                                  "version": (live or {}).get("version", "")},
+                           paired=True, live=bool(live))
+        if not rows:
+            tk.Label(body,
+                     text="No other EsotericOS machines on this network yet. "
+                          "Run EsotericOS on the other PC and it appears here.",
+                     bg=BG, fg=MUTED, font=(FONT_UI, 9), anchor="w",
+                     justify="left").pack(fill="x")
+
+    def _sync_node_devices(self):
+        """A paired node IS a device. Reconcile the config with peers.json.
+
+        Driven from the peer store rather than from the pairing event, so a
+        pairing that completed while this app was closed (or a peers.json
+        edited by hand) still produces the device, and a stale one is not left
+        behind. Tk thread, and it only saves when something actually changed --
+        a save bounces the portal.
+        """
+        node = getattr(self, "node", None)
+        if node is None:
+            return False
+        config = self.canvas.config
+        changed = False
+        for peer_id, record in node.peers.items():
+            device_id = lan_nodes.node_device_id(peer_id)
+            existing = device_by_id(config, device_id)
+            if existing is None:
+                device = lan_nodes.node_device(config, peer_id,
+                                               record.get("name"),
+                                               live_monitors=self.canvas.monitors)
+                config.setdefault("devices", []).append(device)
+                changed = True
+                _emit("event", f"“{record.get('name')}” is a device on this "
+                               "desk now (lane: LAN). Its screens arrive when "
+                               "desk federation lands; until then it holds one "
+                               "placeholder rectangle.")
+            elif existing.get("name") != record.get("name"):
+                existing["name"] = str(record.get("name"))
+                changed = True
+        if changed:
+            refresh_geometry(config)
+            self.canvas.save()
+            self._rebuild_device_rows()
+        return changed
+
+    def _node_row(self, body, peer, paired, live=True):
+        row = tk.Frame(body, bg=BG)
+        row.pack(fill="x", pady=2)
+        session = self.node.sessions.get(peer["id"]) if self.node else None
+        state = ("paired" if paired else "on this network")
+        if paired and not live:
+            state = "paired · not on this network right now"
+        tk.Label(row, text=f"◈  {peer['name']}", bg=BG, fg=FG,
+                 font=(FONT_UI, 10), anchor="w").pack(side="left")
+        tk.Label(row, text=f"   {peer['id'][:8]}… · {state}", bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(side="left")
+        if session is not None and session.code:
+            # THE CODE IS IN THE WINDOW, in the row it belongs to. This app
+            # raises no separate windows by law, and a pairing code is also
+            # the one thing that must stay readable while the user looks
+            # away at the other machine.
+            tk.Label(row, text=f"  code {session.code}", bg=BG, fg=ACCENT,
+                     font=("Consolas", 12)).pack(side="left", padx=(8, 0))
+            if session.we_confirmed:
+                tk.Label(row, text="  waiting for the other desk…", bg=BG,
+                         fg=MUTED, font=(FONT_UI, 8)).pack(side="left")
+            else:
+                ttk.Button(row, text="Same code",
+                           command=lambda pid=peer["id"]: self._confirm_node(
+                               pid)).pack(side="right")
+        elif paired:
+            ttk.Button(row, text="Unpair",
+                       command=lambda pid=peer["id"]: self._unpair_node(
+                           pid)).pack(side="right")
+        else:
+            ttk.Button(row, text="Pair",
+                       command=lambda pid=peer["id"]: self._pair_node(
+                           pid)).pack(side="right")
+
+    def _pair_node(self, peer_id):
+        if self.node:
+            self.node.begin_pair(peer_id)      # dials on its own thread
+            self._refresh_node_rows()
+
+    def _confirm_node(self, peer_id):
+        if self.node:
+            self.node.confirm(peer_id)
+            self._refresh_node_rows()
+
+    def _unpair_node(self, peer_id):
+        if not self.node:
+            return
+        name = self.node.peers.get(peer_id, {}).get("name", peer_id[:8])
+        self.node.unpair(peer_id)
+        remove_device(self.canvas.config,
+                      lan_nodes.node_device_id(peer_id))
+        self.canvas.save()
+        _emit("event", f"unpaired from “{name}” — its shared secret is gone "
+                       "from this machine. Pairing again shows a new code on "
+                       "both desks.")
+        self._refresh_node_rows()
+
+    def _allow_firewall(self):
+        """Run the PROGRAM rule, elevated, because the user clicked.
+
+        Consent is the click. Nothing in this app adds a firewall rule on its
+        own -- the install path (bake-in.ps1, run elevated once) is the other
+        way, and both add the identical rule for the same reason: the service
+        port is the OS's to choose and is different every launch, so allowing
+        a port would be wrong by the next restart.
+        """
+        commands = lan_nodes.firewall_commands(_this_program())
+        _emit("cmd", "; ".join(commands))
+
+        def work():
+            try:
+                for command in commands:
+                    subprocess.run(["powershell", "-NoProfile",
+                                    "-ExecutionPolicy", "Bypass", "-Command",
+                                    f"Start-Process netsh -Verb RunAs "
+                                    f"-Wait -ArgumentList "
+                                    f"'{command[len('netsh '):]}'"],
+                                   capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace",
+                                   timeout=60, creationflags=NO_WINDOW)
+                _emit("ok", "firewall rule added for the program. Restart "
+                            "EsotericOS on the other node if it was already "
+                            "trying to reach this one.")
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"the firewall rule was not added: {exc}")
+
+        threading.Thread(target=work, name="esotericos-firewall",
+                         daemon=True).start()
+
+    def _report_first_run(self):
+        """On a machine with no config, say what was found. Once, plainly.
+
+        A new node's first minute used to be silent, which on a machine with
+        no VM and no devices is indistinguishable from a broken install. Four
+        facts, in the order someone actually wants them.
+        """
+        if not FIRST_RUN:
+            return
+        monitors = self.canvas.config.get("monitors", [])
+        names = ", ".join(str(m.get("name", "?")) for m in monitors)
+        _emit("event", f"First run on this machine. Found {len(monitors)} "
+                       f"monitor(s): {names}. They are laid out exactly as "
+                       "Windows has them.")
+        _emit("event", "No devices configured yet — nothing is assumed. Add a "
+                       "Bluetooth device on the Devices pane, or pair another "
+                       "EsotericOS machine under “Nodes on this network”.")
+        _emit("event", bridge_absence_reason()
+              or f"Bluetooth bridge present: VBoxManage at {VBOX}, guest VM "
+                 f"“{VM}” registered.")
+
     # ---- status tick ----
     def _tick(self):
         threading.Thread(target=self._poll, daemon=True).start()
@@ -11551,7 +12004,8 @@ class App:
         happens in _apply_poll on the UI thread."""
         if self._closing:
             return  # shutting down: never respawn anything past _full_stop
-        running = vm_running()
+        running = vm_running()   # already False, with no subprocess, on a
+        #                          LAN-only node -- see bridge_available()
         if not running:
             self._vm_reachable = False
         st = daemon_status() if running else None
@@ -11559,7 +12013,10 @@ class App:
         dev_status = self._poll_device_status() if running else {}
         self._dev_status = dev_status
         on = self._portal_live()
-        self._ensure_audio()  # watchdog: relaunch the sender if it died
+        if bridge_available():
+            self._ensure_audio()  # watchdog: relaunch the sender if it died
+        # ...and on a LAN-only node it is never started, so there is nothing to
+        # watch: the sender's whole job is UDP into the guest VM.
         aud = bool(self.audio_proc and self.audio_proc.poll() is None)
         # compact mode has no device list on screen, so keep the buds line
         # fresh with a periodic (no-scan) refresh every ~15s
@@ -11675,7 +12132,12 @@ class App:
         else:
             self._ind["admin"].config(text="⚠ NOT ADMIN", fg=DANGER)
         # readiness banner (only reacts on a state change, so no console spam)
-        if not running:
+        if not bridge_available():
+            # "Booting…" forever is what this said on a machine with no VM,
+            # and it is a lie that never resolves. A LAN node is a finished
+            # state, not a stalled one.
+            r_state, r_txt, r_col = "lan-only", LAN_ONLY_BANNER, PORTAL
+        elif not running:
             r_state, r_txt, r_col = "stopped", "○  Stopped", MUTED
         elif not self._vm_reachable:
             # Ready means the VM ANSWERS -- not that some device's HID daemon
@@ -11699,6 +12161,7 @@ class App:
                 "booting": "VM up — services starting, hold ~90s…",
                 "ready": "READY — the bridge is fully up. Connect your "
                          "headphones.",
+                "lan-only": bridge_absence_reason(),
             }[r_state])
             if r_state == "ready":
                 # detect a returning bond at first-ready (don't wait ~15s for the
@@ -11730,7 +12193,9 @@ class App:
             line="  ".join(t for t in (self._ind[k].cget("text")
                                        for k in INDICATOR_ORDER
                                        if k in self._ind) if t),
-            daemon_up=st is not None))
+            daemon_up=st is not None,
+            bridge=bridge_available(),
+            **self._peer_counts()))
         # `connected`, not `connected and on` -- the portal is its own argument
         # now, for the same reason it is in _apply_device_rows below: folding it
         # into liveness is what made the canvas unable to tell a stopped portal
