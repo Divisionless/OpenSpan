@@ -2277,3 +2277,86 @@ peer-identity work); audio dies without a watchdog when its radio hosts HID
 churn; and the Cold-restart button is honest about the guest while lying
 about the hardware — it cold-boots the kernel and mass-releases the radios,
 which is precisely backwards, and its redesign is specified.
+
+## 2026-08-16 — Radio custody: stop running the race, own the radio
+
+**Reported.** The onboard Intel radio (`8087:0aaa`, port 14) was lost again.
+Windows had the node registered but not enumerated — `present = False` — with
+service `BTHUSB` and driver `Intel(R) Wireless Bluetooth(R)`; `VBoxManage list
+usbhost` said `Unavailable`. The two TP-Link dongles (`2357:0604`) were
+`Captured` and fine. Same shape as 2026-08-08/09.
+
+**Cause, restated.** Every VM start, `VBoxUSBMon.sys` tears the live `bthusb`
+device stack down and re-adds the device so PnP sees `USB\VID_80EE&PID_CAFE`,
+which is the hardware id `VBoxUSB.inf` claims — that is how the proxy gets
+bound. It is a race against a device Windows is actively using, and it is
+re-run at **every** VM start. When it loses there is no proxy and no
+enumeration, and on a built-in radio there is no replug.
+
+**Design (Doug: "exclusively taking control of this from Windows until the
+program is uninstalled").** Stop running the race. Bind `VBoxUSB.sys` as the
+function driver of the radio's REAL device node, permanently — the Device
+Manager Have Disk install done programmatically — so PnP loads the proxy at
+boot and `bthusb` never touches the radio. Return = uninstall the node and
+rescan, and the vendor driver comes back.
+
+The obstacle is a class filter, and it is documented: a driver list built for a
+device *"is composed of drivers that have the same class as the device instance
+with which they are associated"*. The radio's class is Bluetooth; `VBoxUSB.inf`
+is class USB. Probed here: `SPDIT_COMPATDRIVER` → 0 nodes (hardware ids differ,
+expected); `SPDIT_CLASSDRIVER` on the device → 0 nodes even with
+`DI_FLAGSEX_ALLOWEXCLUDEDDRVS`; the same call at SET level on a USB-class set →
+1 node, `VirtualBox USB Driver` / Oracle / 7.2.12.24389. So the class is set
+first with `SetupDiSetDeviceRegistryProperty(SPDRP_CLASSGUID)`, then the
+device's own list is built, selected, and installed with `DiInstallDevice`.
+Full sequence, citations and the unverified part in `docs\RADIO-CUSTODY.md`.
+
+**The correction that cost the first version.** "Real node `present = False`
+means phantom" is WRONG. A healthy dongle under runtime capture reports
+`present = False` on its real node too, because that node was torn down and a
+`USB\VID_80EE&PID_CAFE\<same suffix>` proxy stands in its place. On 2026-08-16
+all three radios read `present = False` and two were working. What separates a
+working capture from a wedge is VirtualBox's own host state — `Captured` versus
+`Unavailable` — not the node. The verdict table now uses both, plus whether the
+proxy exists at all.
+
+**Also learned, from the proxy node.** The torn-down real node answers nothing,
+but its proxy answers `SPDRP_REMOVAL_POLICY`: 1 (ExpectNoRemoval) for the
+built-in Intel, 3 (surprise removal) for the dongles. That is a deterministic
+way to tell "unplug it" from "restart Windows", instead of guessing from the
+serial.
+
+**Shipped.** `win\radio_custody.py` (audit / take / return, dry run by default,
+pure decision functions separated from a fakeable `Win32Bindings`, `--json`);
+the Bluetooth panel's custody line per radio and one **Take custody** button —
+first click plans in the console, second click applies, both on a worker,
+never a dialog; a launch audit that only reports, which doubles as the Windows
+Update re-bind guard; `bake-in.ps1 -Custody` / `-Undo` printing the take and
+return commands and never passing `--apply` itself.
+
+**Refusals, because this is a driver binding.** Not elevated; `VBoxUSB.inf` or
+`.cat` missing; the node absent; the node a phantom; and — the one this
+codebase had to learn twice — **VirtualBox holding a live runtime capture on
+that radio**. Rewriting the real node's driver under a live capture is the
+layered ownership that wedged this stack before.
+
+**The state changed under us, and that is worth recording.** Between the first
+read of this session and the last, the Intel radio recovered on its own: it
+went from `Unavailable` with no proxy to `Captured`, attached to the VM, with a
+live proxy node. Nothing in this session touched it — the work was read-only —
+so it was the running app's own explicit-handoff PnP kick. It means the wedge
+is intermittent, not permanent, and it means the audit had better report what
+is true now rather than what a brief said an hour ago. It does.
+
+**Not verified, deliberately.** `SPDRP_CLASSGUID` appears on its MSDN page both
+as settable ("*DeviceInfoData.ClassGuid* is set upon return to the new class")
+and in the reserved list. Whether 22H2 honours the write is untested, because
+testing it is a state change and this was code + dry-run only. `--apply` stops
+with the class change named as the failing step if it is refused; the fallback
+is the wizard's own route, `DIF_SELECTDEVICE` / `SetupDiSelectDevice`, which
+sets the class as part of selection.
+
+**The rule.** Prove the sequence on a TP-Link dongle FIRST, then the Intel. A
+bad bind on a dongle costs a replug. A bad bind on the built-in radio costs a
+Windows restart — and that restart must be taken with **no VM captures held**,
+or it simply re-runs the boot-time race that caused all of this.
