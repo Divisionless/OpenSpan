@@ -230,6 +230,36 @@ fake.proc(4242, 0x000F, 0, 0)      # WM_PAINT: nothing of ours, just forwarded
 check("an unrelated message changes nothing",
       names(fake) == ["CallWindowProcW"])
 
+# ---- built in: it does not move ---------------------------------------------
+# A header drag, geometry(), Win+Arrow, a snap: all arrive as a
+# WM_WINDOWPOSCHANGING from outside our own dock and must leave pinned.
+dragged = FakeWindowPos(insert_after=0, flags=0)
+fake.proc(4242, on_desktop.WM_WINDOWPOSCHANGING, 0, dragged)
+check("a move from anywhere but our own dock is refused: SWP_NOMOVE|SWP_NOSIZE",
+      dragged.flags & on_desktop.SWP_NOMOVE
+      and dragged.flags & on_desktop.SWP_NOSIZE
+      and dragged.hwndInsertAfter == on_desktop.HWND_BOTTOM)
+
+# The exception is our own placing: while dock()/redock hold _placing, the
+# WINDOWPOS Windows raises during that very SetWindowPos must keep its move.
+seen_flags = []
+def _placing_probe(hwnd, after, x, y, w, h, flags):
+    inner = FakeWindowPos(insert_after=0, flags=0)
+    fake.proc(hwnd, on_desktop.WM_WINDOWPOSCHANGING, 0, inner)
+    seen_flags.append(inner.flags)
+    return 1
+fake.user32.SetWindowPos = FakeFn(fake.calls, "SetWindowPos", _placing_probe)
+ctl.redock_from_work_area()
+check("our own dock is the one mover: inside its SetWindowPos the move is kept",
+      seen_flags and not (seen_flags[-1] & (on_desktop.SWP_NOMOVE | on_desktop.SWP_NOSIZE)))
+check("the placing flag is dropped again afterwards", ctl._placing is False)
+after_dock = FakeWindowPos(insert_after=0, flags=0)
+fake.proc(4242, on_desktop.WM_WINDOWPOSCHANGING, 0, after_dock)
+check("and the very next outside move is refused again",
+      after_dock.flags & on_desktop.SWP_NOMOVE)
+fake.user32.SetWindowPos = FakeFn(fake.calls, "SetWindowPos", 1)
+fake.calls.clear()                 # the release checks below read call ORDER
+
 
 # ---- release() --------------------------------------------------------------
 

@@ -82,6 +82,21 @@ def refuse_raise(pos):
     return pos
 
 
+def refuse_move(pos):
+    """Rewrite a WINDOWPOS so the window stays exactly where it is.
+
+    Built in means built in: a header drag, a `geometry()` from anywhere in the
+    app, a Win+Arrow, an Aero snap -- every one arrives here as a
+    WM_WINDOWPOSCHANGING and leaves with SWP_NOMOVE | SWP_NOSIZE set, so Windows
+    keeps the old rectangle. Doug: "i shouldn't be able to drag it around,
+    build it in." Our own dock() and redock are the only movers, and they raise
+    the controller's `_placing` flag around their SetWindowPos so this is
+    skipped for exactly that call.
+    """
+    pos.flags = pos.flags | SWP_NOMOVE | SWP_NOSIZE
+    return pos
+
+
 # ---- the real Win32 edge ---------------------------------------------------
 
 class _RECT(ctypes.Structure):
@@ -176,6 +191,7 @@ class OnDesktop:
         self._old_exstyle = None
         self._old_rect = None      # the framed geometry, to come back to
         self._docked_width = None  # what a re-dock re-uses; no Tk read needed
+        self._placing = False      # True only inside our own SetWindowPos
         self.active = False
         self.last_error = ""
 
@@ -275,9 +291,13 @@ class OnDesktop:
             return False
         x, y, w, h = self._geometry_provider()
         self._docked_width = w
-        self._bindings.user32.SetWindowPos(
-            self._hwnd, HWND_BOTTOM, x, y, w, h,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE)
+        self._placing = True
+        try:
+            self._bindings.user32.SetWindowPos(
+                self._hwnd, HWND_BOTTOM, x, y, w, h,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE)
+        finally:
+            self._placing = False
         return True
 
     def redock_from_work_area(self):
@@ -292,8 +312,12 @@ class OnDesktop:
         width = self._docked_width or MIN_WIDTH
         x, y, w, h = dock_rect(self._bindings.work_area(), width)
         self._docked_width = w
-        self._bindings.user32.SetWindowPos(
-            self._hwnd, HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE)
+        self._placing = True
+        try:
+            self._bindings.user32.SetWindowPos(
+                self._hwnd, HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE)
+        finally:
+            self._placing = False
         return True
 
     def show_at_dock(self):
@@ -311,7 +335,10 @@ class OnDesktop:
         native fault rather than a traceback."""
         try:
             if msg == WM_WINDOWPOSCHANGING and lparam:
-                refuse_raise(self._bindings.windowpos(lparam))
+                pos = self._bindings.windowpos(lparam)
+                refuse_raise(pos)
+                if not self._placing:
+                    refuse_move(pos)
             elif msg in (WM_DISPLAYCHANGE, WM_SETTINGCHANGE):
                 self.redock_from_work_area()
         except Exception:  # noqa: BLE001
