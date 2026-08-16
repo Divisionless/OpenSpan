@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 132,
+  "nextSid": 133,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2344,6 +2344,26 @@
       "actualTime": null,
       "extra": {
         "note": "Doug 16 Aug: 'Don't overdesign something.' USB/IP and host-side-owner options dropped."
+      }
+    },
+    {
+      "sid": "v3.132",
+      "hcidx": 132,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.119"
+      ],
+      "title": "Files — tabs + arbitrary split grid: pane tree (split H/V at will, close at will, draggable ratios), tabs per pane, drag tabs between panes / to another window / out to a new window, no native title bar (tabs live in the chrome), session restored exactly, Windows+Mac keys adopted with collisions surfaced to Doug  [files-grid]",
+      "why": "Doug: beautiful tabs and split screen",
+      "estTokens": "350k–550k",
+      "costDrivers": "pane-tree layout in WPF; cross-window tab drag = single instance + IPC; WindowChrome; key map + collision table",
+      "estTime": "5–7h",
+      "model": "Opus subagent",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "doug": "16 Aug interview: 1 arbitrary grid, add/remove at will · 2 orientation user-defined · 3 tabs per panel, drag anywhere incl. other window · 4 no windows bar on top · 5 motion later · 6 restore exactly · 7 adopt Windows/Mac keys, surface collisions"
       }
     }
   ],
@@ -5940,6 +5960,10 @@
     {
       "date": "2026-08-16",
       "entry": "Cairo FileManager pointed at EsotericOS Files (Doug pastes in Settings; live-bound). Files C reframed: interim wiring, approach forks to Doug's spec."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "v3.132 files-grid opened from Doug's tab+split interview; Opus agent building."
     }
   ],
   "extraCols": [],
