@@ -1995,7 +1995,9 @@
       "status": "todo",
       "actualTokens": null,
       "actualTime": null,
-      "extra": {}
+      "extra": {
+        "note": "Includes: drop the WinSparkle update service from the fork (upstream feed cairoshell.github.io would offer STOCK Cairo over the fork; per-user CheckForUpdates=0 is the interim, set by tools/autostart-shell.ps1)."
+      }
     },
     {
       "sid": "v3.113",
@@ -5969,6 +5971,10 @@
     {
       "date": "2026-08-16",
       "entry": "Doug paused files-grid; WIP parked (shell wip/files-grid). Stable state declared: tag stable-2026-08-16 on app (f5db383) and shell (314f2d8); live 7aab8cb7, staged 55d19b4e; 58/58 tests; preservation rows added."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Sign-in: EsotericOS Shell Run value added (autostart-shell.ps1), dead OpenSpan Run value removed, WinSparkle auto-check off. Doug restarts cold on his own schedule (TEST-WINDOW #8)."
     }
   ],
   "extraCols": [],
