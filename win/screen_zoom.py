@@ -559,7 +559,10 @@ class ScreenMagnifier:
     LWA_ALPHA = 0x00000002
     SW_HIDE = 0
     SW_SHOWNA = 8
+    SWP_NOSIZE = 0x0001
+    SWP_NOMOVE = 0x0002
     SWP_NOACTIVATE = 0x0010
+    HWND_TOPMOST = -1
     MW_FILTERMODE_EXCLUDE = 0
     WM_APP_APPLY = 0x8000 + 11
     WM_APP_HIDE = 0x8000 + 12
@@ -810,6 +813,7 @@ class ScreenMagnifier:
             self._step_ramp(monitor, anchor, target)
         if needs_showing:
             self._bindings.user32.ShowWindow(self._host, self.SW_SHOWNA)
+            self._keep_on_top()
         if not self._refreshing or needs_showing:
             self._set_high_resolution_timer(True)
             self._bindings.user32.SetTimer(
@@ -869,6 +873,35 @@ class ScreenMagnifier:
                 ctypes.get_last_error())
         return applied
 
+    def _keep_on_top(self) -> None:
+        """Hold the per-display host at the top of the topmost band.
+
+        The host is created once, at magnifier startup, and merely shown when
+        a display zooms.  Every topmost window Windows creates AFTER it -- a
+        context menu, a tooltip, a taskbar flyout, another program's
+        always-on-top -- is inserted above it, so Windows paints that window
+        at native size over the magnified image while the magnifier shows the
+        same window magnified beneath.  Doug's report, 2026-08-16: "windows
+        does not stop drawing the old context window on top -- at original
+        size."  Whole-desktop zoom never has this problem because DWM scales
+        the composition itself; the overlay has to win the z-order.
+
+        Winning it changes what the display looks like, never what it does:
+        the host is click-through and non-activating, and the magnifier
+        captures every window regardless of z-order, so a menu pushed beneath
+        the host is still seen (magnified) and still receives its clicks.
+
+        HWND_TOPMOST on a window that is already topmost moves it to the top
+        of the band; when it is already there Windows treats the call as
+        SWP_NOZORDER and does nothing, so asserting it every frame is free.
+        Fullscreen mode never calls this: it has no host on screen.
+        """
+        if not self._host:
+            return
+        self._bindings.user32.SetWindowPos(
+            self._host, self.HWND_TOPMOST, 0, 0, 0, 0,
+            self.SWP_NOMOVE | self.SWP_NOSIZE | self.SWP_NOACTIVATE)
+
     def _on_tick(self) -> None:
         target, monitor, anchor, _requested_view, _scope = self._requested()
         if monitor.is_empty:
@@ -878,6 +911,10 @@ class ScreenMagnifier:
         have_pointer = bool(
             self._bindings.user32.GetCursorPos(ctypes.byref(point)))
         pointer = (int(point.x), int(point.y))
+        if not self._full_screen:
+            # Before the frame is composed, so it is composed with the host
+            # above whatever appeared since the last one.
+            self._keep_on_top()
         if not self._full_screen and self._cursor is not None:
             self._cursor.set_hidden(
                 have_pointer

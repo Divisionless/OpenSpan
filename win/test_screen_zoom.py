@@ -740,6 +740,110 @@ check("cursor restoration is on normal hide and the thread-finally exit",
       len(cleanup_calls) == 1 and len(restore_calls) == 1)
 
 
+# ---- the per-display host wins the z-order every frame ----------------------
+#
+# 2026-08-16: with a display zoomed, a context menu was painted at native size
+# on top of the magnified image. Windows inserts every new topmost window --
+# menus, tooltips, flyouts -- ABOVE the host, which was created once at
+# startup. The overlay must re-assert HWND_TOPMOST each frame; fullscreen
+# mode, having no host on screen, must not.
+
+class _Recorder:
+    def __init__(self, ret=1):
+        self.calls = []
+        self.ret = ret
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.ret
+
+
+class _FakeMagUser32:
+    def __init__(self):
+        self.SetWindowPos = _Recorder()
+        self.ShowWindow = _Recorder()
+        self.SetTimer = _Recorder()
+        self.KillTimer = _Recorder()
+        self.PostMessageW = _Recorder()
+
+    @staticmethod
+    def GetCursorPos(ref):
+        ref._obj.x, ref._obj.y = -900, 400
+        return 1
+
+
+class _FakeMagDll:
+    def __init__(self):
+        self.MagSetWindowTransform = _Recorder()
+        self.MagSetFullscreenTransform = _Recorder()
+        self.MagSetWindowSource = _Recorder()
+
+
+class _FakeMagBindings:
+    def __init__(self):
+        self.user32 = _FakeMagUser32()
+        self.dll = _FakeMagDll()
+
+
+def _zoomed_display_magnifier():
+    mag = zoom.ScreenMagnifier(logger=cursor_logger)
+    mag._bindings = _FakeMagBindings()
+    mag._host, mag._control = 0x1234, 0x5678
+    left = zoom.ScreenRect(-1920, 0, 1920, 1080)      # a NEGATIVE-origin display
+    mag._requested_level = mag._level = mag._applied_level = 2.0
+    mag._requested_monitor = mag._placed_monitor = left
+    mag._requested_anchor = (-960, 540)
+    mag._view_x, mag._view_y = -1440.0, 270.0
+    mag._refreshing = True
+    return mag
+
+
+HWND_TOPMOST_AS_POINTER = 0xFFFFFFFFFFFFFFFF
+NOMOVE_NOSIZE_NOACTIVATE = 0x0002 | 0x0001 | 0x0010
+
+mag = _zoomed_display_magnifier()
+mag._on_tick()
+pos_calls = mag._bindings.user32.SetWindowPos.calls
+topmost_calls = [
+    c for c in pos_calls
+    if c[0] == 0x1234 and c[1] in (-1, HWND_TOPMOST_AS_POINTER)
+    and c[2:6] == (0, 0, 0, 0)
+    and c[6] & NOMOVE_NOSIZE_NOACTIVATE == NOMOVE_NOSIZE_NOACTIVATE
+]
+check("a settled per-display frame re-asserts the host at HWND_TOPMOST, "
+      "moving and sizing nothing and activating nothing",
+      len(topmost_calls) == 1
+      and len(mag._bindings.dll.MagSetWindowTransform.calls) == 1)
+check("HWND_TOPMOST marshals as the pointer Windows expects",
+      ctypes.c_void_p(zoom.ScreenMagnifier.HWND_TOPMOST).value
+      == HWND_TOPMOST_AS_POINTER
+      and zoom.wt.HWND.from_param(zoom.ScreenMagnifier.HWND_TOPMOST)
+      is not None)
+
+mag = _zoomed_display_magnifier()
+mag._requested_level = 3.0                             # mid-ramp frame
+mag._on_tick()
+check("a ramping per-display frame re-asserts the host too",
+      len(mag._bindings.user32.SetWindowPos.calls) == 1)
+
+mag = _zoomed_display_magnifier()
+mag._full_screen = True
+mag._on_tick()
+check("a fullscreen frame never touches window z-order (there is no host on screen)",
+      mag._bindings.user32.SetWindowPos.calls == [])
+
+on_apply = next(
+    node for node in ast.walk(tree)
+    if isinstance(node, ast.FunctionDef) and node.name == "_on_apply")
+show_then_top = [
+    node.func.attr for node in ast.walk(on_apply)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    and node.func.attr in ("ShowWindow", "_keep_on_top")
+]
+check("showing the host on a new display is followed by the topmost assert",
+      show_then_top[-2:] == ["ShowWindow", "_keep_on_top"])
+
+
 if failures:
     print(f"RESULT: {len(failures)} FAILED")
     raise SystemExit(1)
