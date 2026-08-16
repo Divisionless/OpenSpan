@@ -208,7 +208,8 @@ openspan/
 ├── build_exe.py                 # package into a single OpenSpan.exe
 ├── TECHNICAL_NOTES.md           # deep "what makes it work" reference
 ├── BUILD.md · CLIPBOARD_SETUP.md · CLIPBOARD_DESIGN.md
-├── LICENSE                      # MIT
+├── LICENSE                      # AGPL-3.0-or-later
+├── NOTICE                       # copyright + why AGPL, third-party terms
 └── README.md
 ```
 
@@ -262,6 +263,12 @@ Keyboard` appears once bonded — a handy check.)
 
 ## License
 
-MIT. No warranty, no data collection, nothing phones home.
+**AGPL-3.0-or-later** (relicensed from MIT on 2026-08-16). No warranty, no data
+collection, nothing phones home. Strong copyleft is deliberate: EsotericOS runs
+over the network (LAN nodes, clipboard relay, input portal), and the Affero
+clause keeps a networked, modified version from being served to users without
+its source. Replace proprietary with copyleft, and make the free solution the
+one everyone wants. See `LICENSE` and `NOTICE`; third-party components keep their
+own terms (dependency-licence audit tracked on the board).
 
 **[POSITION_MODEL.md](POSITION_MODEL.md)** — the four laws behind moving one pointer across several machines over a link that can only move it *by* an amount, never *to* a place.

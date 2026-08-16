@@ -1,0 +1,29 @@
+EsotericOS
+Copyright (C) 2026 Douglas Knoll / Divisionless
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program (see the file LICENSE). If not, see
+<https://www.gnu.org/licenses/>.
+
+Why AGPL-3.0-or-later, and not MIT (which this project carried until 2026-08-16):
+EsotericOS talks over the network -- LAN nodes that extend one desk across
+machines, a clipboard relay, an input portal. The Affero clause (section 13)
+closes the one door a plain GPL leaves open: running a modified version to serve
+users over a network without ever distributing it. Strong copyleft is the point,
+not an afterthought -- the aim is to encroach on corporate capture by making the
+free, copyleft solution so good that everyone wants it, and to keep it free.
+
+Third-party components keep their own licences; they are not relicensed by this
+NOTICE. A full dependency-licence audit (verifying nothing GPL-2.0-only is
+combined into this AGPL-3.0 work, and recording each vendored component's terms)
+is tracked on the board. The prior MIT grant covered only first-party code, all
+of which is copyright the author above and is relicensed here by that author.
