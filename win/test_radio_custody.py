@@ -249,12 +249,14 @@ print("\n-- the custody line per radio --")
 
 line = RC.custody_line({"label": "Intel Corp.", "verdict": RC.WINDOWS_OWNED,
                         "service": "bthusb", "present": True})
-check("Windows-owned names the service and the reason to change it",
-      "Windows-owned (bthusb)" in line and "capture race" in line, line)
+check("Windows-owned names the service and what a bind does and does not do",
+      "Windows-owned (bthusb)" in line and "keeps bthusb off it" in line
+      and "does not stop the VM-start teardown" in line, line)
 
 line = RC.custody_line({"label": "Intel Corp.", "verdict": RC.CUSTODY})
-check("custody reads as done, with the tick",
-      "in EsotericOS custody (VBoxUSB)" in line and "✔" in line, line)
+check("custody reads as a bind, and never promises the race is over",
+      "bound to VBoxUSB" in line and "does not" in line
+      and "stop the capture race" in line and "✔" not in line, line)
 
 line = RC.custody_line({"label": "Intel Corp.", "verdict": RC.PHANTOM,
                         "vbox_state": "Unavailable", "removal_policy": 1,

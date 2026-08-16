@@ -3,6 +3,15 @@
 **EsotericOS takes a Bluetooth radio off Windows permanently, instead of
 wrestling Windows for it once per VM start.**
 
+> **Status 2026-08-16 — the design in §2 was tested live and does NOT do what
+> it set out to do.** The bind itself works (a TP-Link's real node was put on
+> `VBoxUSB.sys` and stayed there), but VirtualBox still tore that node down at
+> VM start and re-added its `VID_80EE&PID_CAFE` proxy exactly as it does for a
+> `bthusb` node. The teardown/re-add race is VirtualBox's own capture path and
+> runs regardless of which driver the real node carries. What custody DOES
+> deliver: `bthusb` never binds the radio again. What it does NOT deliver: the
+> "no teardown, nothing to lose" claim. Read §8 before using `take` on anything.
+
 Code: `win\radio_custody.py` · tests: `win\test_radio_custody.py` · UI: the
 Bluetooth panel's *Take custody* button · install/uninstall: `bake-in.ps1
 -Custody` / `-Undo`.
@@ -44,8 +53,9 @@ Manager *Have Disk → Let me pick → show all models* install, done
 programmatically.
 
 Then at every boot PnP enumerates the radio, finds `VBoxUSB` already registered
-as its driver, loads it, and `bthusb` never touches the radio at all. There is
-no teardown, so there is nothing to lose.
+as its driver, loads it, and `bthusb` never touches the radio at all. ~~There is
+no teardown, so there is nothing to lose.~~ **Refuted live 2026-08-16 — see §8.
+The first sentence holds; the second does not.**
 
 **Return** is the inverse: uninstall the device node and rescan, so PnP
 re-enumerates the real hardware id and the vendor driver (`Intel(R) Wireless
@@ -282,7 +292,74 @@ Per-device driver-update blocking **does exist**, and this project deliberately
 Neither is set by this code, and neither should be set without Doug asking for
 it. The audit-and-offer loop is the guard.
 
-## 8. References
+## 8. The live test, 2026-08-16 — what custody actually does
+
+Run inside an authorized test window, on the Managed Laptop's TP-Link
+(`USB\VID_2357&PID_0604\3C6AD23CD44E`, USB port 3), TP-Link first per §5.
+
+**Sequence.** App tree closed by path → `win\vm_off_gently.py` (each attached
+radio `usbdetach`ed one at a time, verified — 3 released, 0 kept — then
+`acpipowerbutton`; the guest went to `poweroff` cleanly) → `radio_custody.py
+take … --apply`.
+
+**Two things happened at VM-off before the take, both worth knowing:**
+
+* The **Intel** did not come back to Windows. Its proxy
+  `USB\Vid_80EE&Pid_CAFE\5&3b2d9a0d&0&14` stayed **Started** on `VBoxUSB`,
+  the real node stayed **Stopped**, VirtualBox reported **Unavailable** — the
+  same shape as that morning, now on the *release* side. The two TP-Links
+  returned normally (`bthusb`, Started; one of them with problem code
+  `0xC0000001` at first, which cleared).
+* VirtualBox **cannot read a serial from a device Windows owns**, so both
+  dongles arrived serial-less and the audit resolved both to the first twin.
+  Fixed the same hour: `match_instance_id` breaks the tie by hub port
+  (`SPDRP_ADDRESS`, the number VirtualBox prints as `Port:`) and never hands
+  the same node out twice.
+
+**The take.** All six calls succeeded — `DiInstallDevice ok=True
+needReboot=False lastError=0`. `pnputil` then showed the **real** node
+`USB\VID_2357&PID_0604\3C6AD23CD44E` as *VirtualBox USB Driver*, class USB,
+`oem113.inf`, **Started**. The audit read ESOTERICOS-CUSTODY. VirtualBox's host
+state for it read **`Busy`** — the state it uses for a device it does not
+consider its own — with the address in `{36fc9e60-…}\NNNN` form, not the
+`usb#vid_80ee&pid_cafe#…` form its proxies carry. That was the first sign.
+
+**VM start (app relaunched; it starts the VM).** Within the boot the VM held
+both TP-Links, and the custody dongle's attach address was
+`\\?\usb#vid_80ee&pid_cafe#3c6ad23cd44e#{00873fdf-…}` — the proxy. `pnputil`
+confirmed it: the real node had gone **Disconnected**, and
+`USB\Vid_80EE&Pid_CAFE\3C6AD23CD44E` was **Started** again. VirtualBox had
+torn the custody node down and re-added its proxy, exactly as it does for a
+`bthusb` node.
+
+**Reading.** VirtualBox's capture is done by `VBoxUSBMon.sys` at the hub: a
+filter match cycles the port and the re-enumerated device answers PnP with the
+`80EE:CAFE` id. That mechanism does not consult the real node's function
+driver; it replaces the node. Binding `VBoxUSB.sys` there therefore changes
+*who Windows would load* (never `bthusb` again — that half of §2 held) but not
+*whether VirtualBox tears the node down* (that half is refuted). The dongle
+worked fine afterwards — the VM held it, the daemon answered — so custody is
+harmless on a dongle, but it is not the fix for the wedge, and it was **not**
+applied to the Intel; a bind that changes nothing about the race is not worth
+the built-in radio's recovery cost.
+
+**The Intel that day** was recovered by the §6 proxy-node kick with the VM
+running: `pnputil /restart-device` on the proxy → `Captured` in 10 s → daemon
+answered inside a minute. Second time that recovery has held.
+
+**Where this leaves the direction Doug set** ("exclusively taking control of
+this from Windows until the program is uninstalled"): the persistent binding is
+the right *idea* and the wrong *counterparty*. VirtualBox's runtime capture will
+always re-run its own teardown. The paths that genuinely stop it are (a) a
+transport that does not use VirtualBox's USB capture at all — USB/IP
+(`usbipd-win` binds the device to a stub driver once, persistently, and the
+Linux guest attaches it over TCP with `vhci-hcd`; no port cycle at VM start,
+and the same class-change bind we already wrote), or (b) a host-side owner
+that speaks to `VBoxUSB.sys` directly. Either is a design decision, not a
+patch; neither is started. Until one is chosen, `take` stays a dry-run-first
+tool that says plainly what it does and does not do.
+
+## 9. References
 
 * [SetupDiBuildDriverInfoList (setupapi.h)][sdbdil]
 * [SetupDiSetDeviceRegistryPropertyW (setupapi.h)][sdsdrp]

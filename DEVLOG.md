@@ -2367,6 +2367,44 @@ bad bind on a dongle costs a replug. A bad bind on the built-in radio costs a
 Windows restart — and that restart must be taken with **no VM captures held**,
 or it simply re-runs the boot-time race that caused all of this.
 
+### 15:30 — the live test, in Doug's authorized window: the rule earned its keep
+
+Test window 1–5 (Doug: "1-5"). Entry 1: swap to 7aab8cb7, VM warm, portal
+restored itself. Entry 3, TP-Link first, on the Managed Laptop's dongle
+(`3C6AD23CD44E`, port 3):
+
+* App tree closed by path; `win\vm_off_gently.py` (new — the app's ordered
+  handback + `acpipowerbutton`, from the command line) released all three
+  radios one at a time and the guest powered off cleanly.
+* **At VM-off the Intel wedged on the RELEASE side**: proxy Started, real node
+  Stopped, VirtualBox `Unavailable` — the morning's shape again. Both TP-Links
+  came back to `bthusb` normally. New data point: the race runs both ways.
+* **Audit bug found and fixed**: VirtualBox cannot read a serial from a device
+  Windows owns, so both dongles arrived serial-less and `match_instance_id`
+  gave both rows the first twin. Tie now broken by hub port (`SPDRP_ADDRESS`
+  == VirtualBox's `Port:`), and a node is never handed out twice.
+* `take --apply`: **all six calls succeeded**, `DiInstallDevice ok=True
+  needReboot=False`. So `SPDRP_CLASSGUID` IS settable on 22H2 — the "not
+  verified" paragraph above is now verified. Real node → `VBoxUSB`, class USB,
+  Started; audit read ESOTERICOS-CUSTODY. VirtualBox's host state for it read
+  **`Busy`** — not its own device.
+* App relaunched → VM start → **VirtualBox tore the custody node down and
+  re-added `USB\Vid_80EE&Pid_CAFE\3C6AD23CD44E` anyway.** Real node
+  Disconnected, proxy Started, attach address is the proxy's. The dongle works
+  (VM holds it, daemon answered), but the design's "no teardown" claim is
+  **refuted**: `VBoxUSBMon` captures by cycling the port and swapping the id at
+  re-enumeration; it does not care what driver the real node had. What
+  custody does deliver is narrower and true: `bthusb` never binds it again.
+* Therefore **not applied to the Intel** (entry 4 abandoned as designed; no
+  proven benefit, real recovery cost) and the reboot skipped. The Intel was
+  recovered with the §6 proxy-node kick, VM running: `Captured` in 10 s,
+  daemon up inside a minute — second time that recovery has held.
+* Texts corrected the same hour: the custody line and the CUSTODY verdict no
+  longer say the race is stopped; `plan_text` no longer prints "not run" on an
+  apply; `docs\RADIO-CUSTODY.md` §8 has the full record and the two paths
+  that would genuinely stop the race (USB/IP with a persistent stub bind, or
+  a host-side owner of `VBoxUSB.sys` — both design decisions for Doug).
+
 ---
 
 ## 2026-08-16 - M10 begins: LAN nodes

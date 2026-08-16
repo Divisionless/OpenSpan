@@ -183,7 +183,10 @@ def custody_line(row):
     label = row.get("label") or row.get("instance_id") or "this radio"
     state = row.get("verdict")
     if state == CUSTODY:
-        return f"{label} \u2014 in EsotericOS custody (VBoxUSB) \u2714"
+        return (f"{label} \u2014 bound to VBoxUSB (bthusb stays off it). "
+                f"NOTE: VirtualBox still tears it down and re-adds its proxy "
+                f"at VM start \u2014 proven 2026-08-16 \u2014 so this does not "
+                f"stop the capture race")
     if state == PHANTOM:
         return (f"{label} \u2014 PHANTOM: the device node is registered but "
                 f"not enumerated and VirtualBox reports "
@@ -193,7 +196,11 @@ def custody_line(row):
         return (f"{label} \u2014 ABSENT: no Windows device node matches this "
                 f"radio. Check that it is plugged in.")
     service = row.get("service") or "no driver"
-    tail = ("; EsotericOS custody would stop the capture race")
+    # No promise here. Binding VBoxUSB to the real node was tried live on
+    # 2026-08-16 (TP-Link 3C6AD23CD44E): the bind held, and VirtualBox tore
+    # the node down and re-added its proxy at VM start exactly as before.
+    tail = ("; a VBoxUSB bind keeps bthusb off it but does not stop the "
+            "VM-start teardown (see RADIO-CUSTODY.md \u00a79)")
     if row.get("proxy_present") and not row.get("present"):
         return (f"{label} \u2014 Windows-owned ({service}), under a RUNTIME "
                 f"VirtualBox capture right now (host state "
@@ -377,10 +384,16 @@ def _fmt_step(index, step):
     return line
 
 
-def plan_text(plan, probe=None):
-    """The dry run, printed. This is what the button shows in-window."""
+def plan_text(plan, probe=None, applied=False):
+    """The dry run, printed. This is what the button shows in-window.
+
+    With ``applied=True`` the same text heads an apply run: the plan is what
+    was about to be done, and the [done]/[FAIL] lines that follow are what
+    happened -- so it must not say "not run" or "stopped".
+    """
     refused = bool(plan["refusals"])
-    out = [f"DRY RUN \u2014 {plan['verb']} custody of {plan['label']}",
+    head = "APPLY" if applied and not refused else "DRY RUN"
+    out = [f"{head} \u2014 {plan['verb']} custody of {plan['label']}",
            f"  device: {plan['instance_id']}"]
     out.append("")
     out.append("Read-only steps (these ran, for real, just now):")
@@ -393,16 +406,20 @@ def plan_text(plan, probe=None):
     out.append("")
     # The plan is printed even when refused. A refusal you cannot see the shape
     # of is just a "no", and the whole point of a dry run is to be readable.
-    header = ("WOULD CALL, IN THIS ORDER \u2014 but see REFUSED below; --apply "
-              "would change nothing:" if refused else
-              "Would then call, IN THIS ORDER (not run \u2014 pass --apply):")
+    if refused:
+        header = ("WOULD CALL, IN THIS ORDER \u2014 but see REFUSED below; --apply "
+                  "would change nothing:")
+    elif applied:
+        header = "Called, IN THIS ORDER (results follow):"
+    else:
+        header = "Would then call, IN THIS ORDER (not run \u2014 pass --apply):"
     out.append(header)
     out.extend(_fmt_step(i, s) for i, s in enumerate(plan["apply_steps"], 1))
     out.append("")
     if refused:
         out.append("REFUSED. Nothing would be changed:")
         out.extend("  \u00b7 " + reason for reason in plan["refusals"])
-    else:
+    elif not applied:
         out.append("Stopped before the first state change.")
     return "\n".join(out)
 
@@ -451,6 +468,7 @@ SPDRP_DEVICEDESC = 0x00
 SPDRP_SERVICE = 0x04
 SPDRP_CLASSGUID = 0x08
 SPDRP_MFG = 0x0B
+SPDRP_ADDRESS = 0x1C          # for a USB device: its port number on the hub
 SPDRP_REMOVAL_POLICY = 0x1F
 
 CM_LOCATE_DEVNODE_NORMAL = 0x00000000
@@ -756,13 +774,22 @@ def _norm(value):
     return str(value or "").strip().upper().removeprefix("0X")
 
 
-def match_instance_id(instance_ids, vendor, product_id, serial=""):
+def match_instance_id(instance_ids, vendor, product_id, serial="",
+                      port=None, port_of=None, taken=()):
     """Which Windows node is this VirtualBox record?
 
     The dongles carry their serial as the last component of the instance id;
     the onboard Intel carries a bus-relative id instead. So a serial match is
     tried first and a prefix match is the fallback -- the same rule
     ``openspan._pnp_kick`` already uses, kept identical on purpose.
+
+    Two more rungs, added 2026-08-16 after the VM was powered off with both
+    dongles handed back to Windows: VirtualBox cannot read a serial from a
+    device Windows owns, so both records arrived serial-less and both matched
+    the FIRST twin -- the audit showed one dongle twice and the other never.
+    So when the serial is missing, the hub port (SPDRP_ADDRESS, which is the
+    same number VirtualBox prints as ``Port:``) breaks the tie, and a node
+    already claimed by an earlier record is never handed out again.
     """
     vid, pid = _norm(vendor), _norm(product_id)
     if not vid or not pid:
@@ -775,7 +802,15 @@ def match_instance_id(instance_ids, vendor, product_id, serial=""):
         for iid in candidates:
             if iid.upper().rsplit("\\", 1)[-1] == key:
                 return iid
-    return candidates[0] if candidates else None
+    free = [iid for iid in candidates if iid not in taken]
+    if port is not None and port_of is not None and len(free) > 1:
+        for iid in free:
+            try:
+                if port_of(iid) == int(port):
+                    return iid
+            except (TypeError, ValueError):
+                break
+    return free[0] if free else None
 
 
 def proxy_for(instance_ids, real_instance_id):
@@ -853,10 +888,16 @@ class RadioCustody:
                         if u)
 
         out = []
+        taken = set()
         for device in state.get("mine", []):
             iid = match_instance_id(instance_ids, device.get("vendor"),
                                     device.get("product_id"),
-                                    device.get("serial"))
+                                    device.get("serial"),
+                                    port=device.get("port"),
+                                    port_of=lambda i, b=b: self._port_of(i, b),
+                                    taken=taken)
+            if iid:
+                taken.add(iid)
             row = {
                 "label": label_of(device, config),
                 "instance_id": iid,
@@ -915,6 +956,16 @@ class RadioCustody:
                 "verdict": ABSENT,
             })
         return out
+
+    def _port_of(self, instance_id, b):
+        """The hub port a USB node sits on (SPDRP_ADDRESS), or None."""
+        handle, info = b.open_device(instance_id)
+        if handle is None:
+            return None
+        try:
+            return b.get_property_dword(handle, info, SPDRP_ADDRESS)
+        finally:
+            b.close_device(handle)
 
     def _fill_from_node(self, row, instance_id, b):
         """Read one node's registry facts into `row`. Read-only."""
@@ -1137,7 +1188,8 @@ def main(argv=None):
         result = run(row, apply=args.apply)
         results.append(result)
         if not args.json:
-            print(plan_text(result["plan"], result.get("probe")))
+            print(plan_text(result["plan"], result.get("probe"),
+                            applied=args.apply))
             for step, ok in result["steps"]:
                 print(("  [done] " if ok else "  [FAIL] ") + step)
             if result["error"]:
