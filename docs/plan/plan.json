@@ -5,8 +5,8 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 120,
-  "nextMilestoneSid": 10,
+  "nextSid": 126,
+  "nextMilestoneSid": 11,
   "milestones": [
     {
       "sid": "v2.M1",
@@ -79,6 +79,13 @@
       "title": "Shell swap — EsotericOS Shell (Cairo fork)",
       "deps": [],
       "status": "doing"
+    },
+    {
+      "sid": "v3.M10",
+      "hcidx": 10,
+      "title": "LAN nodes — one desk across Doug's Windows machines (Input Director+)",
+      "deps": [],
+      "status": "todo"
     }
   ],
   "items": [
@@ -2108,6 +2115,112 @@
       "estTokens": "300k–500k",
       "costDrivers": "IFileOperation interop; DnD; virtualised column view",
       "estTime": "4–6h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.120",
+      "hcidx": 120,
+      "milestone": "v3.M10",
+      "deps": [],
+      "title": "Portable install: one folder, EsotericOS.exe + bake-in.ps1, no VM needed for a LAN-only node; first-run says what it found  [portable-install]",
+      "why": "second laptop in five minutes",
+      "estTokens": "120k–250k",
+      "costDrivers": "frozen-path rules; VM optional; first-run copy",
+      "estTime": "2–3h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.121",
+      "hcidx": 121,
+      "milestone": "v3.M10",
+      "deps": [
+        "v3.120"
+      ],
+      "title": "Discovery + pairing: LAN beacon (UDP/mDNS), pair once with a code shown on both desks, identity = node key not IP  [lan-pairing]",
+      "why": "peer-keyed, never positional",
+      "estTokens": "150k–300k",
+      "costDrivers": "beacon + token handshake; peer store; firewall prompt",
+      "estTime": "3–4h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.122",
+      "hcidx": 122,
+      "milestone": "v3.M10",
+      "deps": [
+        "v3.121"
+      ],
+      "title": "Input lane over TCP: portal crossing to a LAN device, absolute placement on arrival, keyboard/mouse both directions, Esc×3 bail  [lan-input]",
+      "why": "the Input Director replacement",
+      "estTokens": "300k–500k",
+      "costDrivers": "portal routing reuse; injector; symmetric return path",
+      "estTime": "5–8h",
+      "model": "Opus subagent + main",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.123",
+      "hcidx": 123,
+      "milestone": "v3.M10",
+      "deps": [
+        "v3.122"
+      ],
+      "title": "Clipboard + audio + files over the pairing: relay pattern node-to-node, UDP audio sender pattern, Files ledger transfers  [lan-services]",
+      "why": "same desk, same clipboard",
+      "estTokens": "200k–400k",
+      "costDrivers": "existing relay/sender reuse; ledger transfer op",
+      "estTime": "4–6h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.124",
+      "hcidx": 124,
+      "milestone": "v3.M10",
+      "deps": [
+        "v3.121"
+      ],
+      "title": "Desk federation: the peer's displays enter openspan_config as its device (its Windows lays them out); either node edits; one authority per pair, versioned  [desk-federation]",
+      "why": "one desk, two machines",
+      "estTokens": "200k–350k",
+      "costDrivers": "config merge; conflict rule; DeskPanel/status on both",
+      "estTime": "4–6h",
+      "model": "Opus subagent + main",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {}
+    },
+    {
+      "sid": "v3.125",
+      "hcidx": 125,
+      "milestone": "v3.M10",
+      "deps": [
+        "v3.123"
+      ],
+      "title": "Files across nodes: peer as source/destination in the operations ledger; drag to a peer's display on the desk = journaled transfer  [files-lan]",
+      "why": "drag a file across the room",
+      "estTokens": "250k–450k",
+      "costDrivers": "Files C ledger first; transport over the pairing",
+      "estTime": "5–8h",
       "model": "Opus subagent",
       "status": "todo",
       "actualTokens": null,
@@ -5684,6 +5797,10 @@
     {
       "date": "2026-08-16",
       "entry": "SOLID POINT: running EsotericOS 36c0f92c (preserved as EsotericOS-ondesktop-20260816.exe) lives on the desktop, pinned, baked in at sign-in; shell fork HEAD 2ea6392 builds clean (0 errors) with EsotericOS theme/menu/status; Files alpha A (26d52ea) and DeskPanel (8bb921f) committed locally; on-desktop + portal-memory + dashed-off-devices in app HEAD 52416f2, staged b6240700. Everything local/private. Keeper introduction written (docs/forge). Pain surveys (Sonnet x3) still running for the Files vision doc."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "v3.M10 written: Doug re-centred the project -- PRIMARY focus is installing on his other laptop and expanding the desk over LAN, Input Director style with more capability; BLE lanes are for managed Mac/iPad only. Six rows: portable install -> pairing -> input lane -> clipboard/audio/files -> desk federation -> Files across nodes. Existing task rows #3-#7 fold into these."
     }
   ],
   "extraCols": [],
