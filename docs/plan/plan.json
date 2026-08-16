@@ -2246,7 +2246,8 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)",
+        "doug": "16 Aug: Cairo FileManager -> EsotericOS Files 'for now, but then we need to fork the approach likely because i am extremely particular'. Interim wiring; approach forks to Doug's spec."
       }
     },
     {
@@ -2266,7 +2267,8 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)",
+        "doug": "16 Aug: Cairo FileManager -> EsotericOS Files 'for now, but then we need to fork the approach likely because i am extremely particular'. Interim wiring; approach forks to Doug's spec."
       }
     },
     {
@@ -2284,7 +2286,8 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)",
+        "doug": "16 Aug: Cairo FileManager -> EsotericOS Files 'for now, but then we need to fork the approach likely because i am extremely particular'. Interim wiring; approach forks to Doug's spec."
       }
     },
     {
@@ -2302,7 +2305,8 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)",
+        "doug": "16 Aug: Cairo FileManager -> EsotericOS Files 'for now, but then we need to fork the approach likely because i am extremely particular'. Interim wiring; approach forks to Doug's spec."
       }
     },
     {
@@ -2320,7 +2324,8 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)",
+        "doug": "16 Aug: Cairo FileManager -> EsotericOS Files 'for now, but then we need to fork the approach likely because i am extremely particular'. Interim wiring; approach forks to Doug's spec."
       }
     },
     {
@@ -5931,6 +5936,10 @@
     {
       "date": "2026-08-16",
       "entry": "Doug overruled the Intel abandonment: all three radios taken into custody (Mac dongle, Intel after a VM-off proxy kick). v3.131 simplified to a watch row."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Cairo FileManager pointed at EsotericOS Files (Doug pastes in Settings; live-bound). Files C reframed: interim wiring, approach forks to Doug's spec."
     }
   ],
   "extraCols": [],
