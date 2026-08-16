@@ -6881,6 +6881,7 @@ class App:
         self.portal_proc = None
         self.audio_proc = None
         self._tray = None
+        self._desktop = None   # OnDesktop controller, built on first placement
         self._audio_logf = None
         self._portal_logf = None
         self._audio_lock = threading.Lock()  # serialize sender (re)launch so
@@ -7442,6 +7443,17 @@ class App:
         tk.Label(srow, textvariable=self.spaces_state, bg=BG, fg=MUTED,
                  font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
 
+        # Where the window itself lives. Same wording as the tray item, same
+        # method behind both -- see _toggle_float_window.
+        frow = tk.Frame(wm, bg=BG)
+        frow.pack(fill="x", pady=(PAD_SM, 0))
+        self.float_state = tk.StringVar(value="")
+        self.float_btn = ttk.Button(frow, text="Float as a window",
+                                    command=self._toggle_float_window)
+        self.float_btn.pack(side="left")
+        tk.Label(frow, textvariable=self.float_state, bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
+
         zrow = tk.Frame(wm, bg=BG)
         zrow.pack(fill="x", pady=(PAD_SM, 0))
         self.zoom_state = tk.StringVar(value="off — hold Alt and scroll "
@@ -7531,6 +7543,11 @@ class App:
         # above is the title bar.
         self.root.after(120, lambda: (self._frameless_safe(),
                                       _paint_dark_titlebar(self.root)))
+        # ...and then straight onto the desktop, unless float_window says
+        # otherwise. AFTER the caption strip so the two style edits do not race,
+        # and after the layout budget below has sized the window, so the width
+        # the dock adopts is the width the content actually asked for.
+        self.root.after(300, self._apply_window_placement)
         # Runtime tray creation is deliberately disabled. Its pure-ctypes
         # WNDPROC also access-violated during a live soak despite passing short
         # self-tests. Native taskbar minimize needs no Python Windows callback.
@@ -7813,6 +7830,70 @@ class App:
             module.switch_to_ordinal(target.id, ordinal)
 
         host.switch_space_hook = switch
+
+    # ---- where the window lives ---------------------------------------
+    # On the desktop is the NORMAL state: docked to the right of the primary
+    # work area, full height, no caption, and refused every raise so it sits
+    # behind ordinary windows while staying completely usable. `float_window`
+    # is the escape hatch back to a framed window, and it is off by default --
+    # a fresh install comes up on the desktop with nothing to turn on.
+
+    def _floating(self):
+        return bool(load_setting("float_window", False))
+
+    def _float_label(self):
+        """Tray/pane wording, always naming what the click WILL do."""
+        return "Return to the desktop" if self._floating() \
+            else "Float as a window"
+
+    def _desktop_controller(self):
+        """The on-desktop controller, built on first use. None if unavailable."""
+        if self._desktop is None:
+            try:
+                import on_desktop
+                self._desktop = on_desktop.OnDesktop(
+                    lambda: on_desktop.toplevel_hwnd(self.root),
+                    self._desktop_geometry)
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"desktop placement unavailable: {exc}")
+                return None
+        return self._desktop
+
+    def _desktop_geometry(self):
+        """(x, y, w, h) for the dock. The only Tk read in the whole path, and
+        it happens on the Tk thread -- never from inside the window proc."""
+        import on_desktop
+        width = self.root.winfo_width() or 0
+        return on_desktop.dock_rect(on_desktop.Win32Bindings().work_area(),
+                                    width)
+
+    def _apply_window_placement(self):
+        """Put the window where the setting says. Both directions, live."""
+        ctl = self._desktop_controller()
+        if ctl is None:
+            return
+        if self._floating():
+            ctl.release()
+        else:
+            ctl.apply()
+        self._render_float_state()
+
+    def _render_float_state(self):
+        btn = getattr(self, "float_btn", None)
+        if btn is None:
+            return
+        btn.config(text=self._float_label())
+        self.float_state.set(
+            "floating — an ordinary window" if self._floating()
+            else "on the desktop — docked right, behind other windows")
+
+    def _toggle_float_window(self):
+        """The ONE writer of the setting; the tray item and the System-pane
+        switch are two surfaces onto this method, so they cannot disagree."""
+        save_setting("float_window", not self._floating())
+        self._apply_window_placement()
+        _emit("ok", "floating as a window." if self._floating()
+              else "back on the desktop.")
 
     def _screen_zoom(self):
         """The zoom module, built on first use. None when unavailable."""
@@ -9168,11 +9249,17 @@ class App:
         # marshal anyway. The tray icon is PERSISTENT -- not destroyed here.
         def show():
             self.root.deiconify()
-            self.root.lift()
+            self.root.lift()          # refused while on the desktop -- harmless
             try:
                 self.root.focus_force()
             except tk.TclError:
                 pass
+            # On the desktop, lift() cannot make it visible (the wndproc sinks
+            # it again), so put it back at its docked place and give it focus
+            # there. That IS "show window" for a window that lives on the desk.
+            ctl = getattr(self, "_desktop", None)
+            if ctl is not None and ctl.active:
+                ctl.show_at_dock()
         self.ui(show)
 
     def _show_tray_menu(self):
@@ -9195,6 +9282,8 @@ class App:
                         activebackground=ACCENT_DIM, activeforeground="#F1EBFF",
                         font=(FONT_UI, 10))
             m.add_command(label=f"Open {APP_LABEL}", command=self._from_tray)
+            m.add_command(label=self._float_label(),
+                          command=self._toggle_float_window)
             m.add_separator()
             # One Connect/Disconnect per DEVICE, driven by the same per-device
             # verbs and the same per-device state the Devices panel uses -- so
