@@ -138,13 +138,15 @@ print(f"\nOK -> {target}  ({size_mb:.0f} MB)")
 if staged:
     print(f"\n{NAME}.exe is RUNNING, so this build was staged beside it.")
     print("When you are ready to swap, with the app closed:")
-    # The whole path, not its last component. This printed "cd /d/app" after
-    # the tree moved to D:\_EsotericOS\app, because basename() had been right
-    # only while the root sat directly on D:. A swap command that silently
-    # names the wrong directory is worse than none: it runs, and mv reports
-    # nothing useful about a folder you did not mean.
-    posix_root = "/" + ROOT[0].lower() + ROOT[2:].replace("\\", "/")
-    print(f"    cd {posix_root} && "
-          f"mv -f {NAME}.exe {NAME}.exe.prev && "
-          f"mv -f {NAME}-next.exe {NAME}.exe && (./{NAME}.exe &)")
+    # A SCRIPT, NOT A SENTENCE. This used to print a bash one-liner joined
+    # with `&&`, which is a parser error in PowerShell 5.1 -- the shell
+    # actually in use here. It was handed over twice before anyone said so.
+    # A command that cannot be run is not an instruction.
+    #
+    # swap-build.ps1 also does the parts prose kept forgetting: it refuses
+    # while the binary is running (matched by PATH, not by name), and it
+    # preserves the outgoing build before replacing it.
+    print(f"    powershell -ExecutionPolicy Bypass -File "
+          f"{os.path.join(ROOT, 'swap-build.ps1')}"
+          + (f" -Name {NAME}" if NAME != "EsotericOS" else ""))
 print(f"Runs in place ({ROOT} holds the data files it needs).")
