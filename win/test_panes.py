@@ -1173,6 +1173,12 @@ check("the shipped Desk button's geometry was read out of App.__init__ — "
       f"factory={_factory_kw} place={_place_kw}")
 
 app.toggle_portal = _recorder        # never the real one: it spawns the portal
+# The button command is the USER wrapper (toggle_portal_by_user): it records
+# intent (portal_wanted, into the scratch settings redirected above) and then
+# calls toggle_portal -- the recorder. It reads liveness first, so give the
+# probe app the two things _portal_live() needs.
+app.portal_proc = None
+app._portal_live = lambda: False
 app._ui_thread = threading.get_ident()
 app._portal_btns = []
 desk_btn = A.App._portal_button(app, app.canvas, **(_factory_kw or {}))
