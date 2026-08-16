@@ -2359,11 +2359,12 @@
       "costDrivers": "pane-tree layout in WPF; cross-window tab drag = single instance + IPC; WindowChrome; key map + collision table",
       "estTime": "5–7h",
       "model": "Opus subagent",
-      "status": "doing",
+      "status": "blocked",
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "doug": "16 Aug interview: 1 arbitrary grid, add/remove at will · 2 orientation user-defined · 3 tabs per panel, drag anywhere incl. other window · 4 no windows bar on top · 5 motion later · 6 restore exactly · 7 adopt Windows/Mac keys, surface collisions"
+        "doug": "16 Aug interview: 1 arbitrary grid, add/remove at will · 2 orientation user-defined · 3 tabs per panel, drag anywhere incl. other window · 4 no windows bar on top · 5 motion later · 6 restore exactly · 7 adopt Windows/Mac keys, surface collisions",
+        "note": "PAUSED by Doug 16 Aug 16:2x ('Let's pause this development for now'). Agent stopped after ~20 min; skeleton parked on shell branch wip/files-grid (15dbe16); master clean at 314f2d8. Resume = new Opus agent from the same spec, starting from that branch."
       }
     }
   ],
@@ -5964,6 +5965,10 @@
     {
       "date": "2026-08-16",
       "entry": "v3.132 files-grid opened from Doug's tab+split interview; Opus agent building."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Doug paused files-grid; WIP parked (shell wip/files-grid). Stable state declared: tag stable-2026-08-16 on app (f5db383) and shell (314f2d8); live 7aab8cb7, staged 55d19b4e; 58/58 tests; preservation rows added."
     }
   ],
   "extraCols": [],
