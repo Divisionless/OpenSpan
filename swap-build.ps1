@@ -8,20 +8,40 @@
 # Everything is derived: the root is where this script sits, the names come
 # from the files that are actually there. Nothing is written out twice.
 #
-#   .\swap-build.ps1              swap and relaunch
-#   .\swap-build.ps1 -NoLaunch    swap only
-#   .\swap-build.ps1 -Name Foo    a build staged under another name
+#   .\swap-build.ps1                     swap and relaunch (refuses if running)
+#   .\swap-build.ps1 -NoLaunch           swap only
+#   .\swap-build.ps1 -CloseRunning       close the running app first (see below)
+#   .\swap-build.ps1 -Elevated           relaunch as administrator
+#   .\swap-build.ps1 -Name Foo           a build staged under another name
+#
+# -CloseRunning is a HOT SWAP, and it is deliberate about what it does NOT do:
+# it does not go through the app's own full stop, because that powers off the
+# bridge VM and the iPad then needs re-pairing (the app's own X dialog says
+# so). It kills the app's process tree -- GUI, portal, audio -- and leaves the
+# VM running; a fresh instance attaches to a VM that is already up (openspan.py
+# starts the VM only `if not vm_running()`), so no re-pair.
+#
+# Two things the app's graceful stop would have done that a kill cannot:
+#   * Spaces keeps its hidden-window handles in memory only. Kill it with
+#     windows hidden and they STAY hidden with nothing left to show them. So:
+#     the person at the desk turns Spaces off first (System > Window management)
+#     -- this script cannot see hidden windows and will not guess.
+#   * screen zoom can hold a desktop-scope magnification that outlives the
+#     process. This script resets it to 1x itself, unconditionally; a no-op
+#     when not zoomed.
 
 param(
     [string]$Name = "EsotericOS",
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$CloseRunning,
+    [switch]$Elevated
 )
 
 $ErrorActionPreference = "Stop"
-$ROOT    = $PSScriptRoot
-$live    = Join-Path $ROOT "$Name.exe"
-$staged  = Join-Path $ROOT "$Name-next.exe"
-$rollback= Join-Path $ROOT "$Name.exe.prev"
+$ROOT     = $PSScriptRoot
+$live     = Join-Path $ROOT "$Name.exe"
+$staged   = Join-Path $ROOT "$Name-next.exe"
+$rollback = Join-Path $ROOT "$Name.exe.prev"
 
 if (-not (Test-Path $staged)) {
     Write-Output "Nothing staged: $staged does not exist. Build first."
@@ -32,15 +52,40 @@ if (-not (Test-Path $staged)) {
 # `Get-Process EsotericOS` reported "not running" three times while
 # EsotericOS-next.exe was driving the desk, because that is an exact-name
 # match. Acting on that answer is how a build overwrote the benchmark.
-$running = @(Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and (
-        $_.Path -eq $live -or $_.Path -eq $staged) })
+function Running-Here {
+    @(Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and (
+            $_.Path -eq $live -or $_.Path -eq $staged) })
+}
+
+$running = Running-Here
 if ($running.Count -gt 0) {
-    Write-Output "Still running, so nothing was touched:"
-    $running | Select-Object -Unique Path | ForEach-Object {
-        Write-Output ("  " + $_.Path) }
-    Write-Output "Close it, then run this again."
-    exit 1
+    if (-not $CloseRunning) {
+        Write-Output "Still running, so nothing was touched:"
+        $running | Select-Object -Unique Path | ForEach-Object {
+            Write-Output ("  " + $_.Path) }
+        Write-Output "Close it (or pass -CloseRunning), then run this again."
+        exit 1
+    }
+    Write-Output "closing the running app (VM stays up):"
+    foreach ($p in ($running | Sort-Object StartTime)) {
+        Write-Output ("  pid {0}  {1}" -f $p.Id, $p.Path)
+        # /T takes the whole tree: the GUI plus its --portal and --audio roles.
+        & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+    }
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline -and (Running-Here).Count -gt 0) {
+        Start-Sleep -Milliseconds 300
+    }
+    if ((Running-Here).Count -gt 0) {
+        Write-Output "REFUSING to swap: the app did not exit."
+        exit 1
+    }
+    # Magnification can outlive the process; put it back to 1x regardless.
+    $unzoom = Join-Path $ROOT "win\unzoom.py"
+    if (Test-Path $unzoom) {
+        & "C:\Python313\python.exe" $unzoom 2>&1 | ForEach-Object { Write-Output ("  " + $_) }
+    }
 }
 
 # Keep what is being replaced. A swap that cannot preserve refuses, rather
@@ -62,6 +107,13 @@ $new = (Get-FileHash $live -Algorithm SHA256).Hash.Substring(0, 16).ToLower()
 Write-Output "swapped in $Name.exe  (sha $new...)"
 
 if (-not $NoLaunch) {
-    Start-Process -FilePath $live -WorkingDirectory $ROOT | Out-Null
-    Write-Output "launched."
+    if ($Elevated) {
+        # UAC is off on this machine, so RunAs starts elevated without a
+        # prompt; the app then skips its "not running as administrator" gate.
+        Start-Process -FilePath $live -WorkingDirectory $ROOT -Verb RunAs | Out-Null
+        Write-Output "launched (administrator)."
+    } else {
+        Start-Process -FilePath $live -WorkingDirectory $ROOT | Out-Null
+        Write-Output "launched."
+    }
 }

@@ -66,6 +66,11 @@ args = [
     # actually import, so a new module cannot quietly ship without its
     # dependencies.
     "--hidden-import", "usage_monitor",
+    # The EDID reader is imported lazily inside monitor_sizes() so that its
+    # absence can never stop the app; declared here so its absence from the
+    # BUNDLE cannot happen either. It pulls monitor_identity with it.
+    "--hidden-import", "monitor_edid",
+    "--hidden-import", "monitor_identity",
     # dependency trees PyInstaller can under-collect (COM codegen, native)
     "--collect-all", "pycaw",
     "--collect-all", "comtypes",

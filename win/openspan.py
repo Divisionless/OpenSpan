@@ -27,6 +27,27 @@ from tkinter import ttk
 # reuse the monitor enumeration + presets from the setup module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openspan_setup import enum_monitors, IPAD_PRESETS  # noqa: E402
+
+
+def monitor_sizes():
+    """Each PC screen's physical diagonal, read from its EDID, by GDI name.
+
+    Windows does not know a monitor's physical size; the panel does, and says
+    so in its EDID (bytes 0x15/0x16, centimetres). Until now every diagonal
+    was typed by hand -- and the primary was typed 17" on a panel whose EDID
+    says 15.7". This is the ONE input the arrangement needed that nothing
+    supplied, so it is read here and handed to normalize/merge as `sizes`.
+
+    Never raises and never blocks the arrangement: on any failure the answer
+    is {} and everything behaves exactly as it did before EDID was read.
+    """
+    try:
+        import monitor_edid
+        found = monitor_edid.physical_diagonals()
+    except Exception:  # noqa: BLE001 -- optional input, never a hard dependency
+        return {}
+    return {name: row["diagonal_in"] for name, row in (found or {}).items()
+            if row and row.get("diagonal_in")}
 from openspan_targets import (  # noqa: E402
     BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
     compute_portals, device_by_id, physical_size,
@@ -925,6 +946,12 @@ def describe_monitor_refresh(report):
         parts.append(f"{short_monitor_name(name)} {hz_label(new)}")
     for name in report.get("primary", []):
         parts.append(f"{short_monitor_name(name)} is now primary")
+    # A size that changed because the panel's EDID was read is a change to
+    # the picture and is said like one -- silently drawing a screen 8% smaller
+    # would be the same fault as silently drawing it a screen short.
+    for name, old, new in report.get("resized", []):
+        old_txt = f"{float(old):g}\"" if old else "unsized"
+        parts.append(f"{short_monitor_name(name)} {old_txt} → {float(new):g}\" (EDID)")
     return ", ".join(parts) if parts else "nothing changed"
 
 # ---- vertical rhythm --------------------------------------------------------
@@ -4372,7 +4399,11 @@ class MultiArrangeCanvas(tk.Canvas):
         different picture of the desk does not disconnect anything.
         """
         raw = raw if isinstance(raw, dict) else {}
-        self.config = normalize_config(raw, live or enum_monitors())
+        # `sizes` is the panels' own physical diagonals from EDID; a typed
+        # value still wins where one was typed deliberately (diagonal_source
+        # == "user"). See monitor_sizes().
+        self.config = normalize_config(raw, live or enum_monitors(),
+                                       sizes=monitor_sizes())
         # normalize_config builds its result from a whitelist -- version,
         # monitors, devices, plus the derived portals/links -- so ANYTHING else
         # the app keeps at the top level is dropped by it.
@@ -4581,9 +4612,32 @@ class MultiArrangeCanvas(tk.Canvas):
 
     def _set_position(self, key, item, x, y):
         if key[0] == "local":
-            item["layout_x"], item["layout_y"] = int(x), int(y)
+            # THE PC MOVES AS ONE BLOCK. Its screens' positions relative to
+            # each other are Windows' business -- Windows Display Settings is
+            # where that is arranged, and pc_block_layout re-derives it from
+            # Windows on every load and refresh. What the user positions here
+            # is WHERE THE PC SITS among the devices, so dragging any one of its
+            # screens carries the others with it. Dragging them apart used to
+            # be possible, which is how the canvas could disagree with Windows
+            # about the PC's own layout while both looked perfectly plausible.
+            dx = int(x) - int(item.get("layout_x", 0))
+            dy = int(y) - int(item.get("layout_y", 0))
+            for monitor in self.monitors:
+                monitor["layout_x"] = int(monitor.get("layout_x", 0)) + dx
+                monitor["layout_y"] = int(monitor.get("layout_y", 0)) + dy
         else:
             item["x"], item["y"] = int(x), int(y)
+
+    def _block_rect(self):
+        """The PC as one rectangle: the union of its screens on the desk."""
+        rects = [self._monitor_rect(m) for m in self.monitors]
+        if not rects:
+            return None
+        x0 = min(r[0] for r in rects)
+        y0 = min(r[1] for r in rects)
+        x1 = max(r[0] + r[2] for r in rects)
+        y1 = max(r[1] + r[3] for r in rects)
+        return (x0, y0, x1 - x0, y1 - y0)
 
     def _set_width(self, key, item, width):
         if key[0] == "local":
@@ -4710,6 +4764,30 @@ class MultiArrangeCanvas(tk.Canvas):
                 (x0 + x1) / 2, (y0 + y1) / 2, text=self._short_label(key, item),
                 fill=text_color, justify="center", width=max(40, x1 - x0 - 10),
                 font=(FONT_UI, 9, "bold"))
+            if key[0] == "local":
+                # THE PRIMARY WEARS ITS MARK ON THE RECTANGLE. macOS puts the
+                # menu-bar strip on the primary's picture and nowhere else;
+                # Windows hides it in a checkbox in another pane. A strip is
+                # read at a glance, and it does not cost the label a line.
+                if item.get("primary"):
+                    self.create_rectangle(
+                        x0 + 3, y0 + 3, x1 - 3, y0 + 8,
+                        fill="#EDE9FF", outline="")
+                # A NUMBER, THE SAME ONE IDENTIFY FLASHES ON THE REAL SCREEN.
+                # Two of Doug's panels are the same model; "This PC" twice
+                # tells nobody which is which. Windows numbers its tiles for
+                # exactly this reason.
+                n = self._monitor_number(item["name"])
+                if n:
+                    bx = x0 + 6
+                    by = y0 + (14 if item.get("primary") else 6)
+                    self.create_oval(bx, by, bx + 18, by + 18,
+                                     fill="#2A2350", outline=line)
+                    self.create_text(bx + 9, by + 9, text=str(n),
+                                     fill="#F5F5F8", font=(FONT_UI, 8, "bold"))
+                if getattr(self, "_identify_until", 0) > time.monotonic():
+                    self.create_rectangle(x0, y0, x1, y1, outline="#FFD166",
+                                          width=4)
             if chosen:
                 self.create_rectangle(
                     x1 - 10, y1 - 10, x1 + 2, y1 + 2,
@@ -4718,10 +4796,76 @@ class MultiArrangeCanvas(tk.Canvas):
         self._draw_hint()
         self._draw_hover()
 
+    def _monitor_number(self, name):
+        """1..N for this PC's screens, in reading order of Windows' desktop.
+
+        Left to right, then top to bottom, by Windows' own pixel positions --
+        so the numbering is a function of the arrangement and nothing else,
+        and the same panel keeps its number until Windows moves it."""
+        order = sorted(self.monitors, key=lambda m: (m.get("y", 0), m.get("x", 0)))
+        for i, monitor in enumerate(order, 1):
+            if monitor["name"] == name:
+                return i
+        return 0
+
+    IDENTIFY_MS = 1800
+
+    def identify_screens(self):
+        """Flash each PC screen's number on the real screen, Windows-style.
+
+        Windows Settings and macOS Displays both have this and NO cross-machine
+        tool does -- yet it is the one gesture that answers "which rectangle is
+        THIS screen" for certain. A borderless, topmost, black card in the
+        middle of each monitor, big number, gone in under two seconds. Managed
+        devices cannot be flashed from here (there is no channel to draw on
+        them), so their rectangles are told apart by name and by the number
+        the canvas draws; the PC screens get both.
+        """
+        self._identify_until = time.monotonic() + self.IDENTIFY_MS / 1000.0
+        self.redraw()
+        for monitor in self.monitors:
+            try:
+                self._identify_card(monitor, self._monitor_number(monitor["name"]))
+            except tk.TclError:
+                continue
+        try:
+            self.after(self.IDENTIFY_MS + 50, self.redraw)
+        except tk.TclError:
+            pass
+
+    def _identify_card(self, monitor, number):
+        """One number, on one real screen, for a moment.
+
+        THIS IS THE ONE PLACE IN THE APP THAT MAY OPEN A WINDOW OUTSIDE THE
+        FRAME, and test_frame_modal exempts it by name. The no-pop-out rule
+        exists so that dialogs stay in-frame where they can be found; this
+        is not a dialog. Its whole purpose is to appear on the OTHER
+        monitors, which nothing inside one window can do. Borderless,
+        topmost, takes no focus, answers no input, destroys itself."""
+        card = tk.Toplevel(self)
+        card.overrideredirect(True)
+        card.attributes("-topmost", True)
+        card.configure(bg="#0A0A0C")
+        w, h = 220, 160
+        cx = int(monitor["x"]) + (int(monitor["w"]) - w) // 2
+        cy = int(monitor["y"]) + (int(monitor["h"]) - h) // 2
+        card.geometry(f"{w}x{h}+{cx}+{cy}")
+        frame = tk.Frame(card, bg="#0A0A0C", highlightthickness=4,
+                         highlightbackground="#FFD166")
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text=str(number), bg="#0A0A0C", fg="#FFD166",
+                 font=(FONT_UI, 72, "bold")).pack(expand=True)
+        tk.Label(frame, text=("primary" if monitor.get("primary") else "This PC"),
+                 bg="#0A0A0C", fg="#EDE9FF", font=(FONT_UI, 10)).pack(pady=(0, 10))
+        card.after(self.IDENTIFY_MS, card.destroy)
+        return card
+
     def _short_label(self, key, item):
         """What a rectangle says when nobody is asking for detail."""
         if key[0] == "local":
-            return "This PC" + ("\nPRIMARY" if item["primary"] else "")
+            # "PRIMARY" used to be a second line here. The strip across the
+            # top of the rectangle says it now, the way macOS does.
+            return "This PC"
         target = self.target(key[1])
         # A device with one screen is named by the DEVICE -- "iPad" says more
         # than "Display 1". A device with several is named by the screen, since
@@ -4753,7 +4897,17 @@ class MultiArrangeCanvas(tk.Canvas):
             lines.append(f"rotated {rotation}°")
         diagonal = item.get("diagonal_in")
         if diagonal:
-            lines.append(f"{float(diagonal):g}\" diagonal")
+            # WHERE THE NUMBER CAME FROM. A size read from the panel's own
+            # EDID and a size somebody typed are not the same kind of fact,
+            # and a typed 17" on a 15.7" panel is exactly the mistake that
+            # goes unnoticed when both look identical.
+            source = item.get("diagonal_source")
+            tag = {"edid": "  (from EDID)", "user": "  (typed)"}.get(source, "")
+            lines.append(f"{float(diagonal):g}\" diagonal{tag}")
+        if key[0] == "local":
+            n = self._monitor_number(item["name"])
+            if n:
+                lines.append(f"screen {n}  ·  Identify flashes it")
         x, y, width, height = self._rect(key, item)
         lines.append(f"desk  x {x} → {x + width}    y {y} → {y + height}")
         return title, lines
@@ -4828,6 +4982,27 @@ class MultiArrangeCanvas(tk.Canvas):
             fill=HOVER_FILL, outline=HOVER_LINE, width=1, tags="hovercard")
         self.tag_raise(text_id)
 
+    HINT = "drag to arrange  ·  right-click a screen to edit it  ·  Identify"
+
+    def flash_hint(self, text, ms=3200):
+        """Say one thing in the hint line, briefly, then go back to the tell.
+
+        For the moments a drop is refused or a screen is re-read: the answer
+        belongs next to the hand, not in the console."""
+        self._flash = text
+        self.redraw()
+        try:
+            self.after(ms, self._unflash)
+        except tk.TclError:
+            pass
+
+    def _unflash(self):
+        self._flash = None
+        try:
+            self.redraw()
+        except tk.TclError:
+            pass
+
     def _draw_hint(self):
         """The tell that this canvas answers a right-click.
 
@@ -4835,10 +5010,12 @@ class MultiArrangeCanvas(tk.Canvas):
         left column is what sets this window's height, and a packed widget costs
         it real pixels. A canvas item costs none. BtPanel gives itself the same
         kind of tell."""
+        flash = getattr(self, "_flash", None)
         self.create_text(
             8, max(12, int(self.winfo_height()) - 6), anchor="sw",
-            text="drag to arrange  ·  right-click a screen to edit it",
-            fill=MUTED, font=(FONT_UI, 8), tags="hint")
+            text=flash or self.HINT,
+            fill=BUILD_TEST_YELLOW if flash else MUTED,
+            font=(FONT_UI, 8, "bold" if flash else "normal"), tags="hint")
 
     def _draw_portals(self):
         for portal in compute_portals(self.config):
@@ -4917,6 +5094,14 @@ class MultiArrangeCanvas(tk.Canvas):
         # bare select-click. A click that moves nothing must not snap, must not
         # save, and must not restart the portal.
         self._press_rect = (x, y, width, height)
+        # And where EVERYTHING that will move stood, so a drop that lands on
+        # another screen can be put back exactly. For the PC that is the whole
+        # block, not just the screen under the pointer.
+        self._press_layout = {
+            ("local", "windows", m["name"]): (m.get("layout_x", 0),
+                                              m.get("layout_y", 0))
+            for m in self.monitors
+        } if key[0] == "local" else {key: (x, y)}
         self.redraw()
 
     def _drag(self, event):
@@ -4941,6 +5126,22 @@ class MultiArrangeCanvas(tk.Canvas):
         item = self._lookup(self.selected)
         if not item:
             return
+        if self.selected[0] == "local":
+            # The block snaps as a unit, against the devices only: its own
+            # screens move with it, so snapping the dragged one against its
+            # siblings would be snapping it against itself.
+            block = self._block_rect()
+            if not block:
+                return
+            neighbors = [self._rect(key, other)
+                         for key, other in self._items()
+                         if key[0] != "local"]
+            nx, ny = snap_rect_to_neighbors(block, neighbors)
+            dx, dy = int(nx) - block[0], int(ny) - block[1]
+            for monitor in self.monitors:
+                monitor["layout_x"] = int(monitor.get("layout_x", 0)) + dx
+                monitor["layout_y"] = int(monitor.get("layout_y", 0)) + dy
+            return
         x, y, width, height = self._rect(self.selected, item)
         neighbors = [
             self._rect(key, other)
@@ -4950,6 +5151,41 @@ class MultiArrangeCanvas(tk.Canvas):
         nx, ny = snap_rect_to_neighbors(
             (x, y, width, height), neighbors)
         self._set_position(self.selected, item, nx, ny)
+
+    OVERLAP_TOLERANCE = 2.0   # desk units; edge contact within this is touching
+
+    def _overlaps_another(self):
+        """Labels of the screens the selected one now lies ON TOP OF, if any.
+
+        Edge contact is not overlap -- touching is the whole point of the
+        snap, and compute_adjacencies calls two edges within 2 units a link.
+        Only a real intersection on both axes counts. For the PC block every
+        one of its screens is checked against every device screen, since any
+        of them can be the one that landed on a device; PC screens are never
+        checked against each other, because their mutual layout is Windows'
+        arrangement, not this drop."""
+        moving = ([("local", "windows", m["name"]) for m in self.monitors]
+                  if self.selected[0] == "local" else [self.selected])
+        moving_set = set(moving)
+        hits = []
+        for key in moving:
+            item = self._lookup(key)
+            if not item:
+                continue
+            ax, ay, aw, ah = self._rect(key, item)
+            for other_key, other in self._items():
+                if other_key in moving_set:
+                    continue
+                if key[0] == "local" and other_key[0] == "local":
+                    continue
+                bx, by, bw, bh = self._rect(other_key, other)
+                t = self.OVERLAP_TOLERANCE
+                if (min(ax + aw, bx + bw) - max(ax, bx) > t
+                        and min(ay + ah, by + bh) - max(ay, by) > t):
+                    label = self._short_label(other_key, other).replace("\n", " ")
+                    if label not in hits:
+                        hits.append(label)
+        return hits
 
     def _release(self, _event):
         if not self.action:
@@ -4972,8 +5208,34 @@ class MultiArrangeCanvas(tk.Canvas):
             return
         if self.action == "move":
             self._snap_selected()
+            # SCREENS DO NOT SIT ON TOP OF EACH OTHER. macOS and Windows both
+            # refuse this in their own arrangement editors, and for the same
+            # reason it is refused here: a screen lying across another has no
+            # unambiguous edge to cross, so every crossing through it is a
+            # guess. The drop is put back where it started and the canvas
+            # says why, in the hint line, for a moment.
+            over = self._overlaps_another()
+            if over:
+                for k, (px, py) in (getattr(self, "_press_layout", None)
+                                    or {}).items():
+                    back = self._lookup(k)
+                    if back is not None:
+                        if k[0] == "local":
+                            back["layout_x"], back["layout_y"] = int(px), int(py)
+                        else:
+                            back["x"], back["y"] = int(px), int(py)
+                self.action = None
+                self._resize_anchor = None
+                self._press_layout = None
+                self.flash_hint(
+                    "screens can't overlap  ·  put it beside "
+                    + ", ".join(over[:2]) + ", not on top")
+                self._fit_height()
+                self.redraw()
+                return           # nothing changed on disk, nothing to restart
         self.action = None
         self._resize_anchor = None
+        self._press_layout = None
         # Dragging a screen moves the world bbox, so the aspect the canvas is
         # sized for is now stale -- and a drag fires no <Configure>. Fit HERE
         # and not in redraw(): _drag calls redraw() on every motion tick, and
@@ -6834,6 +7096,18 @@ class App:
         # width the window can have.
         self.desk_portal_btn = self._portal_button(self.canvas, width=17)
         self.desk_portal_btn.place(relx=0.5, rely=1.0, anchor="s", y=-8)
+        # IDENTIFY, as a button, where Windows puts it. It is also on the
+        # right-click menus, but a right-click "advertises itself to nobody"
+        # (this project's own words), and the one question this answers --
+        # which rectangle is THIS screen -- is asked before anyone thinks to
+        # right-click. Same rules as the portal button: a child of the canvas,
+        # a real widget so delete("all") cannot take it, and parked in the
+        # bottom-RIGHT corner clear of both the hint line and the portal
+        # button.
+        self.identify_btn = ttk.Button(
+            self.canvas, text="Identify", width=9,
+            command=self.canvas.identify_screens)
+        self.identify_btn.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
 
         # The global row that stood here -- "iPad: [model]  Rotate  Configure
         # Mac displays...  Screen sizes..." -- is DELETED, and two standing bugs
@@ -10199,14 +10473,38 @@ class App:
         # a local key, and portal_signature lists layout_w/layout_h per
         # monitor, so the portal is taskkilled and respawned across all three
         # lanes. The twin in _fill_surface_menu says so; this one used to not.
+        diagonal = item.get("diagonal_in")
+        source = item.get("diagonal_source")
+        size_txt = (f"{float(diagonal):g}\"" if diagonal else "not set")
+        from_txt = {"edid": " from the panel's EDID",
+                    "user": " typed"}.get(source, "")
+        menu.add_command(label=f"Size   {size_txt}{from_txt}",
+                         state="disabled")
         menu.add_command(
-            label="Diagonal…   (the one Windows cannot tell us — "
-                  "restarts input ~8s)",
+            label="Diagonal…   (type it — overrides EDID, restarts input ~8s)",
             command=self._deferred(self._menu_diagonal, key))
+        if source == "user":
+            menu.add_command(
+                label="Use the panel's own size (EDID)   — restarts input ~8s",
+                command=self._deferred(self._menu_use_edid_size, key))
+        menu.add_separator()
+        menu.add_command(label="Identify   (flash a number on each real screen)",
+                         command=self._deferred(self.canvas.identify_screens))
         menu.add_command(label="Refresh now   (re-read Windows)",
                          command=self._deferred(self._menu_refresh_monitors))
         menu.add_command(label="Open Windows display settings…",
                          command=self._deferred(self._menu_display_settings))
+
+    def _menu_use_edid_size(self, key):
+        """Drop a typed diagonal and let the panel's EDID size it again.
+
+        Deleting the override and re-reading Windows is the whole operation:
+        normalize/merge already prefer EDID for anything not marked "user"."""
+        item = self.canvas._lookup(key)
+        if item is None or key[0] != "local":
+            return
+        item.pop("diagonal_source", None)
+        self._menu_refresh_monitors()
 
     def _fill_desk_menu(self, menu):
         """Right-click on empty canvas: the arrangement itself.
@@ -10234,6 +10532,8 @@ class App:
                         self._menu_device_editor, device["id"]))
             menu.add_cascade(label="Edit a device's screens", menu=sub)
         menu.add_separator()
+        menu.add_command(label="Identify   (flash a number on each real screen)",
+                         command=self._deferred(self.canvas.identify_screens))
         menu.add_command(label="Refresh Windows screens now",
                          command=self._deferred(self._menu_refresh_monitors))
         menu.add_command(label="Open Windows display settings…",
@@ -10352,6 +10652,11 @@ class App:
         # rectangle, leaves portal_signature identical and restarts nothing.
         before = portal_signature(self.canvas.config)
         item["diagonal_in"] = inches
+        # A typed diagonal is a deliberate override and outranks the panel's
+        # EDID from now on -- some panels report a size that is simply wrong,
+        # and the person at the desk with a tape measure is the authority.
+        # "Use the panel's own size" on the menu puts EDID back in charge.
+        item["diagonal_source"] = "user"
         if key[0] == "local":
             # A local monitor's w/h ARE its pixels; its desk rectangle is
             # layout_w/layout_h. Same derivation as "Screen sizes...".
@@ -10391,6 +10696,25 @@ class App:
         screen change they can already see, is worse than the problem.
         """
         live = enum_monitors()
+        # A screen Windows has that the app could not READ is said out loud.
+        # For weeks this app drew a desk one screen short and nothing anywhere
+        # said so -- the enumerator dropped a monitor whose handle overflowed a
+        # 32-bit int, silently. It records such failures now; the least this
+        # path can do is repeat them where the person is looking.
+        try:
+            import openspan_setup as _setup
+            unread = list(getattr(_setup, "LAST_ENUM_ERRORS", []) or [])
+        except Exception:  # noqa: BLE001
+            unread = []
+        if unread:
+            _emit("err", f"Windows has {len(unread)} screen(s) this arrangement "
+                         f"cannot read: {'; '.join(unread)}")
+            try:
+                self.canvas.flash_hint(
+                    f"Windows has {len(unread)} screen(s) this arrangement "
+                    "cannot read — see the console", ms=6000)
+            except Exception:  # noqa: BLE001
+                pass
         if not live:
             if automatic:
                 _emit("err", "Windows reported no monitors — leaving the "
@@ -10399,7 +10723,8 @@ class App:
             dark_alert(self.root, "No monitors reported",
                        "Windows returned no monitors. Nothing was changed.")
             return
-        merged, report = merge_live_monitors(self.canvas.monitors, live)
+        merged, report = merge_live_monitors(self.canvas.monitors, live,
+                                             sizes=monitor_sizes())
         # portal_signature serialises monitors as an ORDERED list, and this is
         # the one place that adopts EnumDisplayMonitors' order wholesale. Sorted
         # by name, the order is a function of WHICH monitors are attached and of

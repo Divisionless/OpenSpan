@@ -196,20 +196,35 @@ check("wait_window returns when the modal closes", done[0] == "returned",
 # dialogs they replaced, and a text search cannot tell that from a call.
 here = os.path.dirname(os.path.abspath(__file__))
 BANNED = {"Toplevel", "messagebox", "filedialog", "simpledialog"}
+# THE ONE EXEMPTION, BY NAME. Identify (2026-08-15) puts a number on each
+# real monitor for a moment, the way Windows Settings does. That is not a
+# dialog -- it takes no focus and asks nothing -- and it cannot be done from
+# inside the frame, because its whole point is to appear on the OTHER
+# screens. It lives in exactly one method so the exemption is exactly one
+# method wide; a Toplevel anywhere else in these files is still an offender.
+EXEMPT_FUNCTIONS = {"_identify_card"}
 offenders = []
 for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
              "openspan_launcher.py"):
     with open(os.path.join(here, name), encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), filename=name)
+    exempt_lines = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in EXEMPT_FUNCTIONS:
+            exempt_lines.update(range(node.lineno, node.end_lineno + 1))
     for node in ast.walk(tree):
         hit = ((isinstance(node, ast.Attribute)
                 and (node.attr in BANNED
                      or getattr(node.value, "id", None) in BANNED))
                or (isinstance(node, ast.Name) and node.id in BANNED))
-        if hit:
+        if hit and getattr(node, "lineno", 0) not in exempt_lines:
             offenders.append(f"{name}:{node.lineno}")
 check("no dialog anywhere still opens an OS window",
       not offenders, ", ".join(offenders))
+check("the Identify exemption exists and is one method wide",
+      any(isinstance(n, ast.FunctionDef) and n.name == "_identify_card"
+          for n in ast.walk(ast.parse(
+              open(os.path.join(here, "openspan.py"), encoding="utf-8").read()))))
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
