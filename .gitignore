@@ -79,3 +79,16 @@ docs/maintenance-*/
 .worktrees/
 status.json
 status.json.new
+
+# --- LAN node identity (v3.121) ---
+# node.json is THIS machine's private key. It is the node's identity, and two
+# machines holding the same key are one node as far as every peer is concerned
+# -- so it is never committed, and make-portable.ps1 never ships it either:
+# a portable copy must be a FRESH node, not a clone.
+node.json
+# peers.json holds the shared secret of every pairing this machine has made.
+# Committing it would hand anyone with the repo the ability to sign messages
+# as this node to every machine it is paired with.
+peers.json
+node.json.new
+peers.json.new

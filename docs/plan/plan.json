@@ -85,7 +85,7 @@
       "hcidx": 10,
       "title": "LAN nodes — one desk across Doug's Windows machines (Input Director+)",
       "deps": [],
-      "status": "todo"
+      "status": "doing"
     }
   ],
   "items": [
@@ -2134,9 +2134,9 @@
       "costDrivers": "frozen-path rules; VM optional; first-run copy",
       "estTime": "2–3h",
       "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~180k",
+      "actualTime": "~1h",
       "extra": {}
     },
     {
@@ -2152,9 +2152,9 @@
       "costDrivers": "beacon + token handshake; peer store; firewall prompt",
       "estTime": "3–4h",
       "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~260k",
+      "actualTime": "~1h30m",
       "extra": {}
     },
     {

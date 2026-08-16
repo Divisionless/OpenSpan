@@ -54,7 +54,54 @@ Windows: openspan_portal.py ── TCP :9955 ──▶  Debian VM: openspan_ble.
 Windows: the same portal ───── TCP :9956 ──▶ second HID daemon/radio ─▶ Mac
 
 PC audio ─▶ VB-Cable ─▶ WASAPI loopback ── UDP :4010 ──▶ VM: PipeWire ─▶ A2DP ─▶ earbuds
+
+this PC  ── DNS-SD advert (OS) ──▶ LAN ──▶ another PC running EsotericOS
+         ◀── TCP, OS-assigned port, HMAC-signed ──▶   (a "LAN node")
 ```
+
+## Ports
+
+Bluetooth lanes use fixed ports because the guest VM's NAT rules have to name
+them. **LAN nodes deliberately do not.**
+
+| Port | What | Chosen by |
+|---|---|---|
+| 9955 | first device's BLE HID daemon, in the VM | us (NAT rule; +1 per device) |
+| 9956 | second device's daemon (managed Mac lane) | us (NAT rule) |
+| 4010 | UDP audio, Windows → VM PipeWire | us (NAT rule) |
+| 5353 | mDNS, **only** on the fallback discovery path | RFC 6762 |
+| *ephemeral* | a LAN node's pairing + service port | **the OS**, every launch |
+
+A LAN node binds port `0` and reads back whatever Windows hands it, then
+advertises that number. Nothing connects to a port the source code knows, so
+there is no number to collide with on somebody else's machine — and this is
+why the firewall rule allows the **program** and never a port: a port rule
+would be stale by the next restart.
+
+Discovery is the OS's own DNS-SD (`dnsapi.dll`, Windows 10 1809+), registering
+`_esotericos._tcp.local`. That is the protocol Bonjour speaks, so a Mac or iPad
+can find a node later without inventing anything. Where the API is missing, a
+minimal RFC 6762 mDNS responder on 224.0.0.251:5353 takes over. The Console
+names which path is live at startup.
+
+## LAN nodes (one desk across two PCs)
+
+Bluetooth exists here for machines that **resist installation** — a managed
+Mac, an iPad. A Windows PC you own gets a better lane: TCP over the LAN.
+
+Drop the portable folder (`install\make-portable.ps1 -Zip`) on the other PC and
+run it. Under **Devices ▸ Nodes on this network** each machine sees the other;
+press **Pair**, compare the six-digit code shown on both screens, and press
+**Same code** on **both** — one side alone pairs nothing. From then on every
+message between them is HMAC-signed with a secret neither machine transmitted.
+
+Identity is a **32-byte key**, not an address. Rename the PC, change networks,
+get a new IP: the pairing survives, because nothing about it is positional. A
+paired node becomes an ordinary device on the desk (`kind: "node"`, `lane:
+"lan"`), holding one placeholder screen until desk federation lands.
+
+If this PC has no VirtualBox or no guest VM, that is not an error — it is a
+**LAN node**, it says so once, and nothing polls a VM that is not there.
 
 The single radio time-shares both jobs (BLE HID to the iPad, A2DP audio to the
 earbuds). Keeping the BLE link's airtime modest is what lets the audio stay
@@ -154,6 +201,10 @@ openspan/
 │   ├── bt-list.sh / bt-connect.sh / btready.sh / env.sh …   # runtime helpers
 │   ├── system/                  # captured host config (main.conf, drop-ins, grub…)
 │   └── rebuild/                 # audio-stack (PipeWire/WirePlumber) install set
+│   └── lan_nodes.py             # LAN node identity, DNS-SD/mDNS, pairing
+├── install/                     # what goes on the SECOND machine
+│   ├── make-portable.ps1        # assemble EsotericOS-portable\ (+ -Zip)
+│   └── README-PORTABLE.md       # the whole manual for a fresh node
 ├── build_exe.py                 # package into a single OpenSpan.exe
 ├── TECHNICAL_NOTES.md           # deep "what makes it work" reference
 ├── BUILD.md · CLIPBOARD_SETUP.md · CLIPBOARD_DESIGN.md

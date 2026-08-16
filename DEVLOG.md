@@ -2366,3 +2366,160 @@ sets the class as part of selection.
 bad bind on a dongle costs a replug. A bad bind on the built-in radio costs a
 Windows restart — and that restart must be taken with **no VM captures held**,
 or it simply re-runs the boot-time race that caused all of this.
+
+---
+
+## 2026-08-16 - M10 begins: LAN nodes
+
+Doug re-centred the project. Verbatim: EsotericOS "needs to be able to be placed
+on my other laptop and then effortlessly expand the surface -- not through
+bluetooth this time, but through the LAN Input Director style with increased
+capability. The bluetooth keyboard/mouse solutions are for managed systems that
+resist program installation."
+
+That sentence demotes the entire Bluetooth stack from *the product* to *one lane
+among several*, and it is right. BLE HID exists here because an iPad and a
+managed Mac will not let you install anything. A Windows laptop Doug owns has no
+such constraint, and paying the BLE tax on it -- relative-only pointer motion, a
+15-30 ms connection interval shared with audio, a whole Debian VM -- buys
+nothing. A LAN node is a device whose lane is TCP to a peer EsotericOS.
+
+Two rows landed today: the foundation only.
+
+### v3.120 - portable install
+
+`install\make-portable.ps1` assembles `EsotericOS-portable\`: the exe,
+`bake-in.ps1`, `swap-build.ps1`, `brand\`, `LICENSE`, `README-PORTABLE.md`. It
+prints a manifest with sizes and SHA-256 prefixes, and `-Zip` produces the
+archive beside it.
+
+**It assembles from an allowlist, not by copying and pruning.** Copying the
+folder and deleting the secrets afterwards is one forgotten pattern away from
+shipping a private SSH key, and the failure is silent. Nothing lands in the
+output that is not named. `win\test_portable.py` then does the thing that
+actually proves it: it RUNS the script against this repo -- which really does
+contain `id_openspan`, `openspan_config.json` and a live clipboard token -- and
+searches the produced folder for every one of them by name, plus asserts the
+repo held at least three of them so the pass cannot be vacuous.
+
+**LAN-only mode.** The app assumed VirtualBox and the VM existed. On a second
+laptop neither does, and what that looked like was "Booting the bridge... (~90s)"
+forever, with a VBoxManage process spawned every three seconds to re-learn the
+same thing. One predicate, `bridge_available()`, now answers it: VBoxManage found
+(probed -- an override, VirtualBox's own installer variable, three Program Files
+layouts, then PATH, each checked against the filesystem) **and** the configured VM
+registered. Absent, the app runs as a LAN node: the banner reads "LAN node -- no
+bridge here", the VM/Bluetooth/audio controls carry one secondary-text line --
+*no bridge on this node - Bluetooth lanes need VirtualBox + the guest VM; LAN
+lanes do not* -- the VM buttons are disabled rather than hidden, `status.json`
+reports `vm: "none"`, and nothing polls a VM that is not there.
+
+`"none"` is deliberately not `"down"`. Down means a bridge that is stopped. None
+means there is no bridge to stop. A shell rendering "down" for a LAN node tells
+its user something is broken when nothing is.
+
+### v3.121 - discovery + pairing
+
+`win\lan_nodes.py`. The whole row is organised around one instruction Doug gave
+twice, the second time flatly: *"i am not interested in hardcoding ANYthing --
+this should be a seamless experience on any device."*
+
+The first draft had a beacon on UDP 9957 and a pairing listener on TCP 9958,
+with a paragraph justifying the numbers. Both are gone.
+
+**The service port is the OS's.** `bind(("", 0))`, read it back, advertise it.
+Nothing connects to a number in the source. A second EsotericOS on one machine,
+a machine already using our "favourite" port, a firewall pinholing one number --
+none of them are cases to handle, because there is no number to collide with.
+It changes every launch and that is the design, not a tolerance.
+
+**Discovery is the OS's.** Windows 10 1809+ exports DNS-SD from `dnsapi.dll`;
+we register `_esotericos._tcp.local` with the assigned port in SRV and the node
+id / name / version in TXT, and browse the same type. That is the protocol
+Bonjour speaks, so a Mac or an iPad can find a node later without inventing
+anything. Where the API is missing, a minimal RFC 6762 responder on
+224.0.0.251:5353 takes over -- a standard's number, not ours. The Console names
+which path is live.
+
+Two real bugs came out of driving the ctypes edge against the live API rather
+than reasoning about it:
+
+* `DnsServiceRegister` returned **9506**, which the first version treated as an
+  error. 9506 is `DNS_REQUEST_PENDING` -- the asynchronous success path, like
+  `ERROR_IO_PENDING`. The edge was reporting "DNS-SD not available" and falling
+  back to mDNS on a machine where the API works perfectly.
+* `deregister()` returned False. `_structs()` rebuilt the ctypes classes on
+  every call, and ctypes compares types by identity, so assigning the pointer we
+  registered with into a request typed against the *second* class raised
+  TypeError. The advertisement outlived the process: peers went on seeing a
+  machine that was no longer listening. Structs are built once and cached, and
+  the de-registration now waits for its completion callback before freeing the
+  instance rather than freeing memory the OS is still reading.
+
+Both verified live on this box: register, browse, self-discovery at the correct
+ephemeral port with the correct TXT, deregister -- all OK.
+
+**Identity is 32 random bytes.** Not a hostname, not a MAC, not a disk id. A
+derived id makes two clones one node, and changes when the user renames their
+PC. The name is a *label*, defaulting to the machine name read at runtime and
+editable after; renaming never re-pairs. Addresses are learned from whoever sent
+the packet -- a node stating its own IP would be stating the one fact it is
+least qualified to know, and would be wrong on every multi-homed machine.
+
+**Pairing.** Each side sends a fresh 32-byte nonce over TCP. Both compute
+`HMAC-SHA256(nonce_a||nonce_b, key = node ids sorted)[:3]` as six digits, sorted
+by node id so initiator and responder -- who disagree about who dialled -- derive
+the same number. Both screens show it; **both** desks must press "Same code"
+inside 60 s. One side alone pairs nobody, and there is a test that presses one
+button and asserts neither `peers.json` moved.
+
+The long-term secret is domain-separated from the code. The code is three bytes
+of a digest over those nonces and it is displayed on two screens and said out
+loud across a room; if the secret were the rest of that digest, showing the code
+would leak key material. Different message, same inputs.
+
+**The firewall is a program rule.** Doug: no "run this netsh line". `bake-in.ps1`
+-- run elevated once, which *is* the consent -- adds an in+out allow rule for
+`EsotericOS.exe` on the private profile, idempotently, and prints what it added;
+`-Undo` removes it. At runtime a blocked bind or an unreachable peer surfaces one
+in-window action, "Allow EsotericOS through the firewall", which runs the same
+rule on the click and never behind anyone's back. It has to be a program rule:
+the service port is the OS's and differs every launch, so a port rule would be
+stale by the next restart.
+
+### The zero-display trap, and the decision
+
+A paired node becomes a device (`kind: "node"`, `lane: "lan"`, `node_id` = the
+peer's key). The question was whether to give it zero displays or a placeholder,
+and the answer was not aesthetic. `normalize_config` contains `if not displays:
+continue` -- a device with an empty display list is **silently deleted on the
+next load**. A zero-display node would pair, appear to work, and quietly undo
+itself with nothing said.
+
+So it carries one placeholder rectangle named after the node, flagged
+`placeholder: True` so v3.124 knows it may throw it away when the peer's real
+screens arrive. Every existing invariant holds -- unique display ids, port
+allocation, portal geometry, canvas hit-testing -- and not one existing test
+moved. There is a test that asserts the trap is real, by loading a zero-display
+node device and watching it vanish.
+
+`normalize_config` builds devices from a whitelist, so `kind`, `lane` and
+`node_id` had to be added to it or they would have been dropped on every load --
+the same silent-discard shape the top-level settings hit two waves ago.
+
+### What is not verified
+
+**Two real machines.** There is one PC here. Everything below that is covered:
+two `NodeService` objects in one process pair end to end over loopback through
+the real TCP edge -- real nonces on a real socket, both codes derived and
+compared, one-side-confirms proven insufficient, signed messages accepted and
+tampered ones denied. The OS DNS-SD edge is verified live against `dnsapi.dll`.
+What has not happened is a second Windows machine finding this one across a
+switch, and no test in this suite can claim it.
+
+Also unverified: the mDNS fallback on a Windows old enough to need it. Its wire
+format is tested both directions, including a self-referential compression
+pointer that would otherwise hang a receive thread, but the code path that
+*selects* it has not run on a machine that requires it.
+
+Suite: 58 files, all green.
