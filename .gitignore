@@ -77,3 +77,5 @@ mouse-lag-research-prompt.md
 preview-*.png
 docs/maintenance-*/
 .worktrees/
+status.json
+status.json.new

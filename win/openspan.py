@@ -9,6 +9,7 @@ Pure standard library (tkinter + ctypes). No dependencies.
 """
 
 import copy
+import datetime
 import json
 import math
 import os
@@ -163,6 +164,55 @@ TRAY_ICON = os.path.join(ROOT, "brand", "esotericos-tray.ico")  # for the
 # six builds can share a version in one evening and the only question that
 # actually matters at the desk is "am I looking at the change I just made?".
 VERSION = "0.3.0"
+
+# ---- status export for the shell -----------------------------------------
+# EsotericOS Shell (the Cairo fork) shows this app's header line in its menu
+# bar. It reads STATUS, written here from the SAME tick that paints the
+# indicators, so the bar and the window can never disagree. Atomic
+# temp+replace; a reader that catches a half-write retries. The shell treats
+# a file older than 15 s as "off" -- so nothing here has to clean up on exit.
+STATUS = os.path.join(ROOT, "status.json")
+
+
+def status_document(*, running, ready_state, ready_text, portal_on, audio_on,
+                    devices_live, devices_total, advertising, line,
+                    daemon_up, now=None, pid=None):
+    """The one place the status.json shape is decided. Pure; tested."""
+    if not running:
+        vm = "down"
+    elif ready_state == "ready":
+        vm = "up"
+    else:
+        vm = "starting"
+    if not running:
+        audio = "none"
+    else:
+        audio = "on" if audio_on else "off"
+    return {
+        "written": (now or datetime.datetime.now()).isoformat(timespec="seconds"),
+        "pid": pid if pid is not None else os.getpid(),
+        "version": VERSION,
+        "vm": vm,
+        "daemon": bool(daemon_up),
+        "portal": "on" if portal_on else "off",
+        "audio": audio,
+        "devices": {"connected": int(devices_live), "total": int(devices_total)},
+        "broadcasting": bool(advertising),
+        "line": line,
+        "ready": ready_text,
+    }
+
+
+def write_status(doc, path=STATUS):
+    """Write atomically; never raise into the UI tick."""
+    tmp = path + ".new"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
 
 
 def build_stamp():
@@ -11411,6 +11461,19 @@ class App:
         self._cache = {"running": running, "connected": connected, "on": on,
                        "aud": aud,
                        "busy": self._any_device_busy()}
+        # The shell's menu bar reads this. Same tick, same facts, same words:
+        # the line is the indicator row exactly as painted.
+        write_status(status_document(
+            running=running, ready_state=self._ready_state,
+            ready_text=(self.ready_lbl.cget("text") if self._ready_state
+                        else ""),
+            portal_on=on, audio_on=aud,
+            devices_live=roll["live"], devices_total=roll["total"],
+            advertising=bool(roll["advertising"]),
+            line="  ".join(t for t in (self._ind[k].cget("text")
+                                       for k in INDICATOR_ORDER
+                                       if k in self._ind) if t),
+            daemon_up=st is not None))
         # `connected`, not `connected and on` -- the portal is its own argument
         # now, for the same reason it is in _apply_device_rows below: folding it
         # into liveness is what made the canvas unable to tell a stopped portal
