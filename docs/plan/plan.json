@@ -2116,10 +2116,12 @@
       "costDrivers": "IFileOperation interop; DnD; virtualised column view",
       "estTime": "4–6h",
       "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "done",
+      "actualTokens": "279k",
+      "actualTime": "38 min",
+      "extra": {
+        "note": "shell commits 986d072 + f62510c (local only). Undo: move/rename/copy/delete; not: new folder, cancelled part, Replace, redo. 50 040-entry folder: 94 ms enumerate, ~1 s to listed. Live look queued as TEST-WINDOW #2."
+      }
     },
     {
       "sid": "v3.120",
@@ -5899,6 +5901,10 @@
     {
       "date": "2026-08-16",
       "entry": "Files C rows from the vision doc: v3.126, v3.127, v3.128, v3.129, v3.130. Test-window discipline adopted (docs/TEST-WINDOW.md); no-hardcoding rule adopted for M10."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "v3.119 files-b done — 279k tokens / 38 min vs est 300k–500k / 4–6h (under on both; agent wall-clock, not calendar)."
     }
   ],
   "extraCols": [],
