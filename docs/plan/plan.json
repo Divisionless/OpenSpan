@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 126,
+  "nextSid": 131,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2226,6 +2226,100 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
+    },
+    {
+      "sid": "v3.126",
+      "hcidx": 126,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.119"
+      ],
+      "title": "Files C1 — the ledger: every operation planned→shown→done→journaled; a browsable timeline; unit undo that restores, never deletes  [files-ledger]",
+      "why": "undo you can trust",
+      "estTokens": "300k–500k",
+      "costDrivers": "journal store; reverse plans; cross-volume restore",
+      "estTime": "6–8h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+      }
+    },
+    {
+      "sid": "v3.127",
+      "hcidx": 127,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.119"
+      ],
+      "title": "Files C2 — identity not paths: per-folder state, tags, thumbnails, recents keyed by volume+file ID (USN/NTFS), surviving rename/move; long paths native  [files-identity]",
+      "why": "nothing forgets, nothing caps",
+      "estTokens": "250k–400k",
+      "costDrivers": "file-ID keyed store; USN journal reader",
+      "estTime": "5–7h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+      }
+    },
+    {
+      "sid": "v3.128",
+      "hcidx": 128,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Files C3 — instant search: MFT/USN name search on local NTFS (Everything's approach) + opt-in content search; scope always a visible chip  [files-search]",
+      "why": "search that finds",
+      "estTokens": "300k–500k",
+      "costDrivers": "MFT reader (elevated); index maintenance via USN",
+      "estTime": "6–8h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+      }
+    },
+    {
+      "sid": "v3.129",
+      "hcidx": 129,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Files C4 — honesty surfaces: 'file in use' names the process (Restart Manager RmGetList) with close offer; disconnected shares as state cards; per-mount timeouts  [files-honesty]",
+      "why": "every why has an answer",
+      "estTokens": "150k–250k",
+      "costDrivers": "Restart Manager interop; mount probes off-thread",
+      "estTime": "3–4h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+      }
+    },
+    {
+      "sid": "v3.130",
+      "hcidx": 130,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Files C5 — Quick Look: Space previews with previewers isolated in a helper process; thumbnails keyed by identity + change journal  [files-quicklook]",
+      "why": "the one thing Windows never had",
+      "estTokens": "250k–400k",
+      "costDrivers": "helper process; WIC/PDF/text providers; IPC",
+      "estTime": "5–7h",
+      "model": "Opus subagent",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "from docs/files-vision/FILES-VISION.html (the seven wounds)"
+      }
     }
   ],
   "history": [
@@ -5801,6 +5895,10 @@
     {
       "date": "2026-08-16",
       "entry": "v3.M10 written: Doug re-centred the project -- PRIMARY focus is installing on his other laptop and expanding the desk over LAN, Input Director style with more capability; BLE lanes are for managed Mac/iPad only. Six rows: portable install -> pairing -> input lane -> clipboard/audio/files -> desk federation -> Files across nodes. Existing task rows #3-#7 fold into these."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Files C rows from the vision doc: v3.126, v3.127, v3.128, v3.129, v3.130. Test-window discipline adopted (docs/TEST-WINDOW.md); no-hardcoding rule adopted for M10."
     }
   ],
   "extraCols": [],

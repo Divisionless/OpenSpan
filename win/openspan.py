@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
