@@ -1849,10 +1849,12 @@
       "costDrivers": "support only; findings become rows",
       "estTime": "30m",
       "model": "Doug + main session",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "doing",
+      "actualTokens": "~25k so far",
+      "actualTime": "~10m",
+      "extra": {
+        "note": "Claude launched stock Cairo alongside Explorer (pid 24192): menu bar (0,0 1920x23), taskbar (0,1043 1920x37), tray hosted, dynamic desktop of the Desktop folder, PRIMARY ONLY by default; welcome + update prompts dismissed. Doug's eyes still needed on the other two panels and Alt+scroll over its bars."
+      }
     },
     {
       "sid": "v3.106",
@@ -1867,10 +1869,12 @@
       "costDrivers": "mechanical; verify per-file",
       "estTime": "30m",
       "model": "Sonnet mechanical + main review",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "done",
+      "actualTokens": "~15k",
+      "actualTime": "~10m",
+      "extra": {
+        "note": "shell@dc5dd2c/5a7bf92: LICENSE=GPL-3.0, LICENSE.Apache-2.0 kept, NOTICE with lineage and fork commits, README rewritten. Per-file SPDX headers go on files as they are modified."
+      }
     },
     {
       "sid": "v3.107",
@@ -1885,10 +1889,12 @@
       "costDrivers": "Winlogon Shell semantics; per-user vs HKLM verified on this box",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "doing",
+      "actualTokens": "~10k",
+      "actualTime": "~10m",
+      "extra": {
+        "note": "tools/restore-explorer-shell.ps1 written and dry-run (-Check: HKCU absent, HKLM explorer.exe, explorer running). Watchdog timer NOT created -- needs Doug's specific go. Task-Manager drill documented in the script header."
+      }
     },
     {
       "sid": "v3.108",
@@ -5553,6 +5559,10 @@
     {
       "date": "2026-08-16",
       "entry": "v3: SHELL SWAP approved by Doug, overturning the founding exclusion (one-shot doc: \"Do not attempt to replace Explorer as the system shell\"). Survey of 22 OSS shells (Sonnet, licences pulled from repos): no maintained copyleft true-shell exists; Cairo Shell + ManagedShell (Apache-2.0, alive, real Winlogon shell, C#/WPF = legacy-csharp stack) chosen as fork base, fork licensed GPL-3.0-or-later. Forks: Divisionless/cairoshell, Divisionless/ManagedShell -> D:\\_EsotericOS\\shell (upstream 5809cb4) and \\managedshell (upstream d3a85b1). Built Release x64 net6.0-windows, 0 errors, CairoDesktop.exe produced; NOT launched (Doug's test-drive). Rows v1.37/38/39 re-homed into v3.M9: v1.37, v1.38, v1.39. Also today: zoom z-order fix f588947 shipped as 0d8a435b; Alt+scroll vs Windows menu mode investigated and parked in BACKLOG (b0cd8f7)."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "M9: stock Cairo running alongside Explorer on the primary; lineage files committed in the shell fork (local, not pushed); recovery script ready. Next: Doug's read on the desk, then the first mod."
     }
   ],
   "extraCols": [],
