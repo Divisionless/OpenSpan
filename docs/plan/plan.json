@@ -707,10 +707,12 @@
       "costDrivers": "spec only — full build; was Off by Default",
       "estTime": "3.2h",
       "model": "Codex exec + Claude review",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
-      "extra": {}
+      "status": "doing",
+      "actualTokens": "~135k Opus (alpha A)",
+      "actualTime": "~12m",
+      "extra": {
+        "note": "ALPHA A landed 2026-08-16: shell@08481c0+db6b2ff, new WPF project Cairo Desktop\\EsotericOS.Files (net6.0-windows, x64, legacy design tokens, no native dialogs, own context menu). Sidebar/drives/recents, editable breadcrumb, filter search, virtualised list, shell icons, natural sort, folders first, open/rename/new folder/recycle delete/get info, watcher, state persistence. Gaps: no copy/move/DnD/tabs/column view; not in .sln; window title prefix wrong."
+      }
     },
     {
       "sid": "v1.39",
@@ -5604,6 +5606,10 @@
     {
       "date": "2026-08-16",
       "entry": "M9: 'merge EsotericOS into the desktop organically' -> row v3.115; Forge compatibility row v3.114 now blocks the swap. App 3f0dc180 publishes status.json."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "EsotericOS Files alpha A built and launched on Doug's desk (Opus, ~135k tokens). Board estimate for finder-shell was 440k-880k for the whole surface; alpha A came in far under -- expect B (operations) to be the real spend."
     }
   ],
   "extraCols": [],
