@@ -14,7 +14,7 @@ to "Done" below.
 | # | What happens on the desk | Why | Est. | Prereqs | Rollback |
 |---|---|---|---|---|---|
 | 6 | Forge compatibility audit under the shell (rect before/after, taskbar/tray, toasts, file dialogs, showItemInFolder) — **parked until Doug says the Forge is ready** | v3.114 blocks the swap | 15 min | Forge modernization landed | none needed (read + relaunch shell) |
-| 7 | Swap to a build that carries M10 rows 1–2 (LAN node service + pairing, `peers` in status.json, firewall program rule via `bake-in.ps1`) once it is staged and its tests are green | first LAN node on this box | 1 min | staged exe; `bake-in.ps1` run once elevated for the firewall rule (that run IS the consent) | `.prev` |
+| 7 | `swap-build.ps1 -CloseRunning -Elevated` → **55d19b4e** (M10 rows 1–2: LAN node service advertising `_esotericos._tcp` on an OS-assigned port, pairing, `peers` in status.json, `vm: none`) then `bake-in.ps1` once elevated for the firewall program rule (that run IS the consent) | first LAN node on this box | 2 min | staged 15:51 ✔ (58/58 test files green) | `.prev` = 7aab8cb7; `bake-in.ps1 -Undo` removes the rule |
 
 ## Done
 
