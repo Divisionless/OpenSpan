@@ -157,6 +157,43 @@ Consider whether the default should be derived from the surface (extent, or
 points per inch) rather than from a constant, so a newly added device starts
 somewhere sensible instead of somewhere arbitrary.
 
+## Alt+scroll zoom vs Windows menu mode  ·  parked 16 Aug
+
+Doug: "alt is sending something disruptive to the context menu and collapsing
+it." Investigated 2026-08-16; the record is in the session, the substance here.
+
+- Microsoft, *About Menus*, Standard Keyboard Interface: **"ALT — Toggles in
+  and out of menu bar mode."** A displayed menu is an active menu, so a bare
+  Alt with a context menu open closes it. Doug confirmed with zoom OFF: Explorer
+  and Firefox both close on an Alt tap.
+- AutoHotkey, `#MenuMaskKey`: a hotkey implemented with the **mouse hook**
+  makes the final press invisible; the system then sees "Alt keydown and keyup
+  with no intervening keypress" and "would usually activate a menu." That is
+  exactly the zoom gesture: our WH_MOUSE_LL swallows the wheel, so every
+  Alt+scroll is a bare Alt tap to Windows. AHK's cure is one masking key
+  (`vkE8`) between the down and the up. `keyboard_interception.py` already
+  injects that exact key, signed, for Win chords; the zoom hook has no keyboard
+  side and never asks.
+- Measured NOT to be the cause: the per-frame `HWND_TOPMOST` re-assert added
+  in f588947 (a real popup menu survived 82 in-process and 121 cross-process
+  asserts; the magnifier's copy shows a menu whether it is above or below the
+  host). A posted Alt *keydown* alone ends a native menu loop; Ctrl, Shift and
+  Win do not; F10 does.
+- The gesture that always worked — Alt held *before* the right-click — works
+  because the click is the intervening event and no Alt-down reaches the menu.
+
+Two fixes, smallest first, neither started:
+1. **Mask** — when the zoom mouse hook swallows a wheel while the modifier is
+   held, send `vkE8` down/up once (signed). Kills the after-zoom menu-bar /
+   ribbon / Firefox-menubar activation, if it is happening here (Doug to
+   check: Notepad, Alt+scroll, release — does File light up?).
+2. **Hold-back** — while `GetGUIThreadInfo` says the foreground thread is in
+   popup-menu mode, swallow the modifier's down and up so the menu never sees
+   it; the gesture arms from our own tracking, not `GetAsyncKeyState`. Needs
+   the zoom module wired to the central keyboard hook, shared with window
+   chords under a start/stop count. Trade-off: while a native menu is open,
+   Alt does nothing else until Esc.
+
 ## Smaller
 
 - **Pushing from a standstill while already against an edge cannot be seen.**
