@@ -125,17 +125,71 @@ def display_refresh_hz(device_name):
     return float(hz) if hz > 1 else None
 
 
+# The monitors Windows composes the desktop from -- every one of them.
+#
+# Doug, 2026-08-15: "Mac 2k lost its third display." It was never lost, and
+# it was not stale config either. This function was DROPPING it, on every
+# call, for as long as the process lived:
+#
+#     HMONITOR 0x0000000000010001   DISPLAY5   fits in an int32
+#     HMONITOR 0x0000000000010005   DISPLAY1   fits in an int32
+#     HMONITOR 0xffffffff8fc70da1   DISPLAY4   does not
+#
+# GetMonitorInfoW was called with no argtypes, so ctypes squeezed the handle
+# into a 32-bit C int. The third one overflowed, GetMonitorInfoW raised
+# ArgumentError INSIDE the enumeration callback, and ctypes' rule for an
+# exception in a callback is to print it to stderr and carry on -- which in a
+# --noconsole build is to say nothing at all. Two monitors came back, every
+# reader downstream (adopt, merge, the watcher, the canvas) behaved correctly
+# on that wrong input, and the arrangement quietly described a desk with one
+# screen fewer than the desk had. Which screen drew the wide handle differed
+# between sessions, which is why one saved profile had the third monitor and
+# another did not.
+#
+# Every other GetMonitorInfoW call in this tree already declares its argtypes
+# (monitor_identity, screen_zoom, window_tiling). This was the oldest one and
+# the only one that fed the arrangement.
+_u32 = ctypes.WinDLL("user32", use_last_error=True)
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(RECT), wt.LPARAM)
+_u32.EnumDisplayMonitors.restype = wt.BOOL
+_u32.EnumDisplayMonitors.argtypes = [
+    wt.HDC, ctypes.c_void_p, _MONITORENUMPROC, wt.LPARAM]
+_u32.GetMonitorInfoW.restype = wt.BOOL
+_u32.GetMonitorInfoW.argtypes = [wt.HMONITOR, ctypes.POINTER(MONITORINFOEXW)]
+
+
+# Monitors the last enum_monitors() call could NOT describe, as
+# "0x<handle>: <why>" strings. Empty after a healthy call. A reader that
+# wants to say "Windows has a screen this arrangement cannot see" reads this;
+# the returned list itself stays clean, because a phantom 0x0 rectangle in
+# the model would be a second bug in payment for the first.
+LAST_ENUM_ERRORS = []
+
+
 def enum_monitors():
-    user32 = ctypes.windll.user32
+    """Every monitor on the desktop, in Windows' own coordinates.
+
+    A monitor this cannot describe is REPORTED in LAST_ENUM_ERRORS, never
+    silently omitted -- which is precisely what used to happen.
+    """
     monitors = []
-    MONITORENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.POINTER(RECT), ctypes.c_double)
+    del LAST_ENUM_ERRORS[:]
 
     def _cb(hmon, hdc, lprc, data):
         info = MONITORINFOEXW()
         info.cbSize = ctypes.sizeof(MONITORINFOEXW)
-        user32.GetMonitorInfoW(hmon, ctypes.byref(info))
+        try:
+            ok = _u32.GetMonitorInfoW(hmon, ctypes.byref(info))
+        except Exception as exc:  # noqa: BLE001 -- must never escape a callback
+            ok, why = 0, f"{type(exc).__name__}: {exc}"
+        else:
+            why = "GetMonitorInfoW returned FALSE"
+        if not ok:
+            LAST_ENUM_ERRORS.append(f"0x{int(hmon or 0):x}: {why}")
+            print(f"[enum_monitors] could not read monitor {LAST_ENUM_ERRORS[-1]}",
+                  file=sys.stderr)
+            return True
         r = info.rcMonitor
         row = {
             "name": info.szDevice,
@@ -149,9 +203,9 @@ def enum_monitors():
         if hz:
             row["refresh_hz"] = hz
         monitors.append(row)
-        return 1
+        return True
 
-    user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_cb), 0)
+    _u32.EnumDisplayMonitors(None, None, _MONITORENUMPROC(_cb), 0)
     return monitors
 
 
