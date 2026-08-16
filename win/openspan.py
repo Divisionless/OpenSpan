@@ -9305,7 +9305,7 @@ class App:
                     state=("normal" if (_liveN or _busy) else "disabled"))
             m.add_command(
                 label=("■  Stop portal" if c.get("on") else "▶  Start portal"),
-                command=self.toggle_portal,
+                command=self.toggle_portal_by_user,
                 state=("normal" if run else "disabled"))
             m.add_command(label="🎧  Reconnect headphones",
                           command=lambda: self._auto_reconnect_audio(
@@ -9388,9 +9388,44 @@ class App:
         existed.
         """
         button = ttk.Button(master, text="Start portal",
-                            command=self.toggle_portal, **kw)
+                            command=self.toggle_portal_by_user, **kw)
         self._portal_btns.append(button)
         return button
+
+    def toggle_portal_by_user(self):
+        """A CLICK, as opposed to the pair-edge auto-start or a shutdown stop.
+
+        Only a click states intent, so only a click is remembered: the app
+        lives on the desktop now and starts at sign-in, and a portal that was
+        on when it last ran must come back on its own -- Doug should not have
+        to press the button after every swap or reboot. _restore_portal_if_
+        wanted honours this once the bridge is READY.
+        """
+        save_setting("portal_wanted", not self._portal_live())
+        self.toggle_portal()
+
+    def _restore_portal_if_wanted(self, running, roll):
+        """Start the portal at most ONCE per launch, when it was on last time.
+
+        Conditions, all required: the user wanted it (a click, not an edge);
+        the bridge is READY (VM answers); some device daemon actually answered
+        this tick, so there is a lane to bridge; nothing is mid-pair; the portal
+        is not already up. Never on the poll thread -- called from _apply_poll.
+        """
+        if getattr(self, "_portal_restore_done", False):
+            return False
+        if not (running and self._ready_state == "ready"):
+            return False
+        if not roll.get("reachable"):
+            return False
+        self._portal_restore_done = True     # one attempt per launch, whatever it finds
+        if not load_setting("portal_wanted", False):
+            return False
+        if self._portal_live() or self._any_device_busy():
+            return False
+        self._start_portal_process()
+        _emit("event", "portal restored — it was on when EsotericOS last ran.")
+        return True
 
     def _busy_portal(self, label):
         """Park one wait across EVERY portal button. Returns the single restore.
@@ -11557,6 +11592,9 @@ class App:
                 # boot, give up before the stack is up, and then just sit
                 # there -- so reconnect them ourselves once we're READY
                 self._auto_reconnect_audio("bridge is READY")
+        # A portal that was on last time comes back once the bridge is READY.
+        if self._restore_portal_if_wanted(running, roll):
+            on = self._portal_live()
         connected = bool(st and st.get("kbd_subscribed"))
         # snapshot for the tray menu (built on the Tk thread; must never block)
         self._cache = {"running": running, "connected": connected, "on": on,
