@@ -71,7 +71,18 @@ if ($running.Count -gt 0) {
     foreach ($p in ($running | Sort-Object StartTime)) {
         Write-Output ("  pid {0}  {1}" -f $p.Id, $p.Path)
         # /T takes the whole tree: the GUI plus its --portal and --audio roles.
-        & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+        # NO `2>&1` HERE. Under $ErrorActionPreference = "Stop", redirecting a
+        # native command's stderr into the pipeline is a TERMINATING error in
+        # PowerShell 5.1 -- and taskkill WILL write to stderr on the second
+        # and third pass, because /T on the GUI already took its --portal and
+        # --audio children with it. The first version of this line aborted the
+        # script mid-swap: app dead, nothing preserved, nothing swapped, no
+        # relaunch. Proven by the reviewer on this exact shell.
+        try {
+            $null = & taskkill /PID $p.Id /T /F
+        } catch {
+            # already gone (or not ours to kill); the wait below is the judge
+        }
     }
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline -and (Running-Here).Count -gt 0) {
@@ -82,9 +93,26 @@ if ($running.Count -gt 0) {
         exit 1
     }
     # Magnification can outlive the process; put it back to 1x regardless.
+    # The interpreter is RESOLVED, not written out: the one hardcoded path in
+    # this whole change was here, and a missing interpreter would have been a
+    # terminating error AFTER the kill. Failure to unzoom is reported, never
+    # fatal -- the swap is the job.
     $unzoom = Join-Path $ROOT "win\unzoom.py"
     if (Test-Path $unzoom) {
-        & "C:\Python313\python.exe" $unzoom 2>&1 | ForEach-Object { Write-Output ("  " + $_) }
+        $py = $null
+        foreach ($candidate in @("C:\Python313\python.exe", "python.exe", "python")) {
+            $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+            if ($cmd) { $py = $cmd.Source; break }
+        }
+        if ($py) {
+            try {
+                & $py $unzoom | ForEach-Object { Write-Output ("  " + $_) }
+            } catch {
+                Write-Output "  unzoom: could not run ($_) - if the desktop is magnified, Alt+scroll it back"
+            }
+        } else {
+            Write-Output "  unzoom: no python found - if the desktop is magnified, Alt+scroll it back"
+        }
     }
 }
 

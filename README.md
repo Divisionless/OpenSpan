@@ -87,9 +87,13 @@ filter. The helper does not restart Windows or power off the VM.
 - **Managed Mac lane** — a second independent BLE keyboard/mouse target on its
   own radio. Its display editor supports 1–8 screens, manual resolution,
   refresh rate, 0°/90°/180°/270° rotation, and physical-size layout.
-- **Physical desk canvas** — drag PC, iPad, and Mac screens together. Corner
-  resizing changes only the physical drawing; configured pixel resolution and
-  refresh rate remain intact.
+- **Physical desk canvas** — drag the iPad and Mac screens where they sit on
+  your desk; this PC moves as one block, its own screens laid out exactly as
+  Windows has them. Every screen is drawn to real physical scale: PC monitors
+  read their size from the panel's EDID (a typed diagonal overrides it), Mac
+  and iPad screens take a typed diagonal. **Identify** flashes a number on each
+  real PC monitor, matching the number on its rectangle. Screens snap edge to
+  edge and are never allowed to overlap.
 - **Bluetooth audio routing** — send Windows audio to BT earbuds through the
   same radio, with the normal Windows volume slider and an in-app L/R balance.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync

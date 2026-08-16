@@ -375,6 +375,11 @@ SYNTHETIC_MONITORS = [
      "primary": True, "refresh_hz": 120.0},
 ]
 A.enum_monitors = lambda: [dict(row) for row in SYNTHETIC_MONITORS]
+# The synthetic screen borrows a REAL name (\\.\DISPLAY1), so without this
+# stub the EDID reader sizes it from this machine's registry -- 17.1" here,
+# 27" or 32" on another desk -- and every coordinate below moves. A synthetic
+# desk reads no registry.
+A.monitor_sizes = lambda: {}
 
 DESK = {
     "version": 3,
@@ -798,8 +803,17 @@ A.dark_prompt = real_prompt
 
 
 # ---- (d) runtime half: Refresh now, through the real handler ---------------
+# The hand-placed position is parked CLEAR of every device on this desk. It
+# used to be (-613, 41), which -- at the 21.5" this fixture types -- lay
+# across the iPad at (-900,0); the PC block is now kept off the devices on
+# refresh (as macOS keeps screens off each other), so an overlapping "hand
+# placement" is no longer a position a refresh can honour. ABOVE every
+# device (all of them start at y=0, and an earlier check in this file
+# rotated Mac Display 1 to 2789 tall), so the second monitor Windows adds
+# to the right of the primary is clear too. What this checks is unchanged:
+# the position the user chose survives a re-read of Windows.
 canvas._lookup(LOCAL_KEY)["layout_x"] = -613
-canvas._lookup(LOCAL_KEY)["layout_y"] = 41
+canvas._lookup(LOCAL_KEY)["layout_y"] = -1200
 kept_diagonal = canvas._lookup(LOCAL_KEY)["diagonal_in"]
 A.enum_monitors = lambda: [
     {"name": "\\\\.\\DISPLAY1", "x": 0, "y": 0, "w": 2560, "h": 1440,
@@ -812,7 +826,7 @@ refreshed = canvas._lookup(LOCAL_KEY)
 check("(d) Refresh now keeps the diagonal the user typed",
       refreshed["diagonal_in"] == kept_diagonal, str(refreshed))
 check("(d) Refresh now keeps the hand-placed position",
-      (refreshed["layout_x"], refreshed["layout_y"]) == (-613, 41),
+      (refreshed["layout_x"], refreshed["layout_y"]) == (-613, -1200),
       f"{refreshed['layout_x']}, {refreshed['layout_y']}")
 check("(d) Refresh now takes Windows' new resolution",
       (refreshed["w"], refreshed["h"]) == (2560, 1440))

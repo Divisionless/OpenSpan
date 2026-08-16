@@ -55,6 +55,10 @@ def check(name, cond, detail=""):
 
 
 A.PROFILE_DIR = tempfile.mkdtemp(prefix="openspan-profiles-")
+# adopt() reads the panels' EDID sizes for the monitors it is given, and the
+# synthetic screen below borrows a REAL name. A synthetic desk must not be
+# sized by whatever panel happens to be DISPLAY1 on the machine running it.
+A.monitor_sizes = lambda: {}
 
 LIVE = [{"name": r"\\.\DISPLAY1", "x": 0, "y": 0, "w": 2560, "h": 1440,
          "primary": True}]

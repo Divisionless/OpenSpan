@@ -50,10 +50,10 @@ def monitor_sizes():
             if row and row.get("diagonal_in")}
 from openspan_targets import (  # noqa: E402
     BASE_PORT, DESK_UNITS_PER_INCH, add_device, compute_adjacencies,
-    compute_portals, device_by_id, physical_size,
+    compute_portals, device_by_id, layout_surfaces, physical_size,
     dedupe_display_ids, merge_live_monitors, normalize_config,
-    oriented_resolution,
-    portal_signature, refresh_geometry, remove_device,
+    oriented_resolution, pc_block_layout,
+    portal_signature, rects_overlap, refresh_geometry, remove_device,
     rotate_display, set_layout_width, snap_rect_to_neighbors,
     validate_mac_displays,
 )
@@ -4402,8 +4402,21 @@ class MultiArrangeCanvas(tk.Canvas):
         # `sizes` is the panels' own physical diagonals from EDID; a typed
         # value still wins where one was typed deliberately (diagonal_source
         # == "user"). See monitor_sizes().
+        was = {m.get("name"): m.get("diagonal_in")
+               for m in raw.get("monitors", []) if isinstance(m, dict)}
         self.config = normalize_config(raw, live or enum_monitors(),
                                        sizes=monitor_sizes())
+        # SAY WHAT LOADING CHANGED. Refresh reports a size that changed;
+        # loading used to redraw a screen 8% smaller and say nothing -- the
+        # same fault as silently drawing the desk a screen short. Diffed here
+        # against the raw file rather than trusted from below, so it holds
+        # whatever normalize_config returns.
+        resized = [(m["name"], was.get(m["name"]), m.get("diagonal_in"))
+                   for m in self.config.get("monitors", [])
+                   if m.get("name") in was and m.get("diagonal_in")
+                   and abs(float(was.get(m["name"]) or 0)
+                           - float(m["diagonal_in"])) >= 0.05]
+        self.tell_after_load(resized)
         # normalize_config builds its result from a whitelist -- version,
         # monitors, devices, plus the derived portals/links -- so ANYTHING else
         # the app keeps at the top level is dropped by it.
@@ -4628,6 +4641,69 @@ class MultiArrangeCanvas(tk.Canvas):
         else:
             item["x"], item["y"] = int(x), int(y)
 
+    def tell_after_load(self, resized):
+        """What a load changed, and what it could not see -- said once, where
+        the person is looking, a moment after the canvas exists.
+
+        Deferred with after() because adopt() runs inside __init__, before
+        the widget has a size, and a hint drawn then is drawn nowhere."""
+        parts = []
+        for name, old, new in resized:
+            old_txt = f"{float(old):g}\"" if old else "unsized"
+            parts.append(f"{short_monitor_name(name)} {old_txt} → {float(new):g}\" (EDID)")
+        try:
+            import openspan_setup as _setup
+            unread = list(getattr(_setup, "LAST_ENUM_ERRORS", []) or [])
+        except Exception:  # noqa: BLE001
+            unread = []
+        if unread:
+            _emit("err", f"Windows has {len(unread)} screen(s) this arrangement "
+                         f"cannot read: {'; '.join(unread)}")
+            parts.append(f"{len(unread)} screen(s) Windows has could not be read")
+        if not parts:
+            return
+        text = "loaded — " + ", ".join(parts)
+        _emit("event", text)
+        try:
+            self.after(600, lambda: self.flash_hint(text, ms=7000))
+        except tk.TclError:
+            pass
+
+    def device_rects(self):
+        """Every enabled device screen as a desk rectangle: the PC block's
+        obstacles when it is re-derived from Windows."""
+        return [self._display_rect(item) for key, item in self._items()
+                if key[0] == "target"]
+
+    def relayout_pc(self):
+        """Re-derive the PC block from Windows around where it sits now.
+
+        Every path that changes ONE PC screen's size -- Diagonal..., the
+        Screen sizes... table -- has to come through here, or the resized
+        screen is left lying across its neighbour until the next launch
+        quietly moves it. The reviewer typed 27" on DISPLAY4 and got 985x770
+        desk units of PC-on-PC overlap, saved, with the portal restarted on
+        it. The block is anchored on the primary's current position so the
+        PC does not move among the devices; only its own screens re-settle.
+        """
+        primary = next((m for m in self.monitors if m.get("primary")), None)
+        anchor = ((primary.get("layout_x", 0), primary.get("layout_y", 0))
+                  if primary else None)
+        try:
+            fresh = pc_block_layout(self.monitors, anchor=anchor,
+                                    obstacles=self.device_rects())
+        except TypeError:
+            # An older openspan_targets without obstacles= -- still re-derive.
+            fresh = pc_block_layout(self.monitors, anchor=anchor)
+        # Update IN PLACE: the config, the canvas and portal_signature all
+        # hold this one list object, and replacing it would orphan them.
+        by_name = {m["name"]: m for m in fresh}
+        for monitor in self.monitors:
+            new = by_name.get(monitor["name"])
+            if new is not None:
+                monitor["layout_x"] = new.get("layout_x", monitor.get("layout_x"))
+                monitor["layout_y"] = new.get("layout_y", monitor.get("layout_y"))
+
     def _block_rect(self):
         """The PC as one rectangle: the union of its screens on the desk."""
         rects = [self._monitor_rect(m) for m in self.monitors]
@@ -4799,9 +4875,13 @@ class MultiArrangeCanvas(tk.Canvas):
     def _monitor_number(self, name):
         """1..N for this PC's screens, in reading order of Windows' desktop.
 
-        Left to right, then top to bottom, by Windows' own pixel positions --
-        so the numbering is a function of the arrangement and nothing else,
-        and the same panel keeps its number until Windows moves it."""
+        Top row first, then left to right within a row, by Windows' own pixel
+        positions -- so the numbering is a function of the arrangement and
+        nothing else, and the same panel keeps its number until Windows moves
+        it. These are NOT Windows Settings' own Identify numbers (Windows
+        numbers by adapter index, DISPLAY1/4/5 here); the hover card says so,
+        and this app's Identify and this app's rectangles always agree with
+        each other, which is the pairing that matters."""
         order = sorted(self.monitors, key=lambda m: (m.get("y", 0), m.get("x", 0)))
         for i, monitor in enumerate(order, 1):
             if monitor["name"] == name:
@@ -4821,12 +4901,18 @@ class MultiArrangeCanvas(tk.Canvas):
         them), so their rectangles are told apart by name and by the number
         the canvas draws; the PC screens get both.
         """
+        # Two quick presses must not stack two sets of cards; while a flash
+        # is up, a second press is simply the same flash.
+        if getattr(self, "_identify_until", 0) > time.monotonic():
+            return
         self._identify_until = time.monotonic() + self.IDENTIFY_MS / 1000.0
         self.redraw()
         for monitor in self.monitors:
             try:
                 self._identify_card(monitor, self._monitor_number(monitor["name"]))
-            except tk.TclError:
+            except (tk.TclError, KeyError, TypeError, ValueError):
+                # a monitor row without geometry cannot be flashed; the
+                # others still are
                 continue
         try:
             self.after(self.IDENTIFY_MS + 50, self.redraw)
@@ -4907,7 +4993,8 @@ class MultiArrangeCanvas(tk.Canvas):
         if key[0] == "local":
             n = self._monitor_number(item["name"])
             if n:
-                lines.append(f"screen {n}  ·  Identify flashes it")
+                lines.append(f"screen {n} here  ·  Identify flashes it "
+                             f"(Windows' own numbering differs)")
         x, y, width, height = self._rect(key, item)
         lines.append(f"desk  x {x} → {x + width}    y {y} → {y + height}")
         return title, lines
@@ -4982,7 +5069,8 @@ class MultiArrangeCanvas(tk.Canvas):
             fill=HOVER_FILL, outline=HOVER_LINE, width=1, tags="hovercard")
         self.tag_raise(text_id)
 
-    HINT = "drag to arrange  ·  right-click a screen to edit it  ·  Identify"
+    HINT = ("drag to arrange  ·  This PC moves as one block  ·  "
+            "right-click a screen to edit it")
 
     def flash_hint(self, text, ms=3200):
         """Say one thing in the hint line, briefly, then go back to the tell.
@@ -5102,6 +5190,11 @@ class MultiArrangeCanvas(tk.Canvas):
                                               m.get("layout_y", 0))
             for m in self.monitors
         } if key[0] == "local" else {key: (x, y)}
+        # THE BASELINE. What was already overlapping before this drag is not
+        # this drop's fault; refusing it would lock an overlapping desk in
+        # place forever, since every attempt to nudge apart is "still
+        # overlapping". Only a drop that ADDS an overlap is refused.
+        self._press_over = set(self._overlaps_another())
         self.redraw()
 
     def _drag(self, event):
@@ -5152,18 +5245,19 @@ class MultiArrangeCanvas(tk.Canvas):
             (x, y, width, height), neighbors)
         self._set_position(self.selected, item, nx, ny)
 
-    OVERLAP_TOLERANCE = 2.0   # desk units; edge contact within this is touching
-
     def _overlaps_another(self):
         """Labels of the screens the selected one now lies ON TOP OF, if any.
 
         Edge contact is not overlap -- touching is the whole point of the
         snap, and compute_adjacencies calls two edges within 2 units a link.
-        Only a real intersection on both axes counts. For the PC block every
-        one of its screens is checked against every device screen, since any
-        of them can be the one that landed on a device; PC screens are never
-        checked against each other, because their mutual layout is Windows'
-        arrangement, not this drop."""
+        rects_overlap is the ONE rule for that, shared with openspan_targets,
+        so the load path and the drop path cannot disagree about it. For the
+        PC block every one of its screens is checked against every device
+        screen, since any of them can be the one that landed on a device; PC
+        screens are never checked against each other, because their mutual
+        layout is Windows' arrangement, not this drop."""
+        if not self.selected:
+            return []
         moving = ([("local", "windows", m["name"]) for m in self.monitors]
                   if self.selected[0] == "local" else [self.selected])
         moving_set = set(moving)
@@ -5172,20 +5266,25 @@ class MultiArrangeCanvas(tk.Canvas):
             item = self._lookup(key)
             if not item:
                 continue
-            ax, ay, aw, ah = self._rect(key, item)
+            mine = self._rect(key, item)
             for other_key, other in self._items():
                 if other_key in moving_set:
                     continue
                 if key[0] == "local" and other_key[0] == "local":
                     continue
-                bx, by, bw, bh = self._rect(other_key, other)
-                t = self.OVERLAP_TOLERANCE
-                if (min(ax + aw, bx + bw) - max(ax, bx) > t
-                        and min(ay + ah, by + bh) - max(ay, by) > t):
-                    label = self._short_label(other_key, other).replace("\n", " ")
+                if rects_overlap(mine, self._rect(other_key, other)):
+                    label = self._label_for(other_key, other)
                     if label not in hits:
                         hits.append(label)
         return hits
+
+    def _label_for(self, key, item):
+        """A name that tells two PC screens apart, for messages."""
+        text = self._short_label(key, item).replace("\n", " ")
+        if key[0] == "local":
+            n = self._monitor_number(item["name"])
+            return f"{text} {n}" if n else text
+        return text
 
     def _release(self, _event):
         if not self.action:
@@ -5214,7 +5313,8 @@ class MultiArrangeCanvas(tk.Canvas):
             # unambiguous edge to cross, so every crossing through it is a
             # guess. The drop is put back where it started and the canvas
             # says why, in the hint line, for a moment.
-            over = self._overlaps_another()
+            over = [o for o in self._overlaps_another()
+                    if o not in (getattr(self, "_press_over", None) or set())]
             if over:
                 for k, (px, py) in (getattr(self, "_press_layout", None)
                                     or {}).items():
@@ -10167,6 +10267,7 @@ class App:
 
         def apply_and_close():
             changed = 0
+            touched_pc = False
             for kind, obj, var in rows:
                 text = var.get().strip()
                 if not text:
@@ -10178,15 +10279,23 @@ class App:
                                f"“{text}” is not a screen size in inches.")
                     return
                 obj["diagonal_in"] = inches
+                # Same fact as _menu_diagonal writes: this number was TYPED,
+                # so EDID must not overwrite it on the next refresh. Two write
+                # paths for one field, and this one used to forget -- a typed
+                # 17" read back as "(from EDID)" and reverted at launch.
+                obj["diagonal_source"] = "user"
                 if kind == "monitor":
                     obj["layout_w"], obj["layout_h"] = physical_size(
                         inches, obj["w"], obj["h"], 0)
+                    touched_pc = True
                 else:
                     obj["w"], obj["h"] = physical_size(
                         inches, obj["res_w"], obj["res_h"],
                         obj.get("rotation", 0))
                 changed += 1
             win.destroy()
+            if touched_pc:
+                self.canvas.relayout_pc()
             self.canvas.redraw()
             self.canvas.save()
             _emit("event", f"screen sizes updated ({changed}) — drag them "
@@ -10503,6 +10612,12 @@ class App:
         item = self.canvas._lookup(key)
         if item is None or key[0] != "local":
             return
+        if not monitor_sizes().get(item.get("name")):
+            # Nothing to hand back to. Say so, rather than silently keeping
+            # the typed value and making the menu entry vanish.
+            self.canvas.flash_hint(
+                "this panel's EDID reports no size — keeping the typed value")
+            return
         item.pop("diagonal_source", None)
         self._menu_refresh_monitors()
 
@@ -10662,6 +10777,9 @@ class App:
             # layout_w/layout_h. Same derivation as "Screen sizes...".
             item["layout_w"], item["layout_h"] = physical_size(
                 inches, item["w"], item["h"], 0)
+            # A PC screen that changed size has to re-settle against its
+            # siblings, or it lies across them until the next launch.
+            self.canvas.relayout_pc()
         else:
             item["w"], item["h"] = physical_size(
                 inches, int(item["res_w"]), int(item["res_h"]),
@@ -10723,8 +10841,13 @@ class App:
             dark_alert(self.root, "No monitors reported",
                        "Windows returned no monitors. Nothing was changed.")
             return
-        merged, report = merge_live_monitors(self.canvas.monitors, live,
-                                             sizes=monitor_sizes())
+        # The devices are OBSTACLES to the PC block: a screen Windows just
+        # reported must not be placed on top of the iPad, and a profile whose
+        # primary moved must not drop the block onto the Mac. Passed as
+        # rectangles so the geometry stays pure.
+        merged, report = merge_live_monitors(
+            self.canvas.monitors, live, sizes=monitor_sizes(),
+            obstacles=self.canvas.device_rects())
         # portal_signature serialises monitors as an ORDERED list, and this is
         # the one place that adopts EnumDisplayMonitors' order wholesale. Sorted
         # by name, the order is a function of WHICH monitors are attached and of

@@ -6,17 +6,28 @@ be dragged apart one at a time, so the app could hold a picture of the desk that
 disagreed with Windows about the PC's own layout while both looked perfectly
 plausible -- and every portal on those edges was computed from the wrong one.
 
-So the block is DERIVED: each screen is seeded from its Windows offset to the
-primary, scaled by the primary's desk-units-per-pixel ratio, then snapped
-against the screens already placed. The snap is not decoration. Two panels with
-the same pixel count and different physical sizes are different rectangles on
-the desk, and the difference is exactly the distance between "touching" and "a
-hundred units apart" -- which is the difference between having a portal and not.
+So the block is DERIVED, and each screen is placed off the screen it TOUCHES:
+the shared edge is mapped exactly and only the offset along it is scaled. Two
+panels with the same pixel count and different physical sizes are different
+rectangles on the desk, and the difference is exactly the distance between
+"touching" and "a hundred units apart" -- which is the difference between
+having a portal and not. Scaling every screen by the PRIMARY's ratio, which is
+what this used to do, is the same fault one step further out: it held only
+while every panel had the same pixel density, and the fuzz in section 12 is
+what says so.
+
+Two authorities meet on this desk and neither has heard of the other. Windows
+arranges the PC's screens; the user arranges the devices. So the block also has
+to be told where the devices are, or it is derived straight through an iPad --
+section 10.
 
 Everything here runs on Doug's real desk, DISPLAY5 primary at (0,0), DISPLAY1 at
 (4,-1080) and DISPLAY4 at (-1920,0), because two of the three sit at NEGATIVE
-origins and a formula verified only on the primary is not verified. The live
-config on this machine is read, never written.
+origins and a formula verified only on the primary is not verified. The last
+section asks the question of the REAL inputs -- the monitors Windows reports
+now and the sizes the panels state in their EDID -- because those are what the
+app is handed at launch. The live config on this machine is read, never
+written.
 
 Exit 0 = all pass.
 """
@@ -24,6 +35,7 @@ Exit 0 = all pass.
 import copy
 import json
 import pathlib
+import random
 import sys
 
 try:
@@ -34,7 +46,8 @@ except Exception:  # noqa: BLE001
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from openspan_targets import (  # noqa: E402
-    BASE_PORT, merge_live_monitors, normalize_config, overlapping_surfaces,
+    BASE_PORT, _push_out, last_normalize_report, layout_surfaces,
+    merge_live_monitors, normalize_config, overlapping_surfaces,
     pc_block_layout, physical_size, rects_overlap,
 )
 
@@ -355,40 +368,574 @@ check("a newly primary screen does not drag the whole PC across the desk -- "
       and by_name(promoted)[r"\\.\DISPLAY1"]["layout_y"] == -833)
 
 
-# === 10. the desk this is running on ========================================
+# === 10. the block never lands on a device ==================================
+# Windows arranges the PC's screens; the USER arranges the devices; neither
+# authority has heard of the other. So a block derived purely from Windows can
+# be derived straight through an iPad, and it was: loading the saved "Mac 2k 2"
+# arrangement -- written when DISPLAY4 was a 32" primary, replayed on a desk
+# where DISPLAY5 is primary and DISPLAY4 is a 15.7" panel -- put DISPLAY4 at
+# (-96, 1280) on top of the Mac's third display at (-210, 1569) and left the
+# desk with one portal where it had six.
+#
+# The fix is not to move the offending screen. Moving one screen would make the
+# block disagree with Windows, which is the fault the block exists to prevent.
+# The whole block steps clear, as one thing.
+MAC_2K_2 = {
+    # The shape of profiles/Mac 2k 2.json, copied here rather than read: that
+    # file is the user's and can be re-saved at any moment, and a test that
+    # changes meaning when he re-saves an arrangement is not a test.
+    "links": [],
+    "monitors": [
+        {"name": r"\\.\DISPLAY5", "x": 2560, "y": 1440, "w": 1920, "h": 1080,
+         "primary": False, "refresh_hz": 60.0, "layout_x": 1272,
+         "layout_y": 1280, "layout_w": 1482, "layout_h": 833,
+         "diagonal_in": 17.0},
+        {"name": r"\\.\DISPLAY1", "x": 2560, "y": 360, "w": 1920, "h": 1080,
+         "primary": False, "refresh_hz": 60.0, "layout_x": 1272,
+         "layout_y": 447, "layout_w": 1482, "layout_h": 833,
+         "diagonal_in": 17.0},
+        {"name": r"\\.\DISPLAY4", "x": 0, "y": 0, "w": 2560, "h": 1440,
+         "primary": True, "refresh_hz": 120.0, "layout_x": -1517,
+         "layout_y": 0, "layout_w": 2789, "layout_h": 1569,
+         "diagonal_in": 32.0},
+    ],
+    "devices": [
+        {"id": "ipad", "name": "iPad", "port": BASE_PORT, "enabled": True,
+         "displays": [{"id": "ipad-main", "name": "iPad", "x": -1026,
+                       "y": 1569, "w": 816, "h": 612, "res_w": 1080,
+                       "res_h": 810, "rotation": 0, "diagonal_in": 10.2}]},
+        {"id": "mac", "name": "Managed Mac", "port": BASE_PORT + 1,
+         "enabled": True,
+         "displays": [
+             {"id": "mac-1", "name": "Mac Display 1", "x": -4655, "y": -610,
+              "w": 1569, "h": 2789, "res_w": 3840, "res_h": 2160,
+              "rotation": 90, "diagonal_in": 32.0},
+             {"id": "mac-2", "name": "Mac Display 2", "x": -3086, "y": -610,
+              "w": 1569, "h": 2789, "res_w": 3840, "res_h": 2160,
+              "rotation": 90, "diagonal_in": 32.0},
+             {"id": "mac-3", "name": "Mac Display 3", "x": -210, "y": 1569,
+              "w": 1482, "h": 833, "res_w": 2560, "res_h": 1440,
+              "rotation": 0, "diagonal_in": 17.0}]},
+        {"id": "laptop", "name": "Managed Laptop", "port": BASE_PORT + 2,
+         "enabled": True,
+         "displays": [
+             {"id": "laptop-1", "name": "MacAir-E", "x": -1517, "y": -637,
+              "w": 1133, "h": 637, "res_w": 1920, "res_h": 1080,
+              "rotation": 0, "diagonal_in": 13.0},
+             {"id": "laptop-2", "name": "MacAir", "x": -384, "y": -637,
+              "w": 1133, "h": 637, "res_w": 3840, "res_h": 2160,
+              "rotation": 0, "diagonal_in": 13.0}]},
+    ],
+}
+
+
+def pc_rects(config):
+    return {row["name"]: rect(row) for row in config["monitors"]}
+
+
+def device_screens(config):
+    """Every device screen on the desk, as (name, rect)."""
+    return [(f"{device['name']} · {display['name']}",
+             (display["x"], display["y"], display["w"], display["h"]))
+            for device in config["devices"] if device.get("enabled", True)
+            for display in device["displays"]]
+
+
+def collisions(config, screens=None):
+    """Every (PC screen, device screen) pair that covers the other.
+
+    `screens` names which devices to measure against, because the probe below
+    switches them off to see where the block WOULD have been derived -- and a
+    switched-off device is not on the desk, so its own config can no longer be
+    asked where it was."""
+    screens = device_screens(config) if screens is None else screens
+    return [(name, label) for name, mine in pc_rects(config).items()
+            for label, theirs in screens if rects_overlap(mine, theirs)]
+
+
+landed = normalize_config(copy.deepcopy(MAC_2K_2), DESK, sizes=EDID)
+# The same config with every device switched off: nothing is then on the desk
+# to avoid, so this is the block as it would have been derived before devices
+# were considered at all -- the picture the defect was reported against.
+free = normalize_config(
+    dict(copy.deepcopy(MAC_2K_2),
+         devices=[dict(device, enabled=False)
+                  for device in copy.deepcopy(MAC_2K_2)["devices"]]),
+    DESK, sizes=EDID)
+
+check("the arrangement being loaded really is the awkward one: it was saved "
+      "with a different screen as primary",
+      not by_name(MAC_2K_2["monitors"])[r"\\.\DISPLAY5"]["primary"]
+      and by_name(DESK)[r"\\.\DISPLAY5"]["primary"])
+check("with the devices ignored the block really does land on one -- this is "
+      f"the reported defect: {collisions(free, device_screens(landed))}",
+      collisions(free, device_screens(landed)) != [])
+check("with the devices on the desk, no PC screen covers any device screen: "
+      f"{collisions(landed)}",
+      collisions(landed) == [])
+deltas = {name: (landed_rect[0] - free_rect[0], landed_rect[1] - free_rect[1])
+          for (name, landed_rect), free_rect
+          in zip(pc_rects(landed).items(), pc_rects(free).values())}
+check("the whole block moved, by ONE delta -- no screen was moved out of the "
+      f"formation Windows put it in: {deltas}",
+      len(set(deltas.values())) == 1 and set(deltas.values()) != {(0, 0)})
+moved = by_name(landed["monitors"])
+check("...so DISPLAY4 still touches the primary's left edge afterwards",
+      moved[r"\\.\DISPLAY4"]["layout_x"] + moved[r"\\.\DISPLAY4"]["layout_w"]
+      == moved[r"\\.\DISPLAY5"]["layout_x"]
+      and moved[r"\\.\DISPLAY4"]["layout_y"]
+      == moved[r"\\.\DISPLAY5"]["layout_y"])
+check("...and DISPLAY1 still touches its top",
+      moved[r"\\.\DISPLAY1"]["layout_y"] + moved[r"\\.\DISPLAY1"]["layout_h"]
+      == moved[r"\\.\DISPLAY5"]["layout_y"])
+check("the escape is deterministic -- the same desk twice is the same desk",
+      pc_rects(normalize_config(copy.deepcopy(MAC_2K_2), DESK, sizes=EDID))
+      == pc_rects(landed))
+
+# The second way in, and the one that needs no saved arrangement at all: a
+# screen Windows has only just reported has no place on the desk yet, so it is
+# derived from Windows -- and Windows has never heard of the iPad parked
+# against the primary's left edge.
+IPAD_LEFT = {
+    "links": [],
+    # Only the two screens that were here before. DISPLAY4 is the new arrival.
+    "monitors": [
+        dict(DESK[0], layout_x=-59, layout_y=0, layout_w=SMALL[0],
+             layout_h=SMALL[1], diagonal_in=15.7),
+        dict(DESK[1], layout_x=-59, layout_y=-838, layout_w=BIG[0],
+             layout_h=BIG[1], diagonal_in=17.1),
+    ],
+    "devices": [{
+        "id": "ipad", "name": "iPad", "port": BASE_PORT, "enabled": True,
+        # Flush against the primary's LEFT edge, at a negative origin, which
+        # is exactly where DISPLAY4 is about to be derived to.
+        "displays": [{"id": "ipad-main", "name": "iPad", "x": -59 - 816,
+                      "y": 0, "w": 816, "h": 612, "res_w": 1080,
+                      "res_h": 810, "rotation": 0}]}],
+}
+arrived = normalize_config(copy.deepcopy(IPAD_LEFT), DESK, sizes=EDID)
+arrived_free = normalize_config(
+    dict(copy.deepcopy(IPAD_LEFT),
+         devices=[dict(IPAD_LEFT["devices"][0], enabled=False)]),
+    DESK, sizes=EDID)
+check("a screen that was not there before is derived onto the iPad when the "
+      f"iPad is not looked at: "
+      f"{collisions(arrived_free, device_screens(arrived))}",
+      collisions(arrived_free, device_screens(arrived)) != [])
+check(f"looking at it, the block steps clear of the iPad instead: "
+      f"{collisions(arrived)}",
+      collisions(arrived) == [])
+arrived_deltas = {
+    name: (landed_rect[0] - free_rect[0], landed_rect[1] - free_rect[1])
+    for (name, landed_rect), free_rect
+    in zip(pc_rects(arrived).items(), pc_rects(arrived_free).values())}
+check(f"and again it moves as one block: {arrived_deltas}",
+      len(set(arrived_deltas.values())) == 1
+      and set(arrived_deltas.values()) != {(0, 0)})
+check("the new screen is still where Windows has it: flush left of the "
+      "primary, tops level",
+      (lambda rows: rows[r"\\.\DISPLAY4"]["layout_x"]
+       + rows[r"\\.\DISPLAY4"]["layout_w"] == rows[r"\\.\DISPLAY5"]["layout_x"]
+       and rows[r"\\.\DISPLAY4"]["layout_y"]
+       == rows[r"\\.\DISPLAY5"]["layout_y"])(by_name(arrived["monitors"])))
+
+# The other half of the rule, and the one that protects everybody who has no
+# collision: a block with nothing in its way must not move at all.
+CLEAR_DESK = pc_block_layout(sized(DESK, EDID))
+check("a block that is already clear of every device does not move a unit",
+      [rect(row) for row in pc_block_layout(
+          sized(DESK, EDID),
+          obstacles=[(-4000, -4000, 500, 500), (5000, 5000, 500, 500)])]
+      == [rect(row) for row in CLEAR_DESK])
+check("no obstacles at all is the same as obstacles nothing reaches",
+      [rect(row) for row in pc_block_layout(sized(DESK, EDID), obstacles=[])]
+      == [rect(row) for row in CLEAR_DESK])
+
+
+# === 11. _push_out never hands back a position it knows is bad ==============
+# Two obstacles can hand a rectangle back and forth: each push lands it on the
+# other, the passes run out, and the last position tried was returned as if it
+# were a result. The caller then appended a KNOWN-BAD rectangle to the list
+# every later screen is measured against.
+PING_PONG = [(0, 0, 2745, 1544), (1372, 2316, 2035, 1272),
+             (3407, 1544, 2745, 1544), (3660, -257, 1368, 770)]
+STUCK = (3660, 513, 2353, 1324)
+out = _push_out(STUCK, PING_PONG)
+check(f"the rectangle that used to come back still overlapping does not: {out}",
+      not any(rects_overlap((out[0], out[1], STUCK[2], STUCK[3]), other)
+              for other in PING_PONG))
+check("...and it is deterministic",
+      _push_out(STUCK, PING_PONG) == out)
+BOXED = [(-600, -200, 400, 400), (200, -200, 400, 400),
+         (-200, -600, 400, 400), (-200, 200, 400, 400),
+         (-200, -200, 400, 400)]
+boxed_out = _push_out((-200, -200, 400, 400), BOXED)
+check(f"a rectangle boxed in on all four sides still comes back clear, and at "
+      f"a negative origin: {boxed_out}",
+      not any(rects_overlap((boxed_out[0], boxed_out[1], 400, 400), other)
+              for other in BOXED))
+check("an escape direction sends it that way: flush past everything on x",
+      _push_out(STUCK, PING_PONG, escape=("x", 1))
+      == (max(x + w for x, _y, w, _h in PING_PONG), 513))
+check("...and the other way, to a NEGATIVE origin",
+      _push_out(STUCK, PING_PONG, escape=("x", -1))
+      == (min(x for x, _y, _w, _h in PING_PONG) - STUCK[2], 513))
+check("a rectangle that lands on nothing is not moved at all",
+      _push_out((-9000, -9000, 100, 100), PING_PONG) == (-9000, -9000))
+check("nothing placed at all is not a special case either",
+      _push_out((-50, -60, 100, 100), []) == (-50, -60))
+
+
+# === 12. the fuzz: Windows-legal desks, 400 of each size ====================
+# The block used to be seeded from the PRIMARY's desk-per-pixel ratio for every
+# screen, which is only correct while every panel has the same pixel density.
+# Fuzzing Windows-legal arrangements against that rule dropped an adjacency
+# Windows had on 24.5% of three-screen desks and 44.5% of four-screen ones, and
+# drew one screen on top of another on 6.5% of five-screen ones.
+#
+# Each screen is now placed off the screen it TOUCHES, so what is checked here
+# is the promise that makes: Windows' own adjacencies survive onto the desk.
+# The named case first -- five real panels, and the one that used to end with a
+# 14" laptop screen sitting exactly on the primary at (0, 0).
+FIVE_PANEL = [
+    (r"\\.\SCREEN0", 0, 0, 1920, 1080, 17.1, True),
+    (r"\\.\SCREEN1", -1920, -453, 1920, 1080, 17.1, False),
+    (r"\\.\SCREEN2", -3840, -700, 1920, 1200, 24.0, False),
+    (r"\\.\SCREEN3", 435, -2160, 3840, 2160, 31.5, False),
+    (r"\\.\SCREEN4", 4275, -1193, 1366, 768, 14.0, False),
+]
+five = by_name(pc_block_layout(sized(
+    [monitor(name, x, y, primary=primary, w=w, h=h)
+     for name, x, y, w, h, _diagonal, primary in FIVE_PANEL],
+    {name: diagonal for name, _x, _y, _w, _h, diagonal, _p in FIVE_PANEL})))
+check("the 14\" panel four screens out no longer lands on the primary",
+      (five[r"\\.\SCREEN4"]["layout_x"], five[r"\\.\SCREEN4"]["layout_y"])
+      != (five[r"\\.\SCREEN0"]["layout_x"],
+          five[r"\\.\SCREEN0"]["layout_y"]))
+check("...and no two of the five cover each other at all",
+      not any(rects_overlap(rect(five[one]), rect(five[two]))
+              for index, one in enumerate(five)
+              for two in list(five)[index + 1:]))
+check("...while the three screens at NEGATIVE origins keep the edges Windows "
+      "gave them",
+      five[r"\\.\SCREEN1"]["layout_x"] + five[r"\\.\SCREEN1"]["layout_w"]
+      == five[r"\\.\SCREEN0"]["layout_x"]
+      and five[r"\\.\SCREEN2"]["layout_x"] + five[r"\\.\SCREEN2"]["layout_w"]
+      == five[r"\\.\SCREEN1"]["layout_x"]
+      and five[r"\\.\SCREEN3"]["layout_y"] + five[r"\\.\SCREEN3"]["layout_h"]
+      == five[r"\\.\SCREEN0"]["layout_y"])
+FUZZ_SEED = 20260815
+FUZZ_ARRANGEMENTS = 400
+FUZZ_PANELS = (15.7, 17.1, 24.0, 27.0, 31.5, 14.0)
+FUZZ_MODES = ((1920, 1080), (1920, 1200), (2560, 1440), (3840, 2160),
+              (1366, 768))
+# Desks of four and five screens can be arranged in Windows in ways no real
+# desk can hold: a 24" panel drawn beside a 17" one protrudes past both its
+# neighbour's edges, into space its pixels never occupied, and a third screen
+# seeded into that space has to give way. Measured today, that costs 7 of 1201
+# touching pairs at four screens and 24 of 1605 at five, and at five screens it
+# strands a screen with nothing to touch on 3 desks in 400. Both budgets are
+# regression guards on those numbers rather than permission; the two things
+# with no budget at all are screens drawn on top of each other and a layout
+# that will not reproduce itself.
+FUZZ_LOST_PAIR_BUDGET = 0.02
+FUZZ_STRANDED_BUDGET = 0.01
+
+
+def px_covers(first, second):
+    return (min(first["x"] + first["w"], second["x"] + second["w"])
+            - max(first["x"], second["x"]) > 0
+            and min(first["y"] + first["h"], second["y"] + second["h"])
+            - max(first["y"], second["y"]) > 0)
+
+
+def px_touches(first, second):
+    """Do two monitors share an edge in Windows, with real overlap along it?"""
+    if (min(first["y"] + first["h"], second["y"] + second["h"])
+            - max(first["y"], second["y"]) > 0):
+        if (first["x"] + first["w"] == second["x"]
+                or second["x"] + second["w"] == first["x"]):
+            return True
+    if (min(first["x"] + first["w"], second["x"] + second["w"])
+            - max(first["x"], second["x"]) > 0):
+        if (first["y"] + first["h"] == second["y"]
+                or second["y"] + second["h"] == first["y"]):
+            return True
+    return False
+
+
+def desk_touches(first, second, tolerance=3):
+    """The same question on the desk. An edge to within `tolerance` counts --
+    that is the band compute_portals matches on -- and the perpendicular spans
+    have to genuinely overlap, or the two only meet at a corner."""
+    ax, ay, aw, ah = first
+    bx, by, bw, bh = second
+    if min(ay + ah, by + bh) - max(ay, by) > 0:
+        if abs((ax + aw) - bx) <= tolerance or abs((bx + bw) - ax) <= tolerance:
+            return True
+    if min(ax + aw, bx + bw) - max(ax, bx) > 0:
+        if abs((ay + ah) - by) <= tolerance or abs((by + bh) - ay) <= tolerance:
+            return True
+    return False
+
+
+def windows_desk(rng, count):
+    """`count` monitors arranged the way WINDOWS allows: every screen flush
+    against one already placed, no gaps, no overlaps, primary at the origin --
+    so most screens sit at a negative origin on one axis or both."""
+    rows = []
+    for index in range(count):
+        mode_w, mode_h = rng.choice(FUZZ_MODES)
+        row = {"name": f"\\\\.\\FUZZ{index}", "w": mode_w, "h": mode_h,
+               "primary": index == 0, "diagonal_in": rng.choice(FUZZ_PANELS)}
+        if index == 0:
+            row["x"], row["y"] = 0, 0
+            rows.append(row)
+            continue
+        for _attempt in range(200):
+            host = rng.choice(rows)
+            side = rng.choice(("right", "left", "below", "above"))
+            if side in ("right", "left"):
+                row["x"] = (host["x"] + host["w"] if side == "right"
+                            else host["x"] - row["w"])
+                row["y"] = rng.randint(host["y"] - row["h"] + 1,
+                                       host["y"] + host["h"] - 1)
+            else:
+                row["y"] = (host["y"] + host["h"] if side == "below"
+                            else host["y"] - row["h"])
+                row["x"] = rng.randint(host["x"] - row["w"] + 1,
+                                       host["x"] + host["w"] - 1)
+            if not any(px_covers(row, other) for other in rows):
+                rows.append(row)
+                break
+        else:
+            return None
+    return rows
+
+
+fuzz_negative = 0
+for screens in (2, 3, 4, 5):
+    rng = random.Random(FUZZ_SEED)
+    desks = overlapped = adrift = lost = pairs = restless = 0
+    while desks < FUZZ_ARRANGEMENTS:
+        rows = windows_desk(rng, screens)
+        if rows is None:
+            continue
+        desks += 1
+        fuzz_negative += any(row["x"] < 0 or row["y"] < 0 for row in rows)
+        placed_rows = pc_block_layout(sized(
+            rows, {row["name"]: row["diagonal_in"] for row in rows}))
+        desk = {row["name"]: rect(row) for row in placed_rows}
+        if {row["name"]: rect(row)
+                for row in pc_block_layout(placed_rows)} != desk:
+            restless += 1
+        touching = {name: False for name in desk}
+        for index, first in enumerate(rows):
+            for second in rows[index + 1:]:
+                one, two = desk[first["name"]], desk[second["name"]]
+                if rects_overlap(one, two):
+                    overlapped += 1
+                if desk_touches(one, two):
+                    touching[first["name"]] = True
+                    touching[second["name"]] = True
+                if px_touches(first, second):
+                    pairs += 1
+                    lost += not desk_touches(one, two)
+        adrift += not all(touching.values())
+    check(f"{screens} screens: not one of {desks} desks has two PC screens "
+          f"covering each other ({overlapped} found)", overlapped == 0)
+    if screens <= 4:
+        check(f"{screens} screens: no screen is left floating free of the "
+              f"block ({adrift} desks)", adrift == 0)
+    else:
+        check(f"{screens} screens: {desks - adrift} of {desks} desks come out "
+              f"whole ({adrift} stranded a screen where the arrangement will "
+              f"not fit, budget {100.0 * FUZZ_STRANDED_BUDGET:.0f}%)",
+              adrift <= FUZZ_STRANDED_BUDGET * desks)
+    check(f"{screens} screens: laying out the block again reproduces it "
+          f"({restless} desks moved)", restless == 0)
+    if screens <= 3:
+        check(f"{screens} screens: every one of the {pairs} pairs Windows has "
+              f"touching touches on the desk too ({lost} lost)", lost == 0)
+    else:
+        check(f"{screens} screens: {pairs - lost} of {pairs} pairs Windows "
+              f"has touching still touch ({100.0 * lost / pairs:.2f}% lost, "
+              f"budget {100.0 * FUZZ_LOST_PAIR_BUDGET:.0f}%)",
+              lost <= FUZZ_LOST_PAIR_BUDGET * pairs)
+check("the fuzz really did exercise negative origins, on most desks",
+      fuzz_negative > 3 * FUZZ_ARRANGEMENTS)
+
+# Why the budget above is not zero, demonstrated rather than asserted. Windows
+# can put one screen flush under TWO others whose bottoms are level in pixels;
+# if those two are different physical heights their bottoms are NOT level on
+# the desk, and no position for the third can touch both. The block keeps one
+# contact, and keeps every screen clear, which is all that is left to keep.
+IMPOSSIBLE = [
+    monitor(r"\\.\DISPLAY1", 0, 0, primary=True),
+    monitor(r"\\.\DISPLAY2", 1920, 0),
+    monitor(r"\\.\DISPLAY3", 960, 1080, w=3840, h=1080),
+]
+IMPOSSIBLE_EDID = {r"\\.\DISPLAY1": 15.7, r"\\.\DISPLAY2": 31.5,
+                   r"\\.\DISPLAY3": 24.0}
+impossible = by_name(pc_block_layout(sized(IMPOSSIBLE, IMPOSSIBLE_EDID)))
+check("Windows has the third screen touching both of the others",
+      px_touches(IMPOSSIBLE[0], IMPOSSIBLE[2])
+      and px_touches(IMPOSSIBLE[1], IMPOSSIBLE[2]))
+check("...and their two bottom edges, level in pixels, cannot both be met on "
+      "a desk where one panel is 15.7\" and the other 31.5\"",
+      impossible[r"\\.\DISPLAY1"]["layout_y"]
+      + impossible[r"\\.\DISPLAY1"]["layout_h"]
+      != impossible[r"\\.\DISPLAY2"]["layout_y"]
+      + impossible[r"\\.\DISPLAY2"]["layout_h"])
+check("so one contact is kept, and nothing is left on top of anything",
+      (desk_touches(rect(impossible[r"\\.\DISPLAY1"]),
+                    rect(impossible[r"\\.\DISPLAY3"]))
+       or desk_touches(rect(impossible[r"\\.\DISPLAY2"]),
+                       rect(impossible[r"\\.\DISPLAY3"])))
+      and not any(rects_overlap(rect(impossible[a]), rect(impossible[b]))
+                  for a, b in ((r"\\.\DISPLAY1", r"\\.\DISPLAY2"),
+                               (r"\\.\DISPLAY1", r"\\.\DISPLAY3"),
+                               (r"\\.\DISPLAY2", r"\\.\DISPLAY3"))))
+
+
+# === 13. loading says what it resized =======================================
+# The merge has always reported a screen redrawn because its EDID was finally
+# read. Loading does the same resizing and said nothing, so a launch could
+# redraw a screen smaller in silence. It is reported BESIDE the function
+# instead of inside the config, because the config is written straight back to
+# disk -- a "_resized" key in it would land in openspan_config.json and in
+# every saved arrangement, and outlive the load it described.
+SAVED_17 = {"links": [], "monitors": [dict(DESK[0], layout_x=-59, layout_y=0,
+                                           diagonal_in=17.0)]}
+resized_config = normalize_config(copy.deepcopy(SAVED_17), [DESK[0]],
+                                  sizes=EDID)
+check("a screen the panel's own EDID resized is named, with both numbers: "
+      f"{last_normalize_report()}",
+      last_normalize_report() == [(r"\\.\DISPLAY5", 17.0, 15.7)])
+check("the report is not smuggled into the config, which is saved verbatim",
+      set(resized_config) == {"version", "monitors", "devices", "portals",
+                              "links"}
+      and json.dumps(resized_config, default=str).find("_resized") == -1)
+check("reading it twice does not empty it, and a reader cannot rewrite it",
+      (lambda first: (first.append(("stolen", 1, 2)),
+                      last_normalize_report()
+                      == [(r"\\.\DISPLAY5", 17.0, 15.7)])[1])(
+          last_normalize_report()))
+normalize_config(copy.deepcopy(SAVED_17), [DESK[0]], sizes={})
+check("a load that resizes nothing reports nothing, rather than the last "
+      "load's answer",
+      last_normalize_report() == [])
+check("a screen that had no size at all and now has one counts as resized",
+      (lambda _cfg: last_normalize_report()
+       == [(r"\\.\DISPLAY5", None, 15.7)])(
+          normalize_config({"links": [], "monitors": [dict(DESK[0])]},
+                           [DESK[0]], sizes=EDID)))
+try:
+    normalize_config({"links": []}, [])
+except ValueError:
+    pass
+check("a call that could not run leaves no stale report looking current",
+      last_normalize_report() == [])
+
+
+# === 14. the anchor is a function of the hardware, not of the enum order ====
+# When the primary has no saved position the block is pinned by a screen that
+# does have one. Two screens can both qualify, and EnumDisplayMonitors makes no
+# promise about order, so choosing "the first one" moved the whole PC between
+# launches with nothing having changed. It is chosen by NAME.
+PROMOTED_SAVED = [
+    dict(DESK[1], layout_x=-59, layout_y=-838, layout_w=BIG[0],
+         layout_h=BIG[1], diagonal_in=17.1),
+    dict(DESK[2], layout_x=-1427, layout_y=0, layout_w=SMALL[0],
+         layout_h=SMALL[1], diagonal_in=15.7),
+]
+one_order, _report = merge_live_monitors(
+    PROMOTED_SAVED, [DESK[1], DESK[2], DESK[0]], sizes=EDID)
+other_order, _report = merge_live_monitors(
+    PROMOTED_SAVED, [DESK[2], DESK[0], DESK[1]], sizes=EDID)
+check("the same three screens in a different enumeration order give the same "
+      "desk",
+      {name: rect(row) for name, row in by_name(one_order).items()}
+      == {name: rect(row) for name, row in by_name(other_order).items()})
+check("...and it is DISPLAY1, the first by name, that keeps its saved place",
+      (by_name(one_order)[r"\\.\DISPLAY1"]["layout_x"],
+       by_name(one_order)[r"\\.\DISPLAY1"]["layout_y"]) == (-59, -838))
+check("a merge told where the devices are keeps the block off them",
+      merge_live_monitors(
+          PROMOTED_SAVED, [DESK[1], DESK[2], DESK[0]], sizes=EDID,
+          obstacles=[(-1427, 0, 1368, 770)])[0]
+      != one_order)
+check("...and told nothing, behaves exactly as it always did",
+      [rect(row) for row in merge_live_monitors(
+          PROMOTED_SAVED, [DESK[1], DESK[2], DESK[0]], sizes=EDID,
+          obstacles=None)[0]] == [rect(row) for row in one_order])
+
+
+# === 15. the desk this is running on ========================================
 # The rule the whole feature has to survive: Doug's saved layout already agrees
 # with Windows, so deriving it from Windows must not move anything. If this
 # fails, the next launch on this machine silently rearranges his screens.
+#
+# It is asked of the REAL inputs -- the monitors EnumDisplayMonitors reports
+# and the diagonals the panels state in their EDID -- because those are what
+# adopt() hands normalize_config at launch. Feeding it the SAVED rows instead
+# was how this section passed while the app was about to move a screen: the
+# saved rows are two, this desk has three, and no saved row carries the EDID
+# size the load actually applies.
 CONFIG_PATH = pathlib.Path(__file__).parents[1] / "openspan_config.json"
-live_raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-live_monitors = [row for row in live_raw.get("monitors", [])
-                 if isinstance(row, dict)]
-saved_positions = {row["name"]: (row["layout_x"], row["layout_y"])
-                   for row in live_monitors}
-check("the live config on this machine really does hold both PC screens",
-      len(live_monitors) >= 2
-      and {r"\\.\DISPLAY5", r"\\.\DISPLAY1"} <= set(saved_positions))
+try:
+    import monitor_edid
+    import openspan_setup
 
-derived = {row["name"]: (row["layout_x"], row["layout_y"])
-           for row in pc_block_layout(copy.deepcopy(live_monitors))}
-drift = {name: (abs(derived[name][0] - saved[0]),
-                abs(derived[name][1] - saved[1]))
-         for name, saved in saved_positions.items()}
-check("deriving the block from Windows leaves every saved position where it "
-      f"was, within snap tolerance: {drift}",
-      all(dx < 5 and dy < 5 for dx, dy in drift.values()))
+    live_monitors = openspan_setup.enum_monitors()
+    live_sizes = {name: panel["diagonal_in"]
+                  for name, panel in (monitor_edid.physical_diagonals()
+                                      or {}).items()
+                  if panel and panel.get("diagonal_in")}
+except Exception as exc:                                        # noqa: BLE001
+    live_monitors, live_sizes = [], {}
+    print(f"     (Windows displays unreadable here: {exc})")
 
-reloaded = normalize_config(copy.deepcopy(live_raw),
-                            copy.deepcopy(live_monitors))
-through_load = {row["name"]: (row["layout_x"], row["layout_y"])
-                for row in reloaded["monitors"]}
-check("...and so does a whole load of that config, which is what actually "
-      f"runs at launch: {through_load}",
-      all(abs(through_load[name][0] - saved[0]) < 5
-          and abs(through_load[name][1] - saved[1]) < 5
-          for name, saved in saved_positions.items()))
-check("the live config was only ever read",
-      json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["monitors"]
-      == live_raw["monitors"])
+THIS_DESK = {r"\\.\DISPLAY5": (-59, 0), r"\\.\DISPLAY1": (-59, -838),
+             r"\\.\DISPLAY4": (-1427, 0)}
+live_names = {str(row.get("name", "")) for row in live_monitors}
+if CONFIG_PATH.exists() and set(THIS_DESK) <= (live_names & set(live_sizes)):
+    live_raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    loaded_desk = normalize_config(copy.deepcopy(live_raw),
+                                   copy.deepcopy(live_monitors),
+                                   sizes=live_sizes)
+    running = by_name(loaded_desk["monitors"])
+    derived = {name: (row["layout_x"], row["layout_y"])
+               for name, row in running.items()}
+    check("the load holds all three of this desk's screens, DISPLAY4 included "
+          f"-- the one the enumerator used to drop: {sorted(derived)}",
+          set(THIS_DESK) <= set(derived))
+    check(f"every screen lands exactly where it was measured to: {derived}",
+          all(derived[name] == where for name, where in THIS_DESK.items()))
+    check("the primary did not move: it is still where the user put the block",
+          derived[r"\\.\DISPLAY5"] == (-59, 0))
+    check("DISPLAY4 is flush against the primary's left edge, tops level",
+          running[r"\\.\DISPLAY4"]["layout_x"]
+          + running[r"\\.\DISPLAY4"]["layout_w"]
+          == running[r"\\.\DISPLAY5"]["layout_x"]
+          and running[r"\\.\DISPLAY4"]["layout_y"]
+          == running[r"\\.\DISPLAY5"]["layout_y"])
+    check("DISPLAY1 is flush above it, left edges aligned -- the 5 units it "
+          "drops is 17.0\" giving way to the 17.1\" the panel states",
+          running[r"\\.\DISPLAY1"]["layout_y"]
+          + running[r"\\.\DISPLAY1"]["layout_h"]
+          == running[r"\\.\DISPLAY5"]["layout_y"]
+          and running[r"\\.\DISPLAY1"]["layout_x"]
+          == running[r"\\.\DISPLAY5"]["layout_x"])
+    check("nothing on this desk covers anything else on it",
+          [(one["name"], two["name"])
+           for index, one in enumerate(layout_surfaces(loaded_desk))
+           for two in layout_surfaces(loaded_desk)[index + 1:]
+           if rects_overlap(one["rect"], two["rect"])] == [])
+    check("the live config was only ever read",
+          json.loads(CONFIG_PATH.read_text(encoding="utf-8")) == live_raw)
+else:
+    print("SKIP  this desk's three screens are not all attached and readable "
+          f"-- live {sorted(live_names)}, EDID {sorted(live_sizes)}")
 
 print("RESULT: ALL PASS")

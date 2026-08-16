@@ -41,6 +41,19 @@ DESK_UNITS_PER_INCH = 100.0
 # 3px from a trigger with a +-1px tolerance is a 2px re-entry -- the arrival
 # margin, not an accumulator, is what stops a crossing from bouncing back.
 ARRIVE_MARGIN = 40.0
+# How many WINDOWS pixels of offset between two neighbouring monitors count as
+# a leftover from dragging them together rather than an arrangement. Windows'
+# display page snaps a dragged monitor against the one it is dropped on, and
+# what survives is a few pixels of noise -- this desk's DISPLAY1 sits at x=4
+# beside a primary at x=0. Under this many pixels the two are drawn exactly
+# level; over it the offset is a decision and is drawn as one. It is a noise
+# band, not a snap distance, so it stays small: 8px is 0.4% of a 1920 panel.
+WINDOWS_EDGE_NOISE_PX = 8
+# How many candidate translations per axis the block's escape search combines
+# into diagonals. The straight moves are all tried, and they already include
+# the ones guaranteed to clear every device, so this bounds the corner search
+# without being able to cost it an answer.
+_SHIFT_FAN = 12
 
 
 def physical_size(diagonal_in, res_w, res_h, rotation=0):
@@ -192,10 +205,18 @@ def _effective_diagonal(name, saved, sizes):
     with a tape measure outranks a panel that reports its own size wrong -- so
     it wins outright and keeps winning across every reload. Otherwise the panel
     speaks for itself: its EDID states the active area in centimetres, which is
-    a measurement rather than a guess. A legacy value from before the app
-    recorded WHO typed it keeps working exactly as it did, because silently
-    resizing a screen nobody asked to resize is the fault this ordering exists
-    to avoid.
+    a measurement rather than a guess.
+
+    A LEGACY value -- a diagonal saved before this app recorded WHO typed it --
+    survives only where EDID has nothing to say. It outranks silence and
+    nothing else: where the panel does state its own size, the panel wins and
+    the screen is REDRAWN. That is deliberate. An unattributed number cannot be
+    told apart from a default somebody accepted once, and between an accepted
+    default and a measurement the measurement is the better answer -- this
+    desk's primary carried 17.0" against an EDID that says 15.7". The redraw is
+    not silent: normalize_config and merge_live_monitors both report it (see
+    last_normalize_report and the merge's "resized"), which is what makes
+    overriding it honest rather than surprising.
 
     Returns (diagonal_in, source) with source one of "user", "edid", the
     legacy value's own source, or None when nothing knows.
@@ -282,50 +303,250 @@ def _desk_per_pixel(monitor):
     )
 
 
-def _seed_axis(primary_origin, origin, size, desk_size, ratio):
-    """One axis of a monitor's seeded desk position, in desk units.
+def _seed_axis(reference_origin, origin, size, desk_size, ratio):
+    """One axis of a monitor's desk position, scaled off a REFERENCE screen.
 
     Windows states a monitor's position as the offset of its TOP-LEFT corner,
     but what it means by putting DISPLAY4 at x=-1920 beside a 1920px primary is
     that the two panels touch. Mapping the top-left corner alone keeps that
     promise only while both panels are the same physical size: a 15.7" panel to
     the left of a 17.1" one lands its right edge ~120 desk units short of the
-    primary -- past the snap threshold -- and the block silently comes apart.
+    primary, which is a visible gap where Windows says there is none.
 
-    So the edge that FACES the primary is the one that gets mapped. For a
-    monitor entirely before the primary on this axis that is its far edge
-    (right, or bottom); for anything else it is its leading edge, which is what
-    makes Windows' flush left edges come out flush on the desk. A real gap in
-    Windows still maps to a proportional gap, because the offset is scaled
-    either way and only the corner being measured changes.
+    So the edge that FACES the reference is the one that gets mapped. For a
+    monitor entirely before it on this axis that is the far edge (right, or
+    bottom); for anything else it is the leading edge. A real gap in Windows
+    still maps to a proportional gap, because the offset is scaled either way
+    and only the corner being measured changes.
+
+    This is the fallback, not the rule. A monitor that TOUCHES something
+    already placed is seeded off that neighbour instead (_edge_seed), because
+    one ratio cannot describe a block of mixed-size panels: scaling every
+    screen by the primary's ratio is exactly what let a five-screen desk come
+    apart, one screen landing on the primary itself. What is left for this is a
+    monitor touching nothing placed -- a real gap in Windows -- where there is
+    no shared edge to map and a proportional guess is the honest answer.
     """
-    if origin + size <= primary_origin:
-        return (origin + size - primary_origin) * ratio - desk_size
-    return (origin - primary_origin) * ratio
+    if origin + size <= reference_origin:
+        return (origin + size - reference_origin) * ratio - desk_size
+    return (origin - reference_origin) * ratio
 
 
-def _block_seed(primary, monitor, anchor):
-    """Where `monitor` wants to sit, before it meets its neighbours."""
-    ratio_x, ratio_y = _desk_per_pixel(primary)
+def _block_seed(reference, monitor, origin):
+    """Where `monitor` lands scaled off `reference`, which sits at `origin`."""
+    ratio_x, ratio_y = _desk_per_pixel(reference)
     _mx, _my, desk_w, desk_h = _monitor_layout(monitor)
     return (
-        anchor[0] + _seed_axis(
-            int(primary["x"]), int(monitor["x"]), int(monitor["w"]),
+        origin[0] + _seed_axis(
+            int(reference["x"]), int(monitor["x"]), int(monitor["w"]),
             desk_w, ratio_x),
-        anchor[1] + _seed_axis(
-            int(primary["y"]), int(monitor["y"]), int(monitor["h"]),
+        origin[1] + _seed_axis(
+            int(reference["y"]), int(monitor["y"]), int(monitor["h"]),
             desk_h, ratio_y),
     )
 
 
-def _push_out(rect, placed, tolerance=2.0):
+def _windows_side(base, monitor):
+    """Which side of `base` `monitor` is flush against, in WINDOWS pixels.
+
+    "right", "left", "below", "above", or None when the two do not share an
+    edge at all. Sharing an edge means the edges coincide AND the perpendicular
+    spans genuinely overlap: a shared corner is not an adjacency, and neither
+    is a screen that happens to line up with one across the desk.
+
+    The four answers are mutually exclusive. An edge shared on x leaves the two
+    x spans meeting at a point, so no y edge can be shared as well.
+    """
+    bx, by = int(base["x"]), int(base["y"])
+    bw, bh = int(base["w"]), int(base["h"])
+    mx, my = int(monitor["x"]), int(monitor["y"])
+    mw, mh = int(monitor["w"]), int(monitor["h"])
+    if min(by + bh, my + mh) - max(by, my) > 0:
+        if mx == bx + bw:
+            return "right"
+        if mx + mw == bx:
+            return "left"
+    if min(bx + bw, mx + mw) - max(bx, mx) > 0:
+        if my == by + bh:
+            return "below"
+        if my + mh == by:
+            return "above"
+    return None
+
+
+def _along_edge(base_desk, base_desk_size, base_px, base_px_size, base_ratio,
+                desk_size, px, px_size, ratio):
+    """Where a monitor sits ALONG the edge it shares with its neighbour.
+
+    Windows' arrangement page snaps a monitor being dragged against the one it
+    is dropped on, so a handful of pixels left over from that drag is not an
+    arrangement: this desk's DISPLAY1 sits at x=4 beside a primary at x=0 and
+    nobody put it there. An offset within WINDOWS_EDGE_NOISE_PX of tops level,
+    bottoms level or centres level is read as that leftover and drawn exactly
+    level. Anything larger is a decision and is kept -- which is why the band is
+    a few pixels wide rather than a snap distance.
+
+    A real offset is mapped through the BAND THE TWO PANELS SHARE, not through
+    either one's leading corner. The shared band is the only part of either
+    panel the other can reach, and it is the thing being preserved: its middle
+    is found on the neighbour in the NEIGHBOUR's desk-per-pixel ratio, found on
+    this panel in THIS panel's, and the two points are laid on top of each
+    other. Mapping a corner instead works only while both panels have the same
+    pixel density -- put a 3840px 24" panel above a 1366px 27" one and the
+    corner offset stretches by the neighbour's ratio while the panel's own body
+    shrinks by its own, so the two slide past each other and the shared edge
+    ends up shared with nothing. Mapping the band cannot do that: both mapped
+    spans contain the same middle point, so they always overlap.
+    """
+    leading = px - base_px
+    levels = (
+        (abs(leading), base_desk),
+        (abs((px + px_size) - (base_px + base_px_size)),
+         base_desk + base_desk_size - desk_size),
+        (abs((px + px_size / 2.0) - (base_px + base_px_size / 2.0)),
+         base_desk + (base_desk_size - desk_size) / 2.0),
+    )
+    # Ties go to the first listed -- tops before bottoms before centres -- so
+    # the answer is a function of the hardware and not of iteration order.
+    off, level = min(levels, key=lambda row: row[0])
+    if off <= WINDOWS_EDGE_NOISE_PX:
+        return level
+    middle = (max(base_px, px)
+              + min(base_px + base_px_size, px + px_size)) / 2.0
+    return (base_desk + (middle - base_px) * base_ratio
+            - (middle - px) * ratio)
+
+
+def _edge_seed(base, base_rect, monitor, side):
+    """Where `monitor` sits once seeded off the neighbour it TOUCHES.
+
+    The shared edge is mapped EXACTLY -- flush in Windows comes out flush on
+    the desk, whatever the two panels measure -- and only the offset along that
+    edge is scaled. Nothing here needs a snap afterwards to close a gap the
+    seed opened, because the seed opens none.
+    """
+    bx, by, bw, bh = base_rect
+    base_ratio_x, base_ratio_y = _desk_per_pixel(base)
+    ratio_x, ratio_y = _desk_per_pixel(monitor)
+    _mx, _my, desk_w, desk_h = _monitor_layout(monitor)
+    if side in ("right", "left"):
+        return (
+            bx + bw if side == "right" else bx - desk_w,
+            _along_edge(by, bh, int(base["y"]), int(base["h"]), base_ratio_y,
+                        desk_h, int(monitor["y"]), int(monitor["h"]), ratio_y),
+        )
+    return (
+        _along_edge(bx, bw, int(base["x"]), int(base["w"]), base_ratio_x,
+                    desk_w, int(monitor["x"]), int(monitor["w"]), ratio_x),
+        by + bh if side == "below" else by - desk_h,
+    )
+
+
+def _slide_along(rect, base_rect, side, placed, tolerance=2.0):
+    """Keep the shared edge, and move ALONG it until there is room.
+
+    Physical sizes do not have to pack the way pixel rectangles did: a 24"
+    panel drawn beside a 17" one protrudes past both its neighbour's edges,
+    into desk space its pixels never occupied, and a screen seeded flush
+    against that neighbour can land on it. Pushing the newcomer off the way it
+    came breaks the edge it was seeded on -- and that edge is the arrangement,
+    the thing Windows actually said. Sliding along the edge keeps it: the
+    screen stays flush against the neighbour it belongs to and sits further
+    down it, which is what a person with two monitors and one desk would do.
+
+    Candidates are the seed itself and every position flush past a screen
+    already placed, nearest first, and each has to leave the newcomer both
+    clear of everything and still genuinely overlapping the neighbour it was
+    seeded from -- a slide that runs off the end of the shared edge has kept
+    the edge and lost the contact. None means nothing along the edge works and
+    the caller should fall back to the ordinary push.
+    """
+    x, y, width, height = rect
+    # A horizontal shared edge (one screen above the other) is slid along x.
+    axis_x = side in ("below", "above")
+    start, size = (x, width) if axis_x else (y, height)
+    base_lo, base_size = ((base_rect[0], base_rect[2]) if axis_x
+                          else (base_rect[1], base_rect[3]))
+    options = {start}
+    for ox, oy, ow, oh in placed:
+        lo, span = (ox, ow) if axis_x else (oy, oh)
+        options.add(lo - size)
+        options.add(lo + span)
+    for option in sorted(options,
+                         key=lambda value: (abs(value - start), value)):
+        if min(option + size, base_lo + base_size) - max(option, base_lo) <= 0:
+            continue
+        candidate = ((option, y, width, height) if axis_x
+                     else (x, option, width, height))
+        if not any(rects_overlap(candidate, other, tolerance)
+                   for other in placed):
+            return int(candidate[0]), int(candidate[1])
+    return None
+
+
+def _escape(base, monitor, side=None):
+    """The axis and direction Windows puts `monitor` on: ("x"|"y", +1/-1).
+
+    Only ever spent as _push_out's last resort, so it answers for every pair
+    including two screens Windows has stacked on the same rectangle -- there
+    the centres coincide, and the tie falls to downward, which is where a
+    duplicated display has always been drawn."""
+    if side:
+        return {"right": ("x", 1), "left": ("x", -1),
+                "below": ("y", 1), "above": ("y", -1)}[side]
+    dx = ((int(monitor["x"]) + int(monitor["w"]) / 2.0)
+          - (int(base["x"]) + int(base["w"]) / 2.0))
+    dy = ((int(monitor["y"]) + int(monitor["h"]) / 2.0)
+          - (int(base["y"]) + int(base["h"]) / 2.0))
+    if abs(dx) > abs(dy):
+        return ("x", 1 if dx >= 0 else -1)
+    return ("y", 1 if dy >= 0 else -1)
+
+
+def _union_escape(rect, placed):
+    """Which way out of `placed` is shortest for `rect`, as ("x"|"y", +1/-1).
+
+    Used when the caller has no opinion. The four ways out are compared by how
+    far each moves the rectangle, so an unhinted escape is still the short one.
+    """
+    x, y, width, height = rect
+    left = min(ox for ox, _oy, _ow, _oh in placed)
+    right = max(ox + ow for ox, _oy, ow, _oh in placed)
+    top = min(oy for _ox, oy, _ow, _oh in placed)
+    bottom = max(oy + oh for _ox, oy, _ow, oh in placed)
+    dx = (x + width / 2.0) - (left + right) / 2.0
+    dy = (y + height / 2.0) - (top + bottom) / 2.0
+    cost_x = (right - x) if dx >= 0 else (x + width - left)
+    cost_y = (bottom - y) if dy >= 0 else (y + height - top)
+    if cost_x <= cost_y:
+        return ("x", 1 if dx >= 0 else -1)
+    return ("y", 1 if dy >= 0 else -1)
+
+
+def _push_out(rect, placed, tolerance=2.0, escape=None):
     """Move a rectangle off anything it landed on top of, the short way.
 
     Two PC screens can share one pixel rectangle -- that is what Windows calls
     duplicating a display -- and a desk cannot draw one on top of the other. A
-    rectangle that still overlaps after the snap is pushed clear along the axis
+    rectangle that still overlaps after the seed is pushed clear along the axis
     it has penetrated LEAST, which is both the shortest way out and the one
-    that leaves the arrangement recognisable."""
+    that leaves the arrangement recognisable.
+
+    Those passes can also FAIL. Two neighbours can stand either side of a
+    rectangle and hand it back and forth -- each push lands it on the other,
+    the passes run out, and this used to return the last position it tried,
+    still overlapping, with nothing said. The caller then appended a known-bad
+    rectangle to `placed` and every later screen was measured against a screen
+    that was not really there. So the result is re-tested,
+    and a rectangle that is still colliding is put FLUSH BEYOND the union of
+    everything placed, on the axis and in the direction Windows puts it. That
+    position is always clear, because nothing placed reaches past the union, so
+    this returns a legal rectangle or does not return.
+
+    `escape` is that direction as ("x"|"y", +1/-1) -- the caller knows where
+    Windows has the screen. Without one it is derived from the rectangle's own
+    position (_union_escape), which keeps the answer deterministic either way.
+    """
     x, y, width, height = rect
     for _pass in range(len(placed) + 1):
         moved = False
@@ -344,11 +565,103 @@ def _push_out(rect, placed, tolerance=2.0):
             moved = True
         if not moved:
             break
+    if not placed or not any(
+            rects_overlap((x, y, width, height), other, tolerance)
+            for other in placed):
+        return int(round(x)), int(round(y))
+    axis, sign = escape or _union_escape((x, y, width, height), placed)
+    if axis == "x":
+        x = (max(ox + ow for ox, _oy, ow, _oh in placed) if sign > 0
+             else min(ox for ox, _oy, _ow, _oh in placed) - width)
+    else:
+        y = (max(oy + oh for _ox, oy, _ow, oh in placed) if sign > 0
+             else min(oy for _ox, oy, _ow, _oh in placed) - height)
     return int(round(x)), int(round(y))
 
 
+def _shift_cost(shift):
+    """Order candidate block translations: least movement first, then fixed."""
+    dx, dy = shift
+    return (abs(dx) + abs(dy), abs(dx), abs(dy), dx, dy)
+
+
+def _block_shift(rects, obstacles, tolerance=2.0):
+    """The smallest translation that lifts the whole block off the devices.
+
+    The PC's screens are arranged by Windows and the DEVICES are arranged by
+    the user, and neither knows about the other: load a saved desk whose
+    primary has since changed, or plug in a screen that was not there before,
+    and the block is re-derived straight through an iPad. Moving the one screen
+    that landed on something would be worse than the overlap -- the block would
+    then disagree with Windows, which is the fault the block exists to prevent
+    -- so the block moves as ONE thing.
+
+    Candidates are the translations that put some PC screen flush beyond some
+    device screen, plus the four that clear the devices' union outright. The
+    union four are always clear, so a clear position always exists and this
+    never has to return a known-bad one; the rest are tried first because they
+    move the block less. Trying them in order of MOVEMENT is also what keeps
+    the anchor honest: a block that already sits clear does not move at all,
+    and one that does not moves as little as the devices allow.
+    """
+    rects = [tuple(float(value) for value in row) for row in (rects or [])]
+    obstacles = [tuple(float(value) for value in row)
+                 for row in (obstacles or [])]
+    if not rects or not obstacles:
+        return (0, 0)
+
+    def clear(shift):
+        dx, dy = shift
+        return not any(
+            rects_overlap((x + dx, y + dy, width, height), obstacle, tolerance)
+            for x, y, width, height in rects for obstacle in obstacles)
+
+    if clear((0.0, 0.0)):
+        return (0, 0)
+    xs, ys = {0.0}, {0.0}
+    for ox, oy, ow, oh in obstacles:
+        for x, y, width, height in rects:
+            xs.add(ox + ow - x)
+            xs.add(ox - (x + width))
+            ys.add(oy + oh - y)
+            ys.add(oy - (y + height))
+    xs.add(max(ox + ow for ox, _oy, ow, _oh in obstacles)
+           - min(x for x, _y, _w, _h in rects))
+    xs.add(min(ox for ox, _oy, _ow, _oh in obstacles)
+           - max(x + width for x, _y, width, _h in rects))
+    ys.add(max(oy + oh for _ox, oy, _ow, oh in obstacles)
+           - min(y for _x, y, _w, _h in rects))
+    ys.add(min(oy for _ox, oy, _ow, _oh in obstacles)
+           - max(y + height for _x, y, _w, height in rects))
+    ordered_x = sorted(xs, key=lambda value: (abs(value), value))
+    ordered_y = sorted(ys, key=lambda value: (abs(value), value))
+    # Straight moves first, then the diagonals -- a corner can be nearer than
+    # either edge. The diagonal fan is capped so the search stays bounded on a
+    # desk with many device screens; the guaranteed union moves are in the
+    # straight list, so the cap can never cost the answer.
+    candidates = ([(dx, 0.0) for dx in ordered_x]
+                  + [(0.0, dy) for dy in ordered_y]
+                  + [(dx, dy) for dx in ordered_x[:_SHIFT_FAN]
+                     for dy in ordered_y[:_SHIFT_FAN]])
+    for shift in sorted(set(candidates), key=_shift_cost):
+        if clear(shift):
+            return (int(round(shift[0])), int(round(shift[1])))
+    return (0, 0)
+
+
+def _pixel_gap(first, second):
+    """How far apart two monitors are in WINDOWS pixels, rectangle to
+    rectangle. Zero for anything touching or overlapping."""
+    across = max(int(first["x"]) - (int(second["x"]) + int(second["w"])),
+                 int(second["x"]) - (int(first["x"]) + int(first["w"])), 0)
+    down = max(int(first["y"]) - (int(second["y"]) + int(second["h"])),
+               int(second["y"]) - (int(first["y"]) + int(first["h"])), 0)
+    return (float(across) ** 2 + float(down) ** 2) ** 0.5
+
+
 def pc_block_layout(monitors: list[dict],
-                    anchor: tuple[float, float] | None = None) -> list[dict]:
+                    anchor: tuple[float, float] | None = None,
+                    obstacles: list[tuple] | None = None) -> list[dict]:
     """Place this PC's screens on the desk the way WINDOWS has them.
 
     THE PC BLOCK FOLLOWS WINDOWS. Where the PC's own screens sit relative to
@@ -360,12 +673,27 @@ def pc_block_layout(monitors: list[dict],
     pictures looked perfectly plausible. What the user still positions is where
     the block as a whole SITS among the devices, and that is the anchor.
 
-    Every monitor is seeded from its Windows offset to the primary, scaled by
-    the PRIMARY's desk-units-per-pixel ratio, and then snapped against the
-    screens already placed -- two panels with the same pixel size but different
-    physical size must still touch on the desk, and only the snap can close that
-    difference. Placement runs primary first, then outwards by pixel distance,
-    so a screen is never snapped against a neighbour that has not been placed.
+    Each screen is placed off the screen it TOUCHES. Walking outwards from the
+    anchor over Windows' own adjacency graph, every monitor's shared edge is
+    mapped exactly and only its offset along that edge is scaled -- through the
+    ratio of the NEIGHBOUR it touches, the panel it is being measured from.
+    Scaling everything by the primary's ratio instead is what used to take a
+    mixed-size block apart. Over 400 Windows-legal desks of each size that
+    dropped an adjacency Windows had on 24.5% of three-screen desks and 44.5%
+    of four-screen ones, and drew one screen on top of another on 6.5% of
+    five-screen ones -- in one of those a 14" laptop panel landed exactly on
+    the primary, at (0, 0).
+
+    A monitor that touches nothing placed -- a real gap in Windows -- is the
+    one case with no shared edge to map. It is seeded proportionally from its
+    nearest placed neighbour instead, and left where that puts it: a gap
+    Windows reports is a fact about the desk, not damage to be repaired.
+
+    `obstacles` are the DEVICE rectangles already on the desk. The PC's screens
+    and the devices are arranged by different authorities, so a re-derived
+    block can land on an iPad; when it does the whole block is translated clear
+    (see _block_shift) rather than one screen being moved out of formation.
+    None or [] skips that entirely.
 
     Input rows carry Windows' own x/y/w/h and primary flag plus an already
     derived layout_w/layout_h; NEW dicts come back with layout_x/layout_y set
@@ -385,23 +713,63 @@ def pc_block_layout(monitors: list[dict],
                   primary.get("layout_y", primary.get("y", 0)))
     anchor = (int(round(float(anchor[0]))), int(round(float(anchor[1]))))
     primary["layout_x"], primary["layout_y"] = anchor
-    placed = [_monitor_layout(primary)]
+    placed = [primary]
+    rects = [_monitor_layout(primary)]
+    # Sorted by name, and the walk below always takes the first match, so the
+    # arrangement is a function of the hardware rather than of whatever order
+    # EnumDisplayMonitors happened to return this run.
+    remaining = sorted((row for row in rows if row is not primary),
+                       key=lambda row: str(row.get("name", "")))
 
-    def distance(row):
-        # Ties broken by name so the order is a function of the hardware and
-        # not of whatever sequence EnumDisplayMonitors happened to return.
-        dx = float(int(row["x"]) - int(primary["x"]))
-        dy = float(int(row["y"]) - int(primary["y"]))
-        return ((dx * dx + dy * dy) ** 0.5, str(row.get("name", "")))
-
-    for row in sorted((r for r in rows if r is not primary), key=distance):
+    while remaining:
+        step = None
+        for base in placed:
+            for row in remaining:
+                side = _windows_side(base, row)
+                if side:
+                    step = (base, row, side)
+                    break
+            if step:
+                break
+        if step is not None:
+            base, row, side = step
+            seed = _edge_seed(base, _monitor_layout(base), row, side)
+        else:
+            # Nothing left touches anything placed. Windows' own settings page
+            # will not leave a gap, but the enumerator is not the settings
+            # page, and whatever it reports still has to come out legible.
+            base, row = min(
+                ((base, row) for base in placed for row in remaining),
+                key=lambda pair: (_pixel_gap(*pair),
+                                  str(pair[1].get("name", "")),
+                                  str(pair[0].get("name", ""))))
+            side = None
+            seed = _block_seed(
+                base, row, (base["layout_x"], base["layout_y"]))
         _rx, _ry, width, height = _monitor_layout(row)
-        seed_x, seed_y = _block_seed(primary, row, anchor)
-        x, y = snap_rect_to_neighbors(
-            (int(round(seed_x)), int(round(seed_y)), width, height), placed)
-        x, y = _push_out((x, y, width, height), placed)
+        seeded = (int(round(seed[0])), int(round(seed[1])), width, height)
+        # A screen seeded off an edge keeps that edge if there is any way to:
+        # it slides along it rather than being pushed off it. Only a screen
+        # with no shared edge to keep, or one with nowhere along it to go, is
+        # left to the push -- which never returns an overlapping position.
+        slid = (_slide_along(seeded, _monitor_layout(base), side, rects)
+                if side is not None else None)
+        x, y = slid or _push_out(
+            seeded, rects, escape=_escape(base, row, side))
         row["layout_x"], row["layout_y"] = int(x), int(y)
-        placed.append((int(x), int(y), width, height))
+        placed.append(row)
+        rects.append((int(x), int(y), width, height))
+        # By IDENTITY. list.remove compares by VALUE, and these are dicts: two
+        # rows that happened to be equal would see the wrong one dropped and
+        # the placed one walked over again, on a list this loop is draining.
+        remaining = [other for other in remaining if other is not row]
+
+    shift_x, shift_y = _block_shift(
+        [_monitor_layout(row) for row in rows], obstacles)
+    if shift_x or shift_y:
+        for row in rows:
+            row["layout_x"] += shift_x
+            row["layout_y"] += shift_y
     return rows
 
 
@@ -419,24 +787,38 @@ def _saved_block_anchor(monitors, saved_by_name):
     have a saved position keeps it, and only the arrangement WITHIN the block
     is re-derived. None means nothing was ever placed and the primary keeps
     whatever position it already has.
+
+    Which screen that is has to be settled by NAME, not by enumeration order.
+    Two panels can both carry a saved position, EnumDisplayMonitors does not
+    promise an order, and pinning the whole PC to whichever one came back first
+    would move the desk between launches with nothing at all having changed.
     """
     if not monitors:
         return None
     primary = next((row for row in monitors if row.get("primary")), monitors[0])
-    ordered = [primary] + [row for row in monitors if row is not primary]
+    ordered = [primary] + sorted(
+        (row for row in monitors if row is not primary),
+        key=lambda row: str(row.get("name", "")))
     for row in ordered:
         saved = saved_by_name.get(str(row.get("name", ""))) or {}
         if saved.get("layout_x") is None or saved.get("layout_y") is None:
             continue
         if row is primary:
             return (int(saved["layout_x"]), int(saved["layout_y"]))
-        offset_x, offset_y = _block_seed(primary, row, (0, 0))
-        return (int(round(float(saved["layout_x"]) - offset_x)),
-                int(round(float(saved["layout_y"]) - offset_y)))
+        # Where this screen ends up when the block is pinned at the origin --
+        # asked of the layout itself rather than recomputed from a formula
+        # beside it, so the anchor cannot drift away from the placement it is
+        # supposed to invert.
+        index = next(slot for slot, other in enumerate(monitors)
+                     if other is row)
+        probe = pc_block_layout(monitors, anchor=(0, 0))[index]
+        return (int(round(float(saved["layout_x"]) - probe["layout_x"])),
+                int(round(float(saved["layout_y"]) - probe["layout_y"])))
     return None
 
 
-def merge_live_monitors(saved_monitors, live_monitors, sizes=None):
+def merge_live_monitors(saved_monitors, live_monitors, sizes=None,
+                        obstacles=None):
     """Re-read Windows WITHOUT discarding what only the user can know.
 
     Windows owns a local monitor's position, resolution, refresh rate and which
@@ -467,6 +849,14 @@ def merge_live_monitors(saved_monitors, live_monitors, sizes=None):
     It is the one input the arrangement always needed and nothing supplied, and
     it ranks below a diagonal somebody typed deliberately -- see
     _effective_diagonal. Passing None or {} leaves every size exactly as it was.
+
+    `obstacles` are the DEVICE rectangles this desk already has, as (x, y, w, h)
+    in desk units -- openspan's canvas hands over its own device_rects(). A
+    screen that comes back after being unplugged is placed from Windows, and
+    Windows has never heard of the iPad the user parked beside the primary, so
+    without them the returning screen is drawn straight through it. With them
+    the whole block steps clear. None (the default) behaves exactly as this
+    always did, which keeps every existing caller correct.
 
     Returns (monitors, report). The report names what actually changed, so the
     caller can say so instead of silently rewriting the desk.
@@ -528,8 +918,11 @@ def merge_live_monitors(saved_monitors, live_monitors, sizes=None):
     # The PC's screens are re-arranged from Windows on every re-read, for the
     # same reason they are on every load: Windows is the authority on where its
     # own screens are, and this is the moment its answer just changed. The
-    # block as a whole stays where the user put it -- see _saved_block_anchor.
-    merged = pc_block_layout(merged, _saved_block_anchor(merged, saved_by_name))
+    # block as a whole stays where the user put it -- see _saved_block_anchor --
+    # unless staying there would put it on a device, which only the caller
+    # knows about.
+    merged = pc_block_layout(merged, _saved_block_anchor(merged, saved_by_name),
+                             obstacles=obstacles)
     return merged, report
 
 
@@ -590,11 +983,41 @@ def dedupe_display_ids(config):
     return renamed
 
 
+_LAST_NORMALIZE_RESIZED = []
+
+
+def last_normalize_report():
+    """What the last normalize_config() call RESIZED: [(name, old, new), ...].
+
+    A screen redrawn because its EDID was finally read is a change to the
+    picture, and the merge path has always reported it. Loading a config does
+    the same resizing and reported nothing, so a launch could redraw a screen
+    smaller in silence.
+
+    It is reported HERE rather than in the returned config because that config
+    is written back to disk verbatim. normalize_config's result is the config
+    itself; openspan's adopt() copies any top-level key it does not recognise
+    straight through, and _persist json.dumps the whole thing into
+    openspan_config.json and into every saved arrangement. A "_resized" key
+    would therefore leak into the file and outlive the load it described.
+
+    Module state, so it describes the LAST call in this process and nothing
+    else: read it immediately after the call whose answer you want. Cleared at
+    the start of every call, so a call that raises leaves no stale answer
+    looking current, and a copy comes back so a reader cannot rewrite what the
+    next one sees.
+    """
+    return list(_LAST_NORMALIZE_RESIZED)
+
+
 def normalize_config(raw, live_monitors, sizes=None):
     """Return a complete v2 config while preserving every v1 iPad setting.
 
     `sizes` maps GDI name -> diagonal in inches from each panel's EDID; a
-    diagonal the user typed still outranks it. None or {} changes nothing."""
+    diagonal the user typed still outranks it. None or {} changes nothing.
+    Any screen this resizes is named in last_normalize_report()."""
+    global _LAST_NORMALIZE_RESIZED
+    _LAST_NORMALIZE_RESIZED = []
     if not live_monitors:
         raise ValueError("at least one Windows monitor is required")
     raw = raw if isinstance(raw, dict) else {}
@@ -603,19 +1026,18 @@ def normalize_config(raw, live_monitors, sizes=None):
         for row in raw.get("monitors", [])
         if isinstance(row, dict)
     }
-    monitors = [
-        _normalize_monitor(
-            row, saved_monitors.get(str(row.get("name", ""))), sizes)
-        for row in live_monitors
-    ]
-    # The PC's own screens are arranged in Windows Display Settings, so their
-    # positions relative to each other are re-derived from Windows on every
-    # load rather than read back from the file. Only where the block SITS among
-    # the devices is remembered -- see pc_block_layout and _saved_block_anchor.
-    # This runs before the one-time device snap below, so a device that snaps
-    # to a monitor snaps to where that monitor actually ends up.
-    monitors = pc_block_layout(
-        monitors, _saved_block_anchor(monitors, saved_monitors))
+    monitors = []
+    resized = []
+    for row in live_monitors:
+        saved = saved_monitors.get(str(row.get("name", "")))
+        monitor = _normalize_monitor(row, saved, sizes)
+        if _diagonal_changed((saved or {}).get("diagonal_in"),
+                             monitor.get("diagonal_in")):
+            resized.append((str(row.get("name", "")),
+                            (saved or {}).get("diagonal_in"),
+                            monitor.get("diagonal_in")))
+        monitors.append(monitor)
+    _LAST_NORMALIZE_RESIZED = resized
 
     # v3 reads `devices`. v2 configs carried `targets` (with a hardcoded
     # ipad/mac kind) and v1 carried a single bare `ipad` rectangle -- both are
@@ -724,6 +1146,25 @@ def normalize_config(raw, live_monitors, sizes=None):
                 if isinstance(target.get("modifier_remap"), dict) else None),
             "displays": displays,
         })
+
+    # The PC's own screens are arranged in Windows Display Settings, so their
+    # positions relative to each other are re-derived from Windows on every
+    # load rather than read back from the file. Only where the block SITS among
+    # the devices is remembered -- see pc_block_layout and _saved_block_anchor.
+    #
+    # It runs HERE, after the devices, because it needs to know where they are.
+    # It used to run before them and could only see the PC, so loading a saved
+    # arrangement whose primary had since changed re-derived the block straight
+    # through a device screen: the "Mac 2k 2" arrangement put DISPLAY4 on top
+    # of the Mac's third display and the desk lost five of its six portals. The
+    # devices are DATA to this -- their rectangles are read, never moved --
+    # and it still runs before the one-time snap below, so a device that snaps
+    # to a monitor snaps to where that monitor actually ends up.
+    monitors = pc_block_layout(
+        monitors, _saved_block_anchor(monitors, saved_monitors),
+        obstacles=[(display["x"], display["y"], display["w"], display["h"])
+                   for device in devices if device.get("enabled", True)
+                   for display in device.get("displays", [])])
 
     # NOTHING is fabricated. A config with no devices stays empty and the user
     # adds what they actually own -- no assumed iPad, no assumed Mac, no

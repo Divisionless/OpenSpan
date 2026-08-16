@@ -147,6 +147,42 @@ canvas._release(None)
 check("touching is not overlapping -- a flush drop is kept",
       (ipad["x"], ipad["y"]) == (block[0] + block[2], block[1]) and saved)
 
+# ---- 4b. an ALREADY overlapping desk can still be nudged apart --------------
+# The refusal compares against what was overlapping at press. Without that
+# baseline an overlapping desk is locked: every drop is "still overlapping".
+ipad["x"], ipad["y"] = m5["layout_x"] + 100, m5["layout_y"] + 100   # start ON the PC
+canvas.selected = IPAD
+canvas.action = "move"
+canvas._press_rect = (ipad["x"], ipad["y"], ipad["w"], ipad["h"])
+canvas._press_layout = {IPAD: (ipad["x"], ipad["y"])}
+canvas._press_over = set(canvas._overlaps_another())
+check("the baseline sees the pre-existing overlap", canvas._press_over)
+ipad["x"] = m5["layout_x"] + 300                                     # still on it, but moved
+saved.clear()
+canvas._release(None)
+check("a drop that does not ADD an overlap is kept, so the desk can be untangled",
+      ipad["x"] == m5["layout_x"] + 300 and saved)
+# put the iPad back beside the block for the checks below
+block = canvas._block_rect()
+ipad["x"], ipad["y"] = block[0] + block[2], block[1]
+
+# ---- 4c. resizing one PC screen re-settles the block, never leaves it lying
+#          across a sibling
+m4["diagonal_in"], m4["diagonal_source"] = 27.0, "user"
+m4["layout_w"], m4["layout_h"] = A.physical_size(27.0, m4["w"], m4["h"], 0)
+canvas.relayout_pc()
+r5, r4 = canvas._monitor_rect(m5), canvas._monitor_rect(m4)
+check("after a typed 27\" on DISPLAY4 the block re-settles: no PC-on-PC overlap",
+      not A.rects_overlap(r5, r4), f"{r4} vs {r5}")
+check("and DISPLAY4 still touches the primary's left edge",
+      abs((r4[0] + r4[2]) - r5[0]) <= 3, f"{r4} vs {r5}")
+check("the primary did not move -- the PC stays where it sits among the devices",
+      (m5["layout_x"], m5["layout_y"]) == (r5[0], r5[1]))
+# restore
+m4["diagonal_in"], m4["diagonal_source"] = 15.7, "edid"
+m4["layout_w"], m4["layout_h"] = A.physical_size(15.7, m4["w"], m4["h"], 0)
+canvas.relayout_pc()
+
 # ---- 5. numbering and the primary mark --------------------------------------
 
 nums = {n: canvas._monitor_number(n) for n in names}
@@ -197,8 +233,8 @@ src = open(os.path.join(HERE, "openspan.py"), encoding="utf-8").read()
 check("adopt hands EDID sizes to normalize_config",
       re.search(r"normalize_config\(raw, live or enum_monitors\(\),\s*sizes=monitor_sizes\(\)\)", src) is not None)
 check("refresh hands EDID sizes to the merge",
-      "merge_live_monitors(self.canvas.monitors, live,\n                                             sizes=monitor_sizes())" in src
-      or re.search(r"merge_live_monitors\(self\.canvas\.monitors, live,\s*sizes=monitor_sizes\(\)\)", src) is not None)
+      re.search(r"merge_live_monitors\(\s*self\.canvas\.monitors,\s*live,"
+                r"\s*sizes=monitor_sizes\(\)", src) is not None)
 check("a typed diagonal is marked as the user's, so EDID cannot override it",
       'item["diagonal_source"] = "user"' in src)
 check("the refresh path repeats any screen the enumerator could not read",
@@ -211,6 +247,18 @@ check("and on both right-click menus",
       src.count("self.canvas.identify_screens") >= 3)
 check("monitor_sizes never raises -- EDID is an input, not a dependency",
       re.search(r"def monitor_sizes\(\):[\s\S]{0,900}except Exception", src) is not None)
+check("loading says what it resized, instead of redrawing a screen smaller in silence",
+      "tell_after_load" in src and "loaded — " in src)
+check("both diagonal write paths mark the value as typed and re-settle the block",
+      src.count('["diagonal_source"] = "user"') >= 2
+      and src.count("relayout_pc()") >= 2)
+check("the drop refusal is one shared rule with the load path (rects_overlap)",
+      "rects_overlap(mine, self._rect(other_key, other))" in src
+      and "OVERLAP_TOLERANCE" not in src)
+check("the hint says the PC moves as one block",
+      "This PC moves as one block" in src)
+check("the merge is told where the devices are, so a returning screen cannot land on one",
+      "obstacles=self.canvas.device_rects()" in src)
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
