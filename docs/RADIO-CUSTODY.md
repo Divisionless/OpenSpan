@@ -225,14 +225,30 @@ currently has the device attached (checked via `VBoxManage showvminfo
 
 ## 6. Recovering the CURRENT wedge — this part is Doug's hands
 
-No software here can fix a phantom. The node is registered and not enumerated;
-`pnputil /restart-device` answers *"not connected"*, and that is the end of what
-code can do.
+Look at the PROXY node first, not the real one. Under a runtime capture the real
+node (`USB\VID_8087&PID_0AAA\…`) is always `present = False`; what matters is
+whether `USB\VID_80EE&PID_CAFE\<same suffix>` exists and is present. Two cases:
 
-* **A TP-Link dongle:** unplug it and plug it back in. A fresh arrival is a new
-  device object. One replug has historically completed every pending capture at
-  once.
-* **The built-in Intel radio:** there is no plug, so the recovery is a Windows
+* **Proxy present and OK, VirtualBox says `Unavailable`** — the 2026-08-16 shape.
+  The device is held by `VBoxUSB.sys` but VirtualBox cannot open it. The single
+  sanctioned kick, proven that day on Doug's word:
+
+      pnputil /restart-device "USB\VID_80EE&PID_CAFE\5&3B2D9A0D&0&14"
+
+  (the Intel's proxy id; take it from `radio_custody.py audit`). One restart of
+  that one node — surprise-remove and re-enumerate on its port — took the Intel
+  from `Unavailable` to `Captured` in 8 s and the iPad lane's daemon answered
+  within a minute. This is a *software replug*, not churn: one call, one node,
+  the TP-Links and the VM untouched. Do it once; if it comes back `Unavailable`
+  again the firmware is hosed and only a power cycle reaches it (below).
+* **No proxy at all, real node registered but not enumerated** — the true
+  phantom. `pnputil /restart-device` answers *"not connected"* and that is the
+  end of what code can do:
+  * **A TP-Link dongle:** unplug it and plug it back in. A fresh arrival is a
+    new device object. One replug has historically completed every pending
+    capture at once (2026-08-08) — but not always (2026-08-16: it re-captured
+    itself and did nothing for the Intel).
+* **The built-in Intel radio, truly phantom:** there is no plug, so the recovery is a Windows
   restart — but **restart Windows only with NO VM CAPTURES HELD.** Power the VM
   off, run `VBoxManage list usbhost` and confirm no radio reads `Captured`, and
   only then restart. A bare restart with captures still armed re-runs the same

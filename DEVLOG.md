@@ -2340,13 +2340,19 @@ codebase had to learn twice — **VirtualBox holding a live runtime capture on
 that radio**. Rewriting the real node's driver under a live capture is the
 layered ownership that wedged this stack before.
 
-**The state changed under us, and that is worth recording.** Between the first
-read of this session and the last, the Intel radio recovered on its own: it
-went from `Unavailable` with no proxy to `Captured`, attached to the VM, with a
-live proxy node. Nothing in this session touched it — the work was read-only —
-so it was the running app's own explicit-handoff PnP kick. It means the wedge
-is intermittent, not permanent, and it means the audit had better report what
-is true now rather than what a brief said an hour ago. It does.
+**The state changed under us, and that is worth recording — correctly.** Between
+the first read of this session and the last, the Intel radio went from
+`Unavailable` (proxy node present and OK, VirtualBox unable to open it) to
+`Captured`, attached to the VM. It did NOT recover on its own: at 14:4x the
+main session, on Doug's "do it", ran exactly one
+`pnputil /restart-device "USB\VID_80EE&PID_CAFE\5&3B2D9A0D&0&14"` on the
+**proxy** node — the ledger's rule that a restart works only while a node is not
+phantom, applied to the node that IS present under a runtime capture. Port 14
+was `Captured` 8 s later and the iPad lane's daemon answered within a minute.
+Doug's earlier physical replug of a TP-Link had NOT un-stuck it this time. So:
+the software replug of the proxy node is the sanctioned single kick for a
+built-in radio, before any talk of restarting Windows. The wedge is
+intermittent, and the audit reports what is true now, not what a brief said.
 
 **Not verified, deliberately.** `SPDRP_CLASSGUID` appears on its MSDN page both
 as settable ("*DeviceInfoData.ClassGuid* is set upon return to the new class")

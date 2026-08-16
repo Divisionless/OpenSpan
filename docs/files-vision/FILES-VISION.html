@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EsotericOS Files — What Pains the People</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#121216;--surface:#1A1A20;--raised:#222229;--border:#2E2E37;--sub:#26262E;--t1:#ECEBF0;--t2:#9C9AA8;--t3:#5D5B68;--acc:#9A8FD0;--accb:#B3A7EA;--ok:#8FC9A2;--warn:#D9C08A;--danger:#D98A8A}
+*{box-sizing:border-box}html,body{background:var(--bg);color:var(--t1);font:15px/1.55 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;margin:0}
+main{max-width:1040px;margin:0 auto;padding:40px 28px 80px}
+h1{font-family:"Segoe UI Variable Display","Segoe UI",sans-serif;font-size:30px;font-weight:600;margin:0 0 4px}
+h2{font-family:"Segoe UI Variable Display","Segoe UI",sans-serif;font-size:20px;font-weight:600;color:var(--acc);margin:40px 0 10px;border-top:1px solid var(--sub);padding-top:22px}
+h3{font-size:15px;font-weight:600;margin:20px 0 6px;color:var(--accb)}
+p{margin:8px 0}.lede{color:var(--t2);font-size:16px}.meta{color:var(--t3);font-size:13px}
+table{border-collapse:collapse;width:100%;margin:10px 0 6px;font-size:13.5px}th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--sub)}th{color:var(--t2);font-weight:600}
+td.k{color:var(--t1);font-weight:600;white-space:nowrap}
+.card{background:var(--surface);border:1px solid var(--sub);border-radius:8px;padding:16px 18px;margin:12px 0}
+.wound{border-left:3px solid var(--danger)}.cure{border-left:3px solid var(--ok)}.keep{border-left:3px solid var(--acc)}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:5px;background:var(--raised);color:var(--t2);margin-right:4px}
+.tag.win{color:#9cc4e8}.tag.mac{color:#e8c99c}.tag.lin{color:#9ce8b8}
+a{color:var(--accb);text-decoration:none}a:hover{text-decoration:underline}
+code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;background:var(--raised);padding:1px 5px;border-radius:4px}
+ul{margin:6px 0 6px 18px;padding:0}li{margin:3px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.spine{background:linear-gradient(180deg,var(--surface),var(--bg));border:1px solid var(--border);border-radius:8px;padding:20px 22px;margin:14px 0}
+.spine h3{margin-top:0}
+</style></head><body><main>
+<h1>EsotericOS Files</h1>
+<p class="lede">What pains the people — on Windows, macOS and Linux — and how we free them of it.</p>
+<p class="meta">Synthesis by Fable 5, 2026-08-16, from three cited surveys (Windows 27 items · macOS 28 · Linux 27): <a href="research-windows.md">research-windows.md</a> · <a href="research-macos.md">research-macos.md</a> · <a href="research-linux.md">research-linux.md</a>. Every claim below traces to a row there. Where the row is marked UNVERIFIED it is treated as a hint, not a fact.</p>
+
+<h2>What the boards say when you read all three at once</h2>
+<p>Read separately, each platform's complaints look local: Windows has MAX_PATH, macOS has no Cut, GNOME removed type-ahead. Read together, <strong>the same seven wounds appear on every board</strong>, decades apart, under different names. Nobody's file manager is bad at files. They are bad at <em>memory, honesty and identity</em> — and every alternative people pay for (Directory Opus, Total Commander, TeraCopy, Everything, Path Finder, ForkLift, Dolphin) sells one of those three back to them.</p>
+
+<h2>The seven wounds</h2>
+
+<div class="card wound"><h3>1 · Amnesia — it forgets how you left things</h3>
+<span class="tag win">Win #1 view settings don't stick (registry "Bags" capped at 5,000)</span> <span class="tag win">#8 Downloads forced group-by-date</span> <span class="tag mac">mac #3 view/window state resets</span> <span class="tag mac">#27 the spatial Finder was abandoned</span> <span class="tag lin">Linux #23 batch-rename dialog lost resizability</span>
+<p>The most-voted Windows complaint of the decade is a cache with a hard cap; Finder honours per-folder views only inside Home; Apple threw away spatial memory in 2007 and users have asked for it back ever since.</p></div>
+
+<div class="card wound"><h3>2 · It lies about operations</h3>
+<span class="tag win">Win #10 copy ETA (Raymond Chen, 2004, unchanged)</span> <span class="tag win">#11 "Calculating…" stall</span> <span class="tag win">#27 non-transactional undo</span> <span class="tag win">#12 accidental drag = move</span> <span class="tag mac">mac #2 ⌘Z can permanently delete</span> <span class="tag mac">#5 Replace / Merge / Keep Both roulette</span> <span class="tag lin">Linux #15 partial undo</span> <span class="tag lin">#16 conflict button flips</span>
+<p>Progress bars guess, conflicts are asked one dialog at a time, and undo is a hope rather than a record. TeraCopy exists because of this row alone.</p></div>
+
+<div class="card wound"><h3>3 · It goes blind — and takes the desktop with it</h3>
+<span class="tag win">Win #5 "file in use" never names the process</span> <span class="tag win">#6 unreachable drive freezes the shell 30–45 s</span> <span class="tag win">#7 SMB crawl</span> <span class="tag mac">mac #13 SMB + .DS_Store litter</span> <span class="tag mac">#15 trash on external volumes</span> <span class="tag lin">Linux #9 KIO/GVfs shares (still discussed by a KDE core dev, 2026)</span> <span class="tag lin">#25 blocking I/O on the main thread</span> <span class="tag lin">#27 disconnect silently shows Home</span>
+<p>Synchronous probes on the UI thread, and errors that hide the one fact you need.</p></div>
+
+<div class="card wound"><h3>4 · Search that doesn't find</h3>
+<span class="tag win">Win #2 indexer misses files; Everything is the cure people install</span> <span class="tag mac">mac #22 scope confusion</span> <span class="tag mac">#23 Spotlight exclusions & reindex loops</span> <span class="tag lin">Linux #6 Tracker CPU — advice is "disable it"</span>
+<p>Indexers cost too much and still miss; the tool everyone trusts (Everything) reads the MFT directly and never guesses.</p></div>
+
+<div class="card wound"><h3>5 · The right-click stopped being yours</h3>
+<span class="tag win">Win #3 "Show more options" (Microsoft admitted it, Jun 2026)</span> <span class="tag win">#13 in-process shell extensions freeze the menu</span> <span class="tag mac">mac #1 no Cut, by design, since 1984</span> <span class="tag lin">Linux #1 type-ahead removed, forks alive 10+ years</span>
+<p>Menus truncated for looks, extensions running inside the shell with no timeout, and a verb (Cut) withheld on principle.</p></div>
+
+<div class="card wound"><h3>6 · Names and paths as booby traps</h3>
+<span class="tag win">Win #4 MAX_PATH 260</span> <span class="tag win">#9 natural sort with no toggle</span> <span class="tag win">#21 F2/extension + weak batch rename</span> <span class="tag mac">mac #6 folders-first arrived 2016, still not in Open/Save</span> <span class="tag mac">#20 duplicate naming changed to "file 2 2 2"</span> <span class="tag mac">#17 batch rename limited</span> <span class="tag lin">Linux #17 case-only rename fails</span>
+<p>Rules that exist but are hidden, and rules that changed without a word.</p></div>
+
+<div class="card wound"><h3>7 · Preview and a split personality</h3>
+<span class="tag win">Win #15 no Quick Look for 15 years</span> <span class="tag win">#14 stale thumbnails</span> <span class="tag win">#17 dark-mode white flash</span> <span class="tag win">#24 Win95-era Properties dialog</span> <span class="tag mac">mac #19 Quick Look plugins broken by Sequoia</span> <span class="tag mac">#4 Tahoe broke column resizing</span> <span class="tag lin">Linux #4 GTK4 chooser (thumbnails after 18 years)</span> <span class="tag lin">#11 video thumbnails</span>
+<p>Two UI generations stitched together, and previews that depend on fragile in-process plugins.</p></div>
+
+<p class="meta">Adjacent, and treated honestly rather than "solved": cloud sync opacity (Win #23 OneDrive; mac #7–#12 iCloud evictions, "waiting to upload", the black box) — we do not own sync, but we will never hide its state; privacy defaults (Win #22 recents on by default).</p>
+
+<h2>What each platform got right — and we keep</h2>
+<div class="grid">
+<div class="card keep"><h3>Windows</h3><ul><li>Deep drag-and-drop with every app, Open With, property sheets — the shell integration alternatives must re-implement</li><li>Cut/Copy/Paste as first-class verbs since Win95</li><li>Everything's instant MFT search (third-party, but the bar)</li><li>TeraCopy's honest, resumable operations (third-party, but the bar)</li></ul></div>
+<div class="card keep"><h3>macOS</h3><ul><li>Quick Look — Space previews anything, arrows cycle</li><li>Spring-loaded folders</li><li>Column (Miller) view, path bar, ⌘⇧G Go to Folder</li><li>Undo of a move as a concept (once it is safe)</li></ul></div>
+<div class="card keep"><h3>Linux</h3><ul><li>Dolphin: split view (F3), embedded terminal in the current folder, F2 batch rename with counters</li><li>Drag-drop asks Move / Copy / Link</li><li>Thunar's speed; Nautilus's simplicity for beginners</li><li>KIO's protocol transparency as an idea (not its speed)</li></ul></div>
+<div class="card keep"><h3>Rules of thumb they all agree on</h3><ul><li>Folders first, always, everywhere — including pickers</li><li>Never block the window on I/O</li><li>Own the context menu; never let a plugin freeze it</li><li>Dark means dark in every dialog</li></ul></div>
+</div>
+
+<h2>How we free them — the spine of EsotericOS Files</h2>
+<div class="spine">
+<h3>I · A ledger, not a window</h3>
+<p>Every operation is <strong>planned → shown → done → recorded</strong>. Before anything moves, Files scans and shows the plan as a readable diff — collisions resolved once, per item or for all (Replace / Skip / Keep both), never one dialog at a time. It then executes with a per-item journal (what went where, from where, when), and the <strong>journal is a browsable timeline</strong>: "what happened to my files today" is a view, not a memory. Undo is a unit reversal of a journal entry — cross-volume undo <em>restores</em>, it never deletes (mac #2 becomes impossible). An accidental drag-move is one click back. Progress is bytes-honest: throughput and remaining, no ETA theatre; the copy starts immediately while enumeration streams. Partial failures land in the journal with the reason, and can be retried from there.</p>
+<h3>II · Identity, not paths</h3>
+<p>Files knows a file by <strong>volume + file identity</strong> (NTFS file ID / change journal), not by its path string. So per-folder view state, tags, thumbnails, recents and column widths <em>survive rename and move</em>, have no 5,000-folder cap, and cannot be lost to a registry cache. Long paths are simply paths (<code>\\?\</code> internally, never shown). Spatial memory returns as a choice: a folder can remember its window. Search has two honest engines — <strong>instant name search over the MFT/USN journal</strong> for local NTFS (Everything's approach, no daemon churn) and <strong>opt-in content search per folder</strong> — and the scope is always a visible chip ("in D:\_EsotericOS ▾"), never a guess.</p>
+<h3>III · Honesty surfaces</h3>
+<p>Every "why did that happen" has a visible answer. "File in use" <strong>names the process</strong> (Windows has the API — Restart Manager <code>RmGetList</code> — Explorer never calls it) and offers to close it. A disconnected share is a <strong>state card</strong>, not a freeze and not Home; every mount has its own timeout and cancel. Sync/dataless state is an attribute you can see and sort by. The sort rule is shown (natural / strict, folders first). Rename keeps the extension unselected; batch rename has regex, counters, casing and a <strong>live preview diff</strong>; case-only rename works on FAT; one duplicate-naming rule ("name (2)") everywhere. Cut exists, is undoable, and cut items dim without hiding their thumbnails (Linux #24). Extensions run <strong>out of process with a timeout</strong>: nothing a plugin does can freeze the menu. Recents are opt-in.</p>
+<h3>IV · One body, one skin</h3>
+<p>One framework end to end (WPF, EsotericOS tokens): no legacy dialog, no white flash, dark means dark. <strong>Space is Quick Look</strong>, built in, with previewers isolated in a helper process so a bad handler shows "preview unavailable" instead of taking the window. Thumbnails are keyed by identity + change journal, so they are never stale. Column view and split view are equals to list view; tabs are first-class; drag-and-drop shows its effect and asks Move / Copy / Link when it is ambiguous. And it lives where EsotericOS lives — same menu bar, same desk, same tray — so the shell and its files stop being two products.</p>
+</div>
+
+<h2>Where this stands, and where it goes</h2>
+<table><tr><th>Stage</th><th>Wounds it closes</th><th>Status</th></tr>
+<tr><td class="k">Alpha A · Browse</td><td>Amnesia (per-folder state, remembered), Names (natural sort + folders first, F2 keeps extension), part of 5 (our own menu, Copy full path)</td><td><span style="color:var(--ok)">landed</span> — shell@db6b2ff/26d52ea</td></tr>
+<tr><td class="k">Alpha B · Operate</td><td>Lies (collision panel first, progress strip, partial-failure list, Cut that dims not hides), tabs, column view, drag-and-drop with effect</td><td><span style="color:var(--warn)">in flight</span> (Opus)</td></tr>
+<tr><td class="k">C · The ledger</td><td>Journal-first operations + timeline + unit undo; identity DB (file ID keyed state); MFT/USN instant search with scope chip; Restart Manager "who has it open"; Quick Look with isolated previewers</td><td>next — board rows to follow</td></tr>
+<tr><td class="k">D · The rest of the desk</td><td>Batch rename with live diff; case-only rename; async network shares with state cards and no metadata litter; spring-loading; split view + terminal; tags (v1.37); Get Info (v1.39); out-of-process extension host</td><td>queued</td></tr>
+<tr><td class="k">Take-over</td><td>Default handler for folders, Win+E, "reveal" from other apps; then the shell swap makes it the only file surface</td><td>v3.M9 rows 110/113</td></tr>
+</table>
+<p class="meta">Design authority: the EsotericOS tokens (quiet dark, iris accent for selection/focus only). No native dialogs anywhere. Every rule above is meant to survive a hostile reader: if a claim here is not in the research files, it is a design decision and is labelled as ours.</p>
+</main></body></html>
