@@ -347,17 +347,21 @@ the built-in radio's recovery cost.
 running: `pnputil /restart-device` on the proxy → `Captured` in 10 s → daemon
 answered inside a minute. Second time that recovery has held.
 
-**Where this leaves the direction Doug set** ("exclusively taking control of
-this from Windows until the program is uninstalled"): the persistent binding is
-the right *idea* and the wrong *counterparty*. VirtualBox's runtime capture will
-always re-run its own teardown. The paths that genuinely stop it are (a) a
-transport that does not use VirtualBox's USB capture at all — USB/IP
-(`usbipd-win` binds the device to a stub driver once, persistently, and the
-Linux guest attaches it over TCP with `vhci-hcd`; no port cycle at VM start,
-and the same class-change bind we already wrote), or (b) a host-side owner
-that speaks to `VBoxUSB.sys` directly. Either is a design decision, not a
-patch; neither is started. Until one is chosen, `take` stays a dry-run-first
-tool that says plainly what it does and does not do.
+**Doug's ruling, 16:00 the same day.** "I need maximal control of all 3
+radios" and "Don't overdesign something." So the simple bind went on all three
+— Mac dongle, then the Intel (which had wedged on release again; **one
+proxy-node restart with the VM OFF** brought its real node back Started under
+the Intel driver, and the take then succeeded 6/6). Result: all three real
+nodes on `VBoxUSB`, `pnputil /enum-devices /class Bluetooth /connected` shows
+**no USB radio** — Windows has no Bluetooth adapter any more — and the VM took
+all three on its first start. What custody buys, stated exactly: `bthusb` never
+touches the radios again, on any boot; whether that lowers the wedge rate under
+VirtualBox's own teardown is what the launch audit will show over the coming
+days. The bigger redesigns (USB/IP stub bind; a host-side owner of
+`VBoxUSB.sys`) are **off the table** unless the audit says the wedge persists.
+The recovery ladder is unchanged: proxy-node restart first (VM on or off, both
+proven), replug for a dongle, and a Windows restart with no captures held for
+the Intel.
 
 ## 9. References
 

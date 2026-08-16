@@ -200,7 +200,7 @@ def custody_line(row):
     # 2026-08-16 (TP-Link 3C6AD23CD44E): the bind held, and VirtualBox tore
     # the node down and re-added its proxy at VM start exactly as before.
     tail = ("; a VBoxUSB bind keeps bthusb off it but does not stop the "
-            "VM-start teardown (see RADIO-CUSTODY.md \u00a79)")
+            "VM-start teardown (see RADIO-CUSTODY.md \u00a78)")
     if row.get("proxy_present") and not row.get("present"):
         return (f"{label} \u2014 Windows-owned ({service}), under a RUNTIME "
                 f"VirtualBox capture right now (host state "

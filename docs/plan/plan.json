@@ -2328,17 +2328,17 @@
       "hcidx": 131,
       "milestone": "v2.M8",
       "deps": [],
-      "title": "Radio custody v2 — DECISION (Doug): stop VirtualBox's capture teardown for real. Options: (a) USB/IP — usbipd-style persistent stub bind on the host (the class-change bind we already have) + vhci-hcd attach in the guest, no port cycle at VM start; (b) a host-side owner that drives VBoxUSB.sys directly. Live test 2026-08-16 refuted the VBoxUSB-on-real-node design (RADIO-CUSTODY.md §8)  [custody-v2]",
-      "why": "the Intel wedge still exists",
-      "estTokens": "decision: 0 · build: 600k–1M",
-      "costDrivers": "guest kernel module + host daemon + attach logic; or reverse-engineering VBoxUSB IOCTLs",
-      "estTime": "decision: 15 min · build: 2–3 days",
-      "model": "main session decides; Opus subagent builds",
-      "status": "blocked",
+      "title": "Radio custody — all 3 radios bound to VBoxUSB (done 16 Aug on Doug's ruling); WATCH: launch audit across VM starts for the wedge rate; proxy kick stays the recovery. No redesign unless the audit says the wedge persists  [custody-watch]",
+      "why": "maximal control of all 3",
+      "estTokens": "≈0 (watch)",
+      "costDrivers": "reading the launch audit; one kick if a wedge",
+      "estTime": "ongoing",
+      "model": "main session",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "blocked on Doug's choice; the current take/return tool stays honest and dry-run-first meanwhile"
+        "note": "Doug 16 Aug: 'Don't overdesign something.' USB/IP and host-side-owner options dropped."
       }
     }
   ],
@@ -5927,6 +5927,10 @@
     {
       "date": "2026-08-16",
       "entry": "Test window 1–5 run (TEST-WINDOW.md Done). Custody live test on TP-Link: bind ok, VBox still tears down at VM start — thesis refuted; Intel take + reboot abandoned; Intel recovered by proxy kick. v3.131 added as the decision row. Audit twin bug fixed (0a61c1e)."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "Doug overruled the Intel abandonment: all three radios taken into custody (Mac dongle, Intel after a VM-off proxy kick). v3.131 simplified to a watch row."
     }
   ],
   "extraCols": [],
