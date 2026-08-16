@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 116,
+  "nextSid": 120,
   "nextMilestoneSid": 10,
   "milestones": [
     {
@@ -1851,11 +1851,11 @@
       "costDrivers": "support only; findings become rows",
       "estTime": "30m",
       "model": "Doug + main session",
-      "status": "doing",
-      "actualTokens": "~25k so far",
-      "actualTime": "~10m",
+      "status": "done",
+      "actualTokens": "~40k",
+      "actualTime": "~30m",
       "extra": {
-        "note": "Claude launched stock Cairo alongside Explorer (pid 24192): menu bar (0,0 1920x23), taskbar (0,1043 1920x37), tray hosted, dynamic desktop of the Desktop folder, PRIMARY ONLY by default; welcome + update prompts dismissed. Doug's eyes still needed on the other two panels and Alt+scroll over its bars."
+        "note": "Cairo ran alongside Explorer all day on the primary; Doug went through its tutorial himself. Other panels not yet enabled (setting exists)."
       }
     },
     {
@@ -2037,12 +2037,82 @@
       "costDrivers": "Cairo theme + settings + extension patterns; app-side export",
       "estTime": "2–3h",
       "model": "Opus subagent (shell) + main session (app)",
-      "status": "doing",
+      "status": "done",
+      "actualTokens": "~250k Opus (shell) + ~120k main (app)",
+      "actualTime": "~2h",
+      "extra": {
+        "note": "shell@663e904/40a5b9d/a3bf335/2ea6392: EsotericOS theme default, left menu EsotericOS + Open EsotericOS, menu-bar status extension, branding. app@1c21ed7 status.json each tick. Superseded the DeskPanel (8bb921f, kept for shell-hosted desktop layer later)."
+      }
+    },
+    {
+      "sid": "v3.116",
+      "hcidx": 116,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "The app lives on the desktop: docked right, frameless, bottom of z-order, pinned; float_window is the escape hatch  [on-desktop]",
+      "why": "it is just what the app is",
+      "estTokens": "100k–200k",
+      "costDrivers": "Tk toplevel subclass; reentrancy law",
+      "estTime": "1h",
+      "model": "Opus subagent + main",
+      "status": "done",
+      "actualTokens": "~110k Opus + ~30k main",
+      "actualTime": "~40m",
+      "extra": {
+        "note": "app@9efb193 + d26ec4e; probe: activated and typed into while second-from-bottom above Progman. Doug: 'it's not even desk mode, it's just what the app is.' Then: 'i shouldn't be able to drag it around, build it in' -> SWP_NOMOVE|SWP_NOSIZE refusal."
+      }
+    },
+    {
+      "sid": "v3.117",
+      "hcidx": 117,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Baked in: EsotericOS starts at sign-in (HKCU Run) via bake-in.ps1 (-Check/-Undo)  [bake-in]",
+      "why": "desktop is where it lives",
+      "estTokens": "5k–10k",
+      "costDrivers": "registry value; UAC off so elevated",
+      "estTime": "10m",
+      "model": "main session",
+      "status": "done",
+      "actualTokens": "~6k",
+      "actualTime": "~5m",
+      "extra": {
+        "note": "app@681830c. AppBar reservation explicitly declined by Doug: 'it doesn't claim space, we can put stuff on top'."
+      }
+    },
+    {
+      "sid": "v3.118",
+      "hcidx": 118,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "The portal remembers: a click records intent; restored once per launch when READY, a daemon answers, nothing mid-pair  [portal-memory]",
+      "why": "no button after every swap",
+      "estTokens": "30k–60k",
+      "costDrivers": "guard conditions; test_panes harness",
+      "estTime": "30m",
+      "model": "main session",
+      "status": "done",
+      "actualTokens": "~35k",
+      "actualTime": "~25m",
+      "extra": {
+        "note": "app@9b54d29 (+ test fix 52416f2). Staged as EsotericOS-next.exe b6240700; awaiting swap."
+      }
+    },
+    {
+      "sid": "v3.119",
+      "hcidx": 119,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Files alpha B — operations: copy/move/cut/paste with progress + collision preview + partial-failure report; drag inside; tabs; column view  [files-b]",
+      "why": "the alpha becomes usable daily",
+      "estTokens": "300k–500k",
+      "costDrivers": "IFileOperation interop; DnD; virtualised column view",
+      "estTime": "4–6h",
+      "model": "Opus subagent",
+      "status": "todo",
       "actualTokens": null,
       "actualTime": null,
-      "extra": {
-        "note": "app side done: status_document/write_status each paint tick (1c21ed7), swapped in as 3f0dc180; shell side in progress (Opus)."
-      }
+      "extra": {}
     }
   ],
   "history": [
@@ -5610,6 +5680,10 @@
     {
       "date": "2026-08-16",
       "entry": "EsotericOS Files alpha A built and launched on Doug's desk (Opus, ~135k tokens). Board estimate for finder-shell was 440k-880k for the whole surface; alpha A came in far under -- expect B (operations) to be the real spend."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "SOLID POINT: running EsotericOS 36c0f92c (preserved as EsotericOS-ondesktop-20260816.exe) lives on the desktop, pinned, baked in at sign-in; shell fork HEAD 2ea6392 builds clean (0 errors) with EsotericOS theme/menu/status; Files alpha A (26d52ea) and DeskPanel (8bb921f) committed locally; on-desktop + portal-memory + dashed-off-devices in app HEAD 52416f2, staged b6240700. Everything local/private. Keeper introduction written (docs/forge). Pain surveys (Sonnet x3) still running for the Files vision doc."
     }
   ],
   "extraCols": [],
