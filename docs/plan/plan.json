@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 114,
+  "nextSid": 116,
   "nextMilestoneSid": 10,
   "milestones": [
     {
@@ -1938,7 +1938,8 @@
       "milestone": "v3.M9",
       "deps": [
         "v3.107",
-        "v3.109"
+        "v3.109",
+        "v3.114"
       ],
       "title": "Shell swap on this box: Winlogon Shell with recovery kit proven; Win key, Alt+Tab, tray, toasts, Win+E audited",
       "why": "the actual replacement",
@@ -2004,6 +2005,42 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
+    },
+    {
+      "sid": "v3.114",
+      "hcidx": 114,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "The Esoteric Forge (Electron 43, Doug's IDE) compatibility under the shell — taskbar button/icon, tray, toasts, progress/overlay/jump lists, file dialogs, showItemInFolder, work-area  [forge-compat]",
+      "why": "his IDE must not break",
+      "estTokens": "40k–80k",
+      "costDrivers": "audit + fixes on contact; Forge always running",
+      "estTime": "1h",
+      "model": "main session + Opus",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "Doug 2026-08-16: 'ensure compatibility with The Esoteric Forge - my IDE running currently.' electron.exe from E:\\esoteric-path-core\\forge. Blocks the swap."
+      }
+    },
+    {
+      "sid": "v3.115",
+      "hcidx": 115,
+      "milestone": "v3.M9",
+      "deps": [],
+      "title": "Merge EsotericOS into the desktop: EsotericOS theme (legacy tokens), EsotericOS menu with Open EsotericOS, menu-bar status widget reading app\\status.json  [desktop-merge]",
+      "why": "one system, not two apps",
+      "estTokens": "150k–300k",
+      "costDrivers": "Cairo theme + settings + extension patterns; app-side export",
+      "estTime": "2–3h",
+      "model": "Opus subagent (shell) + main session (app)",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "app side done: status_document/write_status each paint tick (1c21ed7), swapped in as 3f0dc180; shell side in progress (Opus)."
+      }
     }
   ],
   "history": [
@@ -5563,6 +5600,10 @@
     {
       "date": "2026-08-16",
       "entry": "M9: stock Cairo running alongside Explorer on the primary; lineage files committed in the shell fork (local, not pushed); recovery script ready. Next: Doug's read on the desk, then the first mod."
+    },
+    {
+      "date": "2026-08-16",
+      "entry": "M9: 'merge EsotericOS into the desktop organically' -> row v3.115; Forge compatibility row v3.114 now blocks the swap. App 3f0dc180 publishes status.json."
     }
   ],
   "extraCols": [],
