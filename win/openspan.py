@@ -5715,11 +5715,32 @@ class BtPanel(tk.Frame):
                             justify="left")
         _usb_lbl.pack(fill="x", pady=(6, 0))
         bind_wraplength(_usb_lbl)
+        # ---- who OWNS each radio, as opposed to who is holding it now ------
+        # Repair radios above is about a capture that did not land. This line
+        # is about the thing underneath: every VM start re-runs the teardown /
+        # re-add race against a live Windows device stack, and the built-in
+        # Intel is the one with no plug to pull when the race is lost. Custody
+        # ends the race by making VBoxUSB the radio's PERSISTENT driver. This
+        # label only ever REPORTS; the button below is the only thing that acts.
+        self.radio_custody_text = tk.StringVar(
+            value="Checking which radios Windows still owns…")
+        _cust_lbl = tk.Label(options, textvariable=self.radio_custody_text,
+                             bg=BG, fg=MUTED, font=(FONT_UI, 8), anchor="w",
+                             justify="left")
+        _cust_lbl.pack(fill="x", pady=(6, 0))
+        bind_wraplength(_cust_lbl)
         button_row = tk.Frame(options, bg=BG)
         button_row.pack(fill="x", pady=(5, 0))
         self.reclaim_btn = ttk.Button(
             button_row, text="Repair radios", command=self._reclaim_radios)
         self.reclaim_btn.pack(side="left")
+        # ONE button. Click once for the dry run (its plan lands in the console
+        # below), click again to apply. Never a native dialog -- the second
+        # click IS the confirmation, and it is on the button that asked for it.
+        self._custody_armed = False
+        self.custody_btn = ttk.Button(
+            button_row, text="Take custody", command=self._take_custody)
+        self.custody_btn.pack(side="left", padx=6)
         self.recommended_btn = ttk.Button(
             button_row, text="Use recommended 3-radio layout",
             command=self._use_recommended_radios)
@@ -5778,6 +5799,11 @@ class BtPanel(tk.Frame):
         # deferred: two VBoxManage calls must not sit in front of the first
         # paint, and the answer is worth having before anything is clicked
         self.after(1200, self._radio_usb_check)
+        # The launch audit, and the Windows-Update re-bind guard in one: if WU
+        # (or anything else) has put Intel's driver back on a radio that was in
+        # custody, the very next launch says so here and the button is there to
+        # take it again. Reports only -- it never acts.
+        self.after(1800, self._custody_check)
 
         self.menu = tk.Menu(self, tearoff=0, bg=CARD, fg=FG,
                             activebackground=ACCENT_DIM,
@@ -5838,6 +5864,97 @@ class BtPanel(tk.Frame):
             text, repairable = radio_status_text(state, config, VM)
             self._radio_usb_apply(text, repairable)
         threading.Thread(target=work, daemon=True).start()
+
+    # ---- radio custody ---------------------------------------------------
+    def _custody_apply_text(self, text):
+        if self.app:
+            self.app.ui(lambda: self.radio_custody_text.set(text))
+
+    def _custody_check(self):
+        """Audit who persistently owns each radio. REPORTS, never acts.
+
+        Runs at launch and after every custody action. Two SetupAPI sweeps and
+        two VBoxManage reads, on a worker -- the UI must not wait on either.
+        """
+        def work():
+            try:
+                import radio_custody
+                custody = radio_custody.RadioCustody()
+                rows = custody.rows()
+            except Exception as exc:  # noqa: BLE001 -- a status line, not a
+                # feature anything else depends on: it must never take the
+                # Bluetooth panel down with it.
+                self._custody_apply_text(f"Custody audit unavailable: {exc}")
+                return
+            if not rows:
+                self._custody_apply_text(
+                    "No radios are configured, so there is nothing to take "
+                    "custody of.")
+                return
+            self._custody_apply_text(
+                "\n".join(radio_custody.custody_line(row) for row in rows))
+            for row in rows:
+                self._log("custody: " + radio_custody.custody_line(row))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _take_custody(self):
+        """First click: the dry run, printed here. Second click: apply.
+
+        Deliberately not a dialog. The plan is long and technical and belongs
+        in the console where it can be read and scrolled, and the button itself
+        carries the confirmation -- which is also the only place a second click
+        can plausibly land.
+        """
+        armed = self._custody_armed
+        label = "Applying custody…" if armed else "Planning…"
+        done = self.app.busy(self.custody_btn, label) if self.app else None
+
+        def work():
+            try:
+                import radio_custody
+                custody = radio_custody.RadioCustody()
+                rows = [row for row in custody.rows()
+                        if row.get("verdict") != radio_custody.CUSTODY]
+                if not rows:
+                    self._log("custody: every configured radio is already in "
+                              "EsotericOS custody — nothing to do.")
+                    return
+                results = [custody.take(row, apply=armed) for row in rows]
+                for result in results:
+                    self._log(radio_custody.plan_text(result["plan"],
+                                                      result.get("probe")))
+                    for step, ok in result["steps"]:
+                        self._log(("custody [done] " if ok
+                                   else "custody [FAIL] ") + step)
+                    if result["error"]:
+                        self._log("custody: " + result["error"])
+                    if result.get("reboot_required"):
+                        self._log("custody: a RESTART is required to finish "
+                                  "this bind.")
+                if armed:
+                    self._custody_armed = False
+                    self._custody_relabel("Take custody")
+                    self._log("custody: applied. Re-auditing…")
+                elif any(not r["plan"]["refusals"] for r in results):
+                    self._custody_armed = True
+                    self._custody_relabel("Confirm: take custody")
+                    self._log("custody: that was a DRY RUN — nothing changed. "
+                              "Click again to apply it.")
+                else:
+                    self._log("custody: refused, so there is nothing to "
+                              "confirm. See the reasons above.")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"custody: {exc}")
+            finally:
+                if done:
+                    done()
+                self._custody_check()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _custody_relabel(self, text):
+        if self.app:
+            self.app.ui(lambda: rebase_button_busy(self.custody_btn, text)
+                        or self.custody_btn.config(text=text))
 
     def _reclaim_radios(self):
         """Hand every radio the VM has lost back to it, and say what happened."""
