@@ -452,7 +452,12 @@ TARGET_STATE_BY_COLOUR = {
 TARGET_BOX_COLOURS = {
     # state             (fill, outline, label)
     "live": (IPAD_FILL, IPAD_LINE, "#D8C8FF"),
-    "idle": (IPAD_IDLE_FILL, IPAD_IDLE_LINE, "#ffe9b0"),
+    # A paired device that is not connected is, at the desk, a device that is
+    # OFF -- BlueZ cannot tell the two apart, and Doug reads the box that way
+    # ("that Laptop is turned off"). So the fill and label recede; the outline
+    # keeps the card's exact WARN so the truth table still holds, and redraw()
+    # draws it dashed. Live boxes are the only solid, full-strength ones.
+    "idle": (_dim(IPAD_IDLE_FILL, 0.55), IPAD_IDLE_LINE, _dim("#ffe9b0", 0.6)),
     "live-suppressed": (_dim(ACCENT_SUPPRESSED, 0.50), ACCENT_SUPPRESSED,
                         _dim("#D8C8FF", 0.72)),
     "idle-suppressed": (_dim(WARN_SUPPRESSED, 0.27), WARN_SUPPRESSED,
@@ -4877,10 +4882,17 @@ class MultiArrangeCanvas(tk.Canvas):
             x1, y1 = self.w2c(x + width, y + height)
             fill, line, text_color = self._colors(key)
             chosen = key == self.selected
+            # A device that is not live -- paired-but-off, or unknown -- is
+            # drawn dashed, so the picture says "not here right now" without
+            # a legend. Live devices and PC screens are solid.
+            dashed = (key[0] == "target"
+                      and not self.target_states.get(key[1], "off")
+                      .startswith("live"))
             self.create_rectangle(
                 x0, y0, x1, y1, fill=fill,
                 outline="#ffffff" if chosen else line,
-                width=3 if chosen or key[0] == "target" else 2)
+                width=3 if chosen or key[0] == "target" else 2,
+                dash=(7, 5) if dashed else ())
             # ONE SHORT LINE. Resolution, refresh, rotation and size used to
             # be stamped on every rectangle, which on a desk of portrait panels
             # meant four lines of text in a box narrower than the text. The
