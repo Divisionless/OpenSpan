@@ -1,0 +1,36 @@
+{
+  "project": "esoteric-os",
+  "note": "Layer order: what beats what at runtime. A question about behaviour enters at a layer and walks up; the first layer that already answered is the answer.",
+  "layers": [
+    {
+      "name": "defaults",
+      "description": "Hardcoded defaults in the Python source (openspan.py, modules under win/)",
+      "path": null,
+      "note": "No single file — defaults are inline in the code. Lowest priority."
+    },
+    {
+      "name": "config",
+      "description": "User-editable persistent config",
+      "path": "D:\\_EsotericOS\\app\\openspan_config.json",
+      "note": "Machine-specific settings: VM name, radio instance IDs, display layout."
+    },
+    {
+      "name": "settings",
+      "description": "User preferences",
+      "path": "D:\\_EsotericOS\\app\\openspan_settings.json",
+      "note": "Behavioural preferences: hotkeys, tiling rules, audio balance."
+    },
+    {
+      "name": "modules",
+      "description": "Per-module runtime settings",
+      "path": "D:\\_EsotericOS\\app\\module_settings.json",
+      "note": "Module-level overrides written by the settings UI or by modules themselves."
+    },
+    {
+      "name": "runtime",
+      "description": "Live ephemeral state",
+      "path": "D:\\_EsotericOS\\app\\status.json",
+      "note": "Current running state: active displays, connected devices, VM status. Never persisted across restarts. Highest priority — this is what IS, not what should be."
+    }
+  ]
+}

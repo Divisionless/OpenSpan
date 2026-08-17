@@ -58,8 +58,11 @@ audio_gain.txt
 # monitor's record of resets it actually watched happen. Per-machine, and
 # a picture of when the user was working.
 module_settings.json
-# editor backup of the plan; plan.json itself is canonical and IS tracked
+# editor backup of the plan; plan.json itself is canonical and IS tracked.
+# tools/board_*.py stamp timestamped backups beside it before every atomic
+# write -- local rollback material, never history (git is the history).
 docs/plan/plan.json.bak
+docs/plan/plan.json.*.bak
 
 # personal / machine-specific runtime state (never publish)
 bt_prefs.json

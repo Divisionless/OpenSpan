@@ -20,7 +20,7 @@
       "hcidx": 2,
       "title": "Platform spine — settings, config, plugins",
       "deps": [],
-      "status": "todo"
+      "status": "doing"
     },
     {
       "sid": "v2.M3",
@@ -29,7 +29,7 @@
       "deps": [
         "v2.M1"
       ],
-      "status": "todo"
+      "status": "done"
     },
     {
       "sid": "v2.M4",
@@ -706,7 +706,7 @@
       "hcidx": 38,
       "milestone": "v3.M9",
       "deps": [
-        "v3.111"
+        "v3.119"
       ],
       "title": "Files surface inside the shell — Finder-like; explorer.exe windows until then  [finder-shell]",
       "why": "never built; plan spec only",
@@ -1898,11 +1898,11 @@
       "costDrivers": "Winlogon Shell semantics; per-user vs HKLM verified on this box",
       "estTime": "1h",
       "model": "Opus subagent",
-      "status": "doing",
-      "actualTokens": "~10k",
-      "actualTime": "~10m",
+      "status": "done",
+      "actualTokens": "~10k + ~40k (watchdog)",
+      "actualTime": "~10m + ~25m",
       "extra": {
-        "note": "tools/restore-explorer-shell.ps1 written and dry-run (-Check: HKCU absent, HKLM explorer.exe, explorer running). Watchdog timer NOT created -- needs Doug's specific go. Task-Manager drill documented in the script header."
+        "note": "COMPLETE 2026-08-16 22:37. (1) tools/restore-explorer-shell.ps1 -- written, dry-run. (2) Task-Manager escape drill -- documented in both script headers. (3) tools/shell-watchdog.ps1 -- NEW: logon scheduled task 'EsotericOS Shell Watchdog' (delay 45s, poll window 60s) for MSI\\Douglas Knoll; starts explorer.exe only if NEITHER CairoDesktop nor explorer is seen. Never kills a process, never touches the registry -- the Winlogon override is left in place so the cause survives and recovery is not invisible. Scheduled task, NOT an HKCU Run value: under takeover the fork's StartupRunner launches Run items, so a Run-key watchdog would be dead exactly when needed. VERIFIED: task fired manually 22:37:37, LastTaskResult 0, logged 'shell alive' at 22:37:54 to D:/_EsotericOS/app/shell-watchdog.log."
       }
     },
     {
@@ -1956,11 +1956,11 @@
       "costDrivers": "consent-gated machine change; audit list grows on contact",
       "estTime": "2h",
       "model": "Doug + main session",
-      "status": "done",
+      "status": "blocked",
       "actualTokens": "in-session",
       "actualTime": "~40m",
       "extra": {
-        "note": "Done 16 Aug on Doug's repeated direct order (overrode the v3.114 Forge park). Per-user HKCU Winlogon Shell -> the fork; Explorer suppressed for this user; HKLM explorer.exe kept as net; app autostarts via Cairo StartupRunner. Takes effect next sign-in. autostart-shell.ps1 -Shell/-Undo; restore-explorer-shell.ps1 recovery."
+        "note": "Done 16 Aug on Doug's repeated direct order (overrode the v3.114 Forge park). Per-user HKCU Winlogon Shell -> the fork; Explorer suppressed for this user; HKLM explorer.exe kept as net; app autostarts via Cairo StartupRunner. Takes effect next sign-in. autostart-shell.ps1 -Shell/-Undo; restore-explorer-shell.ps1 recovery. VERIFIED 2026-08-16 22:36 (Architect): the takeover is NOT armed on this box right now -- HKCU Winlogon Shell ABSENT, HKLM=explorer.exe, HKCU Run 'EsotericOS Shell' PRESENT, and both explorer (pid 6016, 17:53:15) and CairoDesktop (pid 11716, 17:53:30) running = the ALONGSIDE arrangement. Status left 'done' pending Doug's ruling: was the override deliberately undone, or never applied? Re-arm with tools/autostart-shell.ps1 -Shell. ROOT CAUSE (Doug's postmortem docs/SHELL-TAKEOVER-POSTMORTEM.md, committed 17:49:20): fork-as-shell ran at HIGH integrity -- manifest is asInvoker and this env's interactive logon token is full-admin by design -- so the shell could not broker launches. RUNASADMIN apps failed to elevate through it, OneDrive refused an elevated parent, Win+Shift+S died with Explorer. Confirmed independently in Cairo's own log (AppData/Local/Cairo Desktop/Logs/08-16-2026-Backup.log): 'Running as shell: True' from shell/stable/ at 17:34:28, then repeated runas-verb failures 'Class not registered' at 17:35:04 (Claude app) and 17:35:38 + 17:36:30 (Windows Terminal). Reverted by assert-control.ps1 -Release; shutdown.exe restart 17:51:15; alongside restored 17:53:40. NOTE: assert-control.ps1 set BOTH HKCU and HKLM Winlogon Shell to shell/stable/CairoDesktop.exe -- it overwrote the HKLM=explorer.exe safety net that autostart-shell.ps1 deliberately preserves. Status done -> blocked: re-arming requires the shell process to start at MEDIUM integrity. CORRECTED ~23:00: Winlogon hands MEDIUM on this box (explorer measured Medium/not-elevated; FilterAdministratorToken=1) -- the High instance was the 17:34 task-launched fix attempt ('EsotericOS Shell (elevated)', RunLevel Highest, LastRunTime 17:34:34), whose 'Class not registered' failures are AppX activation refusing an ELEVATED caller. Cause of the original 17:18 Medium sign-in failure UNKNOWN (log rotated away). Leftover: the elevated task is still registered, arrangement inactive. Next armed sign-in = measured experiment: proc-integrity.ps1 within 1 min + copy Cairo's log before rotation. assert-control.ps1 HKLM defect fixed; watchdog live. See SHELL-TAKEOVER-POSTMORTEM.md addendum."
       }
     },
     {

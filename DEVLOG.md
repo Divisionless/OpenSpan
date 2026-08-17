@@ -1,5 +1,63 @@
 # OpenSpan — Devlog
 
+## 2026-08-16 night — the takeover postmortem corrected by measurement, and the board learns to defend itself
+
+The Architect seat came up in the Forge (the bespoke agent IDE — this entry is
+written from it) and spent the night on evidence rather than construction. What
+it found rewrote part of the afternoon's story.
+
+**The postmortem was half right.** The afternoon's conclusion — "fork-as-shell
+ran High integrity because the interactive logon token is full-admin" — is
+contradicted by direct measurement: Winlogon starts explorer.exe at **Medium,
+not-elevated** on this box (`FilterAdministratorToken=1`; measured with the new
+read-only `tools/proc-integrity.ps1`). The High-integrity CairoDesktop whose
+failures are actually on record was the **17:34 instance started by the
+"EsotericOS Shell (elevated)" scheduled task** (RunLevel Highest — that is what
+"start High" means), i.e. the fix attempt, not the original Winlogon-started
+shell from the 17:18 sign-in. And its recorded failures — "Class not
+registered" activating the Claude app and Windows Terminal via
+`shell:appsFolder` — are AppX activation refusing an **elevated** caller. The
+elevation fix reproduced a launch failure; it did not fix one. What broke the
+original 17:18 Medium sign-in was never recorded: Cairo keeps one same-day log
+backup and the 17:34 session overwrote it. Full corrected timeline, sources,
+and the open question: `docs/SHELL-TAKEOVER-POSTMORTEM.md` (addendum).
+
+**Two safety defects fixed.**
+* `assert-control.ps1` set HKCU **and HKLM** Winlogon Shell to the fork —
+  destroying the machine-wide Explorer net exactly when it would be needed. It
+  now asserts HKCU only and forces HKLM back to `explorer.exe`, with the
+  incident written into the script as the reason.
+* There was no automated recovery from a failed shell sign-in. Now there is:
+  `shell\tools\shell-watchdog.ps1` — logon scheduled task (Task Scheduler is
+  shell-independent; an HKCU Run value would be launched by the fork's own
+  StartupRunner and thus dead precisely when needed). 45s delay, 60s poll
+  window; if neither CairoDesktop nor explorer appears it starts explorer.exe,
+  logs, and raises a dialog. It never kills a process and never touches the
+  registry — a recovery that undoes the evidence makes every diagnosis after
+  it wrong. Installed and live-fired: LastTaskResult 0, "shell alive" logged.
+
+**Leftover flagged, not touched:** the "EsotericOS Shell (elevated)" task is
+still registered while the arrangement it served is inactive (HKCU Shell
+absent). Doug rules on keep-for-next-experiment vs unregister.
+
+**The board grew tooling.** `docs/plan/plan.json` is edited by script now, not
+by hand: `tools/board_summary.py` (live state), `board_cost.py` (the live work
+prices at 8.1M–15.8M est. tokens across 43 items), `board_set.py` and
+`board_fix_drift.py` (dry-run by default, timestamped backup, atomic
+temp+rename, round-trip guard; the embedded history snapshots are never
+touched). Drift corrected: v2.M3 → done, v2.M2 → doing, v1.38's stale dep;
+v3.107 (recovery kit) → done with the watchdog; v3.110 (the takeover) → 
+**blocked** on the corrected root-cause picture. Next armed sign-in is a
+measured experiment: `proc-integrity.ps1` within a minute of desktop, and
+Cairo's log copied before rotation eats it.
+
+**Seat charters landed in the repo** (`forge-architect/`, `forge-builder/`,
+`forge-keeper/` CLAUDE.md) — the Forge injects them per turn; the Architect's
+now carries the Next Action Item rule as law, because a rule said in
+conversation does not survive.
+
+---
+
 ## 2026-08-16 evening — the boundary drawn at boot, and copyleft made law
 
 Doug re-centred the whole endeavour. Verbatim direction, across several messages:

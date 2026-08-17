@@ -11,9 +11,13 @@
   2. FREEZES the shell: copies the built fork into D:\_EsotericOS\shell\stable so
      the boot shell is a fixed known-good copy, isolated from future rebuilds.
   3. ASSERTS control for the NEXT sign-in:
-       * HKCU + HKLM Winlogon Shell -> the frozen fork  (Explorer suppressed
-         machine-wide; HKCU is the value Windows Update cannot reset, HKLM is
-         the machine-wide assertion).
+       * HKCU Winlogon Shell -> the frozen fork (Explorer suppressed for this
+         user; HKCU wins over HKLM and Windows Update / SFC never touch it).
+       * HKLM Winlogon Shell -> explorer.exe, DELIBERATELY. The machine value
+         is the safety net: any other account, or this account with the HKCU
+         override removed, lands on a working Explorer desktop. The first
+         version of this script set HKLM to the fork too (2026-08-16) -- that
+         destroyed the net the moment it was needed. Never again.
        * the user Run key keeps launching EsotericOS.exe (displays, Bluetooth
          stand-down, bridge VM) -- the fork's StartupRunner runs it as shell.
        * Cairo's foreign self-assertion stays stripped (WinSparkle update off).
@@ -116,8 +120,18 @@ Line; Write-Host "3. ASSERT control for the next sign-in"
 
 if (-not (Test-Path $wlCU)) { New-Item -Path $wlCU -Force | Out-Null }
 Set-ItemProperty -Path $wlCU -Name Shell -Value ('"' + $stableShellExe + '"')
-Set-ItemProperty -Path $wlLM -Name Shell -Value ('"' + $stableShellExe + '"')
-Write-Host "  HKCU + HKLM Winlogon Shell -> the frozen fork (Explorer suppressed)"
+Write-Host "  HKCU Winlogon Shell -> the frozen fork (Explorer suppressed for this user)"
+
+# HKLM stays explorer.exe ON PURPOSE -- it is the machine-wide safety net, and
+# HKCU wins for this user anyway. Setting it to the fork (as the first version
+# did) removes the one fallback that works when the fork cannot start.
+$lmNow = (Get-ItemProperty -Path $wlLM -Name Shell -ErrorAction SilentlyContinue).Shell
+if ($lmNow -ne "explorer.exe") {
+    Set-ItemProperty -Path $wlLM -Name Shell -Value "explorer.exe"
+    Write-Host "  HKLM Winlogon Shell restored -> explorer.exe (the safety net stands)"
+} else {
+    Write-Host "  HKLM Winlogon Shell = explorer.exe (safety net intact, untouched)"
+}
 
 if (Test-Path $appExe) {
     Set-ItemProperty -Path $runKey -Name "EsotericOS" -Value ('"' + $appExe + '"')
