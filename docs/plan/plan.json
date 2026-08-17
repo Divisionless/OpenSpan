@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 137,
+  "nextSid": 139,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2441,6 +2441,46 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
+    },
+    {
+      "sid": "v3.137",
+      "hcidx": 137,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.135"
+      ],
+      "title": "Win+Shift+S -> Snipping Tool, owned by the shell: RegisterHotKey in the fork (Medium integrity -- AppX activation works from there, NOT from the High app), launch ms-screenclip: with SnippingTool.exe fallback  [win-shift-s]",
+      "why": "Doug: i NEED win shift s back; Explorer owned the OS binding and Explorer is gone",
+      "estTokens": "30k-60k",
+      "costDrivers": "hotkey plumbing in the fork; must not collide with the app's keyboard service",
+      "estTime": "30m",
+      "model": "Opus subagent + Architect review",
+      "status": "done",
+      "actualTokens": "~40k Opus + review in-session",
+      "actualTime": "~90s agent + review",
+      "extra": {
+        "note": "Bake target: the NEXT restart -- rebuild, re-freeze versioned stable, re-arm HKCU before Doug presses restart. REVIEWED+ACCEPTED+ARMED 23:56: extends existing ShellHotKeyService (the service that already reclaims Explorer's Win chords, IsAppRunningAsShell-guarded, UI-thread dispatched). shell be58e8c; explicit Register() with logged failure; ms-screenclip: then SnippingTool.exe fallback; Dispose unregisters. Frozen 42ee11b3 -> stable-20260816-235636, HKCU armed, HKLM net intact. Live check at sign-in: chord fires snip AND Programs menu does not flash (MenuBarHotKeyService binds bare Win keys). Runtime unverified by design until the restart."
+      }
+    },
+    {
+      "sid": "v3.138",
+      "hcidx": 138,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.116"
+      ],
+      "title": "One surface: the app IS the desktop -- shell-aware chrome: under the EsotericOS Shell no minimize / no X / no casual close (surface mode, desktop z-order, uncloseable except explicit debug path); under Explorer (windows-regular debugging visit) a normal window; extends v3.116  [one-surface]",
+      "why": "Doug: there is never a point when i want to be operating this computer without that thing... that IS EsotericOS -- it and the shell, all of it should breathe as one surface",
+      "estTokens": "60k-120k",
+      "costDrivers": "shell detection; chrome differences; exe rebuild+swap beside the RUNNING app without touching it",
+      "estTime": "1-1.5h",
+      "model": "Opus subagent + Architect review",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "Surface-mode escape hatch must exist but be deliberate (explicit flag / debug command), never a titlebar button. Rides the next restart after it lands; does NOT gate tonight's v3.135+v3.137 restart."
+      }
     }
   ],
   "history": [

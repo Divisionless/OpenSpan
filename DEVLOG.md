@@ -61,6 +61,15 @@ Medium from `stable\`, no Explorer in the session, app up elevated through
 silent UAC, VM running, watchdog quiet, Forge 5/5 (taskbar, tray, dialogs,
 Win+Shift+S, Claude app). Full verdict in the postmortem's RESOLUTION.
 
+**A second doctrine, same night — one surface.** Doug, on the app: "there is
+never a point when i want to be operating this computer without that thing,
+unless i am in windows regular for whatever reason -- that'd be debugging
+special case... remove the minimize, X buttons. that IS EsotericOS -- it and
+the shell, all of it should breathe as one surface." So the app stops being a
+window: under the EsotericOS Shell it is surface — no minimize, no X, no
+casual close, exits only by deliberate debug path or session end; under
+Explorer (a debugging visit) it remains a mortal window. Board v3.138.
+
 **The doctrine, set the same hour it held — Cairo is scaffold, not
 foundation.** Doug, with the swap proven under him: "move away from Cairo —
 it asks to update, it seems clunky/outdated, let's use what we want from it
