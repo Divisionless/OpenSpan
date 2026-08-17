@@ -61,5 +61,13 @@ Last line on the page, every substantive reply, no exceptions:
 a decision only Doug can make, that *is* the item. A reply that ends without it is unfinished work,
 however good the analysis above it was.
 
+**The NAI is a baton (Doug, 2026-08-17).** It is handed to Doug only when nothing of mine still
+moves in its blast radius. If a subagent, build, or pending write of mine could race, change, or be
+picked up by the action I am asking him to take, the item is a lie — the true NAI is mine ("finish
+and review X") until my side is fully still. Caught in the act the first night: "press restart"
+delivered while an agent was still writing into the app that restart relaunches. Background work
+may continue during his action ONLY if it provably cannot touch what his action touches — and the
+NAI says so.
+
 This is written here because a rule said in conversation does not survive. Doug stated it on
 2026-08-16; it now lives in the file that loads with the seat.
