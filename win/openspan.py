@@ -9964,6 +9964,15 @@ class App:
     # the helper is finished on the very first poll.
     _BTREADY_WAIT = 210
 
+    def _gate_ready_on_btready(self):
+        try:
+            self._wait_btready()
+        finally:
+            # ALWAYS lifts the gate. A bug in the wait must delay READY, never
+            # withhold it -- the banner reading "Booting…" forever on a bridge
+            # that is plainly up is the worse failure of the two.
+            self._vm_reachable = True
+
     def _wait_btready(self):
         """Block until the guest's boot helper has finished its last restart.
 
@@ -10032,13 +10041,20 @@ class App:
                 if ssh_guest("echo ok", timeout=5, quiet=True).stdout.strip() \
                         == "ok":
                     reachable = True
-                    # ssh answering is NOT the bridge being ready: btready.sh is
-                    # still bouncing bluetoothd and wireplumber for a while
+                    # ssh answering is NOT the bridge being READY: btready.sh
+                    # is still bouncing bluetoothd and wireplumber for a while
                     # after it. Announcing READY here is what invited the buds
                     # onto the radio mid-bounce and got their stream torn down
-                    # 2.1s later (2026-08-17). Wait for the helper to finish.
-                    self._wait_btready()
-                    self._vm_reachable = True
+                    # 2.1s later (2026-08-17).
+                    #
+                    # The gate runs in its OWN thread and sets the flag when the
+                    # helper is done. It deliberately does not block this one:
+                    # everything below -- port forwards for the device lanes,
+                    # the script sync -- is unrelated to the radio and must not
+                    # wait on it. Only the READY edge waits.
+                    threading.Thread(
+                        target=self._gate_ready_on_btready,
+                        daemon=True).start()
                     break
                 threading.Event().wait(3)
             if not reachable:
