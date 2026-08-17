@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 139,
+  "nextSid": 140,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2421,7 +2421,7 @@
       "actualTokens": "~134k Opus + review in-session",
       "actualTime": "~17m agent + ~15m review/deploy",
       "extra": {
-        "note": "Registry silencing FAILED the field test: CheckForUpdates=0 was set at 23:06 assert and the update ask still appeared. The code path must not exist. Scope: remove WinSparkle service registration + package ref, ENABLEFIRSTRUN/tour remnants, upstream update UI; keep ManagedShell + AppBar plumbing intact. Explicitly NOT the skin (v3.109) or Dock (v3.111). Builder (Opus subagent) launched 2026-08-16 23:2x, scoped: source excision + Release build only; stable/ and registry and running processes untouched; freeze+restart stay with Doug. REVIEWED+ACCEPTED, then DEPLOY DEFECT caught in review: freeze-in-place robocopy /MIR would have hit the RUNNING shell's locked files in stable/ (design predated the successful takeover). assert-control now freezes to versioned stable-<stamp>/ + HKCU pointer flip; old dirs are the rollback ladder. Excised build (shell abee5688 @ 6bc48fa, zero sparkle artifacts, all 5 publish profiles cleaned) frozen to stable-20260816-234149 and armed 23:41; live session untouched. De-Cairo II backlog captured in v3.136. Doug restart pending."
+        "note": "Registry silencing FAILED the field test: CheckForUpdates=0 was set at 23:06 assert and the update ask still appeared. The code path must not exist. Scope: remove WinSparkle service registration + package ref, ENABLEFIRSTRUN/tour remnants, upstream update UI; keep ManagedShell + AppBar plumbing intact. Explicitly NOT the skin (v3.109) or Dock (v3.111). Builder (Opus subagent) launched 2026-08-16 23:2x, scoped: source excision + Release build only; stable/ and registry and running processes untouched; freeze+restart stay with Doug. REVIEWED+ACCEPTED, then DEPLOY DEFECT caught in review: freeze-in-place robocopy /MIR would have hit the RUNNING shell's locked files in stable/ (design predated the successful takeover). assert-control now freezes to versioned stable-<stamp>/ + HKCU pointer flip; old dirs are the rollback ladder. Excised build (shell abee5688 @ 6bc48fa, zero sparkle artifacts, all 5 publish profiles cleaned) frozen to stable-20260816-234149 and armed 23:41; live session untouched. De-Cairo II backlog captured in v3.136. Doug restart pending. LIVE-VERIFIED 2026-08-17 00:48 sign-in: session log carries zero updater lines; shell runs from stable-20260816-235636."
       }
     },
     {
@@ -2459,7 +2459,7 @@
       "actualTokens": "~40k Opus + review in-session",
       "actualTime": "~90s agent + review",
       "extra": {
-        "note": "Bake target: the NEXT restart -- rebuild, re-freeze versioned stable, re-arm HKCU before Doug presses restart. REVIEWED+ACCEPTED+ARMED 23:56: extends existing ShellHotKeyService (the service that already reclaims Explorer's Win chords, IsAppRunningAsShell-guarded, UI-thread dispatched). shell be58e8c; explicit Register() with logged failure; ms-screenclip: then SnippingTool.exe fallback; Dispose unregisters. Frozen 42ee11b3 -> stable-20260816-235636, HKCU armed, HKLM net intact. Live check at sign-in: chord fires snip AND Programs menu does not flash (MenuBarHotKeyService binds bare Win keys). Runtime unverified by design until the restart."
+        "note": "Bake target: the NEXT restart -- rebuild, re-freeze versioned stable, re-arm HKCU before Doug presses restart. REVIEWED+ACCEPTED+ARMED 23:56: extends existing ShellHotKeyService (the service that already reclaims Explorer's Win chords, IsAppRunningAsShell-guarded, UI-thread dispatched). shell be58e8c; explicit Register() with logged failure; ms-screenclip: then SnippingTool.exe fallback; Dispose unregisters. Frozen 42ee11b3 -> stable-20260816-235636, HKCU armed, HKLM net intact. Live check at sign-in: chord fires snip AND Programs menu does not flash (MenuBarHotKeyService binds bare Win keys). Runtime unverified by design until the restart. LIVE 00:48:38: 'ShellHotKeyService: Registered Win+Shift+S for screen snipping' in Cairo log. OS-side armed; Doug's keypress confirm pending. StartupRunner blank-name failure recurred (3rd time, 00:48:40)."
       }
     },
     {
@@ -2480,6 +2480,24 @@
       "actualTime": "~7m agent + review + staged build",
       "extra": {
         "note": "Surface-mode escape hatch must exist but be deliberate (explicit flag / debug command), never a titlebar button. Rides the next restart after it lands; does NOT gate tonight's v3.135+v3.137 restart. REVIEWED+ACCEPTED (app 0d6c5d4): surface_mode.py live probe (GetShellWindow owner -> CairoDesktop process -> registry tiebreak; every uncertainty -> WINDOW mode), controls NOT BUILT in surface mode, single WM_CLOSE door refuses+logs, session end untouched (WM_QUERYENDSESSION never reaches it), --window escape survives elevation relaunch, 31/31 new checks + suite 58/59 (1 pre-existing hygiene fail re assert-control paths). DEPLOY: exe staged as EsotericOS-next.exe (70MB, built 00:14) -- agent correctly refused in-place land (build_exe.py lands by copy2, not rename; needs app closed + swap-build.ps1). Rides the restart AFTER next (or a deliberate app close+swap on Doug's word). Follow-ups: make build_exe.py land step rename-based; verify live sign-out once deployed; float_window native X consistency noted."
+      }
+    },
+    {
+      "sid": "v3.139",
+      "hcidx": 139,
+      "milestone": "v2.M8",
+      "deps": [],
+      "title": "Headphone auto-reconnect races boot handshakes: Onn_ connects, shows pairing twice, does not land connected -- per-device isolation on one radio was an early OpenSpan victory and must hold at boot too  [reconnect-race]",
+      "why": "Doug at the 00:48 cold boot: their connections should not be affected by other device handshakes",
+      "estTokens": "triage 30k-60k, fix TBD",
+      "costDrivers": "",
+      "estTime": "TBD after triage",
+      "model": "Sonnet triage -> Opus fix + Architect review",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "Evidence: app log 00:49:17 bridge READY -> auto-reconnect Onn_; 00:49:21 connected CHECK claimed; lanes iPad/Mac/Laptop ready 00:49:28-29 AFTER; Doug observed connect -> pairing x2 -> not connected. App's claim and reality disagree. Suspects: auto-reconnect fires at bridge-READY while guest lane bring-up still running; guest bluetoothd/agent serialization across controllers; or Windows-side flash before stand-down. Triage is read-only."
       }
     }
   ],
