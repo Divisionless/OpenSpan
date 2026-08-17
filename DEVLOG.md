@@ -45,6 +45,31 @@ test rides a normal restart with no mid-session variables.
 three answers in it: the ear test, the surface, and a boot with every fix
 aboard.
 
+**And then the machine learned to photograph itself.** The 02:13 restart
+passed everything — ears included, journal-proven: the wireplumber bounce
+finished before READY invited the earbuds in, and they held. But Win+Shift+S
+exposed the last Microsoft dependency: `ms-screenclip:` throws `0x87b20c15`
+in an Explorer-less session — packaged snipping cannot be reliably invoked
+on this desktop, ever. Doug's ruling: "get rid of our dependency on this old
+snipping crap." Fifty minutes later, **EsotericOS Capture** (shell `b02fc50`
++ `1f06264`, ~275k Opus, legacy capture module mined as reference and
+improved on — per-monitor overlays where legacy's spanning window had no
+honest DPI): Win+Shift+S draws a boundary on a frozen frame, Win+Alt+Shift+S
+takes the screen under the pointer, both to clipboard + PNG, Microsoft's
+path deleted from the build. And the chords live in
+**`D:\_EsotericOS\config\bindings.json`** — a new EsotericOS-wide bindings
+home, all eight shell chords in one flat versionable map, outside Cairo's
+doomed settings store. Christened by Doug on the first press of each, and
+the proof artifact is perfect: a screenshot of EsotericOS's own Desk
+surface, taken by EsotericOS, on the shell that is EsotericOS.
+
+**Also this night:** the 01:19 WiFi loss on two laptops was audited to a
+verdict — upstream AP outage, EsotericOS exonerated in code and logs
+(v3.140, ~460k tokens of evidence). Surface mode is live: under our shell
+the app builds no X and refuses WM_CLOSE. **Crystallized 02:46**:
+`known-good-20260817-024628` — app `635d9062`, shell `4facba00`, verified
+live by Doug's own hands before the seal.
+
 ---
 
 ## 2026-08-16 night — the takeover postmortem corrected by measurement, and the board learns to defend itself
