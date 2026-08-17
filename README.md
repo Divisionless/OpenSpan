@@ -223,6 +223,29 @@ and the input portal, arranges the iPad among your monitors, and edits the
 keymap. In the portal, cross the arranged edge to control the iPad;
 **Esc pressed 3× in a row** is the panic bail — it always returns the mouse to the PC, even if the bridge is broken. (**Ctrl+Alt+Q** still works as a backup; **Ctrl+Alt+I** toggles manually.)
 
+### Surface mode vs window mode
+
+The app asks **once at startup** who the session's shell is (`win/surface_mode.py`)
+and is one of two things for the rest of its life:
+
+- **Surface mode** — the EsotericOS Shell (`CairoDesktop`) is the shell. The app
+  is part of the desktop surface: **no minimize button, no X, and WM_CLOSE is
+  refused**, so Alt+F4 and the taskbar's Close do nothing but log a line. Sign-out,
+  restart and shutdown are unaffected — Windows ends a session with
+  `WM_QUERYENDSESSION`, which never reaches that handler.
+- **Window mode** — Explorer is the shell (the deliberate debugging visit).
+  Exactly the behaviour it has always had: minimize, X, the close dialog.
+
+The detection is a **live probe, not the registry**: the process owning
+`GetShellWindow()`, then a running `CairoDesktop`, and only then the Winlogon
+`Shell` value. The registry says what will start at *next* sign-in, and the one
+moment the two disagree is the debugging visit itself. Anything uncertain
+resolves to **window mode** — the direction that stays closeable.
+
+**The escape hatch is `--window`**: `EsotericOS.exe --window` forces window mode
+whatever the shell is, and it survives the elevation relaunch. (`--surface`
+forces the other way, for testing.) A flag always beats the probe.
+
 ## Setup
 
 The Windows side is turnkey (pure standard-library Python; `pycaw` is an

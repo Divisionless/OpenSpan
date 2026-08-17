@@ -7119,8 +7119,16 @@ class BtPanel(tk.Frame):
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, mode=None):
         self.root = root
+        # WHICH SHELL OWNS THIS SESSION -- decided ONCE, here, and never
+        # re-probed. Under the EsotericOS Shell the app is the surface of the
+        # desktop and has no minimize, no X, and no WM_CLOSE path; under
+        # Explorer (the deliberate debugging visit) it is exactly the window it
+        # has always been. See surface_mode.py for the probe and the flags.
+        import surface_mode
+        self.mode = mode or surface_mode.decide_mode()
+        self.surface = surface_mode.is_surface(self.mode)
         root.title(APP_LABEL)
         # Provisional, so the window does not flash at a silly size while it is
         # being built. BOTH heights are replaced at the end of __init__ with the
@@ -7217,22 +7225,29 @@ class App:
         # window controls: the caption is stripped (frameless), so THIS row is
         # the title bar. Tk buttons -> commands on the Tk thread (R1-safe); the
         # drag is the SetWindowPos header binding below (callback-free).
-        _cl = tk.Button(head, text="✕", command=self._confirm_close, bg=BG,
-                        fg=MUTED, bd=0, relief="flat", width=3, cursor="hand2",
-                        font=(FONT_UI, 12), activebackground=DANGER,
-                        activeforeground="#ffffff")
-        _cl.pack(side="right", padx=(6, 0))
-        _cl.bind("<Enter>", lambda e: _cl.config(bg=DANGER, fg="#ffffff"))
-        _cl.bind("<Leave>", lambda e: _cl.config(bg=BG, fg=MUTED))
-        _mn = tk.Button(head, text="—", command=self._minimize, bg=BG, fg=MUTED,
-                        bd=0, relief="flat", width=3, cursor="hand2",
-                        font=(FONT_UI, 11), activebackground=PANEL,
-                        activeforeground=FG)
-        _mn.pack(side="right")
-        _mn.bind("<Enter>", lambda e: _mn.config(bg=PANEL, fg=FG))
-        _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
-        ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
-            side="right", padx=(0, 12))
+        # ...but ONLY in window mode. On the surface there is nothing to
+        # minimize to and nothing to close to: the app IS the desktop, so the
+        # three controls that take it away are not built at all. Not disabled,
+        # not hidden -- absent, because a disabled control is still an
+        # invitation. `self.surface` is the one decision from __init__.
+        if not self.surface:
+            _cl = tk.Button(head, text="✕", command=self._confirm_close, bg=BG,
+                            fg=MUTED, bd=0, relief="flat", width=3,
+                            cursor="hand2", font=(FONT_UI, 12),
+                            activebackground=DANGER,
+                            activeforeground="#ffffff")
+            _cl.pack(side="right", padx=(6, 0))
+            _cl.bind("<Enter>", lambda e: _cl.config(bg=DANGER, fg="#ffffff"))
+            _cl.bind("<Leave>", lambda e: _cl.config(bg=BG, fg=MUTED))
+            _mn = tk.Button(head, text="—", command=self._minimize, bg=BG,
+                            fg=MUTED, bd=0, relief="flat", width=3,
+                            cursor="hand2", font=(FONT_UI, 11),
+                            activebackground=PANEL, activeforeground=FG)
+            _mn.pack(side="right")
+            _mn.bind("<Enter>", lambda e: _mn.config(bg=PANEL, fg=FG))
+            _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
+            ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
+                side="right", padx=(0, 12))
         self._cons_btn = ttk.Button(head, text="▸  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
@@ -9517,6 +9532,24 @@ class App:
         # releases it at process exit (even on a crash), and closing the raw
         # handle early would let a second instance start during shutdown
         self.root.after(400, self.root.destroy)
+
+    def _close_request(self):
+        """Every WM_CLOSE arrives here: the X, Alt+F4, the taskbar's Close, an
+        outside `taskkill /F:no`. In WINDOW mode that is the close dialog, as
+        it has always been. On the SURFACE it is refused -- logged, not acted
+        on -- because a keystroke should not be able to leave the machine with
+        a shell and no app.
+
+        This does NOT hold up sign-out, restart or shutdown: Windows ends a
+        session with WM_QUERYENDSESSION / WM_ENDSESSION, which never reach this
+        handler, and Tk's own teardown on session end is untouched. Refusing
+        WM_CLOSE is deliberately the narrowest place this could be done.
+        """
+        if self.surface:
+            _emit("event", "close refused — EsotericOS is the desktop surface. "
+                           "Start it with --window to get a closeable window.")
+            return
+        self._confirm_close()
 
     def _confirm_close(self):
         """X handler. The recommended close is KEEP THE BRIDGE WARM (minimized):
@@ -12436,9 +12469,11 @@ def run_app():
     if not key_ok:
         _emit("err", "Bridge SSH key setup failed. Guest actions are disabled; "
                      "check id_openspan permissions and restart OpenSpan.")
-    # X asks first (it's a FULL STOP: portal + audio + VM), and offers
-    # "send to system tray" to keep the bridge running instead
-    root.protocol("WM_DELETE_WINDOW", app._confirm_close)
+    # Every WM_CLOSE -- the X, Alt+F4, the taskbar -- goes through one handler
+    # that knows which mode we are in. In window mode it asks first (it's a
+    # FULL STOP: portal + audio + VM) and offers "minimize" to keep the bridge
+    # running; on the surface it refuses. Session end does not come this way.
+    root.protocol("WM_DELETE_WINDOW", app._close_request)
     root.mainloop()
 if __name__ == "__main__":
     run_app()
