@@ -2551,11 +2551,11 @@
       "costDrivers": "AppX activation interop; discovery merge without duplicates; must not disturb menu UI or AppGrabber storage yet",
       "estTime": "2-3h",
       "model": "Opus subagent + Architect review",
-      "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~85k Opus + review in-session",
+      "actualTime": "~12m agent + review + arm",
       "extra": {
-        "note": "Cairo bug (evidence): Programs menu ShellExecutes shell:appsFolder\\\\<AUMID> with the RUNAS verb -> 'Class not registered' (Explorer-hosted activation COM absent + wrong verb). Log 17:40:20 and 17:40:48 today for Claude_pzs8sxrjxfjjc!Claude; same signature 16 Aug 17:35 for Claude + WindowsTerminal. Correct route proven live: IApplicationActivationManager::ActivateApplication, Explorer-independent, works at Medium. Chrome miss was a SECOND defect: AppGrabber's saved catalog (23 apps) simply never contained Chrome though the .lnk exists in ProgramData Start Menu -- discovery must be live, not a frozen grab."
+        "note": "Cairo bug (evidence): Programs menu ShellExecutes shell:appsFolder\\\\<AUMID> with the RUNAS verb -> 'Class not registered' (Explorer-hosted activation COM absent + wrong verb). Log 17:40:20 and 17:40:48 today for Claude_pzs8sxrjxfjjc!Claude; same signature 16 Aug 17:35 for Claude + WindowsTerminal. Correct route proven live: IApplicationActivationManager::ActivateApplication, Explorer-independent, works at Medium. Chrome miss was a SECOND defect: AppGrabber's saved catalog (23 apps) simply never contained Chrome though the .lnk exists in ProgramData Start Menu -- discovery must be live, not a frozen grab. LANDED+REVIEWED+ARMED (shell 9773110, frozen 4454113e -> stable-20260817-175603): AppLauncher.cs in CairoDesktop.Common is now the ONE launch door -- IApplicationActivationManager for packaged apps (fire-and-forget on a short-lived STA thread, so Cairo's own non-FullTrust refusal could be dropped: EVERY packaged app is launchable and none can hang the shell), ShellExecuteEx default verb for everything else. AppGrabber trio + all four taskbar sites + OpenFileCommand rerouted. Verified by Architect: zero appsFolder constructions survive; the two remaining 'runas' calls are correct (explicit user Run-as-admin, guarded !IsStoreApp). KEY FINDING: discovery was NEVER broken -- ShellFolder COM + ManagedShell UWPInterop read package manifests directly (Explorer-independent); the MENU was bound to the frozen XML while only the grabber dialog and search box saw the live list. RefreshCatalog() now reconciles at startup off the UI thread, additive only, user's CairoAppConfig.xml never rewritten. Unverified until live: that GetApps() actually returns Chrome (search box is the fast check), refresh startup cost, Uncategorized tab visibility on legacy configs. De-Cairo IV inventory: ShellHelper.StartProcess in control-panel/search/volume shims, AppGrabberUI grab flow, ManagedShell.UWPInterop, CairoMessage dialogs."
       }
     }
   ],
