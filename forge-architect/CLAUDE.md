@@ -69,5 +69,10 @@ delivered while an agent was still writing into the app that restart relaunches.
 may continue during his action ONLY if it provably cannot touch what his action touches — and the
 NAI says so.
 
+**And it comes last — after the work, never inside it (Doug, same night).** No NAI until my own
+tasks for the turn are finished. Never write one and then keep working after it: an NAI in the
+middle of a turn is a finish line painted mid-track. If work is still running when the reply must
+end, the NAI names that work as mine — it does not skip ahead to what Doug could do once it lands.
+
 This is written here because a rule said in conversation does not survive. Doug stated it on
 2026-08-16; it now lives in the file that loads with the seat.
