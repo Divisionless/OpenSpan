@@ -2475,11 +2475,11 @@
       "costDrivers": "shell detection; chrome differences; exe rebuild+swap beside the RUNNING app without touching it",
       "estTime": "1-1.5h",
       "model": "Opus subagent + Architect review",
-      "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "~70k Opus + review in-session",
+      "actualTime": "~7m agent + review + staged build",
       "extra": {
-        "note": "Surface-mode escape hatch must exist but be deliberate (explicit flag / debug command), never a titlebar button. Rides the next restart after it lands; does NOT gate tonight's v3.135+v3.137 restart."
+        "note": "Surface-mode escape hatch must exist but be deliberate (explicit flag / debug command), never a titlebar button. Rides the next restart after it lands; does NOT gate tonight's v3.135+v3.137 restart. REVIEWED+ACCEPTED (app 0d6c5d4): surface_mode.py live probe (GetShellWindow owner -> CairoDesktop process -> registry tiebreak; every uncertainty -> WINDOW mode), controls NOT BUILT in surface mode, single WM_CLOSE door refuses+logs, session end untouched (WM_QUERYENDSESSION never reaches it), --window escape survives elevation relaunch, 31/31 new checks + suite 58/59 (1 pre-existing hygiene fail re assert-control paths). DEPLOY: exe staged as EsotericOS-next.exe (70MB, built 00:14) -- agent correctly refused in-place land (build_exe.py lands by copy2, not rename; needs app closed + swap-build.ps1). Rides the restart AFTER next (or a deliberate app close+swap on Doug's word). Follow-ups: make build_exe.py land step rename-based; verify live sign-out once deployed; float_window native X consistency noted."
       }
     }
   ],
