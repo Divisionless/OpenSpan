@@ -2347,7 +2347,7 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "Doug 16 Aug: 'Don't overdesign something.' USB/IP and host-side-owner options dropped. 2026-08-17 audit finding: VBoxUSBMon 'internal error in its data structures' clusters at BOTH shutdowns tonight (00:45:08 x3, 01:34:18 x3) and one boot (00:45:48) -- i.e., restarts executed while the VM held the three radio captures. First logged wedge-adjacent signature since the 16 Aug ruling. No functional failure followed (custody 3/3 and lanes came up clean both boots) -- WATCH continues, no redesign."
+        "note": "Doug 16 Aug: 'Don't overdesign something.' USB/IP and host-side-owner options dropped. 2026-08-17 audit finding: VBoxUSBMon 'internal error in its data structures' clusters at BOTH shutdowns tonight (00:45:08 x3, 01:34:18 x3) and one boot (00:45:48) -- i.e., restarts executed while the VM held the three radio captures. First logged wedge-adjacent signature since the 16 Aug ruling. No functional failure followed (custody 3/3 and lanes came up clean both boots) -- WATCH continues, no redesign. Checker disagreement filed 02:18: assert-control's read-only audit reports WINDOWS-OWNED x3 at every assert tonight (23:06, 23:41, 02:18) while the app's boot-time view says ESOTERICOS-CUSTODY 3/3 and all lanes function. Consistent pattern with VM holding the radios -- likely a labeling artifact in the audit path, NOT custody loss. Verify which checker lies at the next boot; no action until then."
       }
     },
     {

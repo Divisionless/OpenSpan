@@ -1,5 +1,52 @@
 # OpenSpan — Devlog
 
+## 2026-08-17 small hours — first morning under our own shell
+
+The first full working session with the fork as the Windows shell, and it held
+through real weather: a WiFi outage, two restarts, and a Bluetooth regression —
+none of them ours, and for the first time we could *prove* it fast.
+
+**Win+Shift+S came home.** Explorer owned the OS binding and died with it; the
+chord now lives in `ShellHotKeyService` beside the fork's other reclaimed Win
+chords, launching `ms-screenclip:` with a `SnippingTool.exe` fallback
+(shell `be58e8c`). Registered at first light: 00:48:38.
+
+**The headphone teardown was us — and the fix restored a law, not a guess.**
+Doug's ears (`Pairing · Connected · Pairing · Pairing`) plus the guest journal
+convicted `btready.sh`: its unconditional `systemctl restart openspan-wireplumber`
+fired 2.1s after the earbuds' A2DP stream landed, tore it down, and desynced
+the release handshake. Deeper: the app's READY was derived from *ssh answering*,
+not from the boot helper finishing — two components that had never heard of
+each other. Both ends fixed (`d173c20`, `68db740`): completion marker + gated
+READY (210s-bounded, exits via trap), restarts conditional on no live A2DP
+transport, and the ✓ now re-verifies the *transport* 7s later with a capped
+retry. The Jul-6 dual-use law — proven ground, wrongly accused mid-triage,
+reaffirmed from this very file — is now commented at the top of the script it
+convicts. Dual-use radio stands.
+
+**The 01:19 network loss was not us, and we can say so with evidence.** Full
+audit (five agents, ~460k tokens, board v3.140): upstream AP outage —
+both laptops dropped, reconnects failed against a silent AP for 100s, return
+on a cached lease. EsotericOS exonerated in code (zero adapter-touching paths)
+and in logs (VM NAT-only, clean USB the whole window). Chronic bystanders
+filed: Killer helper crashes every boot; VBoxUSBMon grumbles at shutdown while
+the VM holds radios; portal.log is 54MB, unrotated, and timestampless — the
+one log that couldn't be windowed, now a housekeeping item.
+
+**One surface, staged.** Doug's doctrine ("that IS EsotericOS — it and the
+shell should breathe as one surface") is implemented shell-aware: under our
+shell the app builds no minimize, no X, and refuses WM_CLOSE; under Explorer —
+the debugging visit — it stays a mortal window (`0d6c5d4`). Deployed by
+on-disk rename-swap beside the running process, per Doug's ruling that the
+test rides a normal restart with no mid-session variables.
+
+**Crystallized 02:18**: `known-good-20260817-021850` — app `635d9062` @
+`ecd48f0`, shell `42ee11b3` @ `be58e8c`. The next restart is one test with
+three answers in it: the ear test, the surface, and a boot with every fix
+aboard.
+
+---
+
 ## 2026-08-16 night — the takeover postmortem corrected by measurement, and the board learns to defend itself
 
 The Architect seat came up in the Forge (the bespoke agent IDE — this entry is
