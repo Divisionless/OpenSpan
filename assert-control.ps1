@@ -56,8 +56,15 @@ $appRoot   = Split-Path -Parent $PSCommandPath          # D:\_EsotericOS\app
 $esRoot    = Split-Path -Parent $appRoot                # D:\_EsotericOS
 $shellRepo = Join-Path $esRoot "shell"
 $shellBuild= Join-Path $shellRepo "Cairo Desktop\Cairo Desktop\bin\x64\Release\net6.0-windows\win-x64"
-$shellStable = Join-Path $shellRepo "stable"
 $appExe    = Join-Path $appRoot "EsotericOS.exe"
+
+# The freeze is VERSIONED: stable-<stamp>\, and HKCU Shell points at the new
+# one. Never freeze onto a directory the running shell executes from -- the
+# first design (a single stable\) robocopy-/MIR'd onto the LIVE shell's own
+# locked files the moment the takeover succeeded. Old stable-* dirs are the
+# rollback ladder; prune by hand when the newest has survived a sign-in.
+$stamp   = (Get-Date).ToString("yyyyMMdd-HHmmss")
+$shellStable = Join-Path $shellRepo ("stable-" + $stamp)
 $stableShellExe = Join-Path $shellStable "CairoDesktop.exe"
 
 $runKey    = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -84,7 +91,6 @@ if ($Release) {
 }
 
 # ================================================================ 1. BACKUP ==
-$stamp   = (Get-Date).ToString("yyyyMMdd-HHmmss")
 $backup  = Join-Path $esRoot ("backups\known-good-" + $stamp)
 New-Item -ItemType Directory -Force -Path $backup | Out-Null
 Line; Write-Host "1. BACKUP known-good -> $backup"
