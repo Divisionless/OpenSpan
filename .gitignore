@@ -64,6 +64,10 @@ module_settings.json
 docs/plan/plan.json.bak
 docs/plan/plan.json.*.bak
 
+# first-light sign-in captures: per-machine evidence (process lists, log
+# copies), read by the postmortem, never published
+first-light/
+
 # personal / machine-specific runtime state (never publish)
 bt_prefs.json
 openspan_config.json
