@@ -73,6 +73,27 @@ minute of desktop, and a copy of Cairo's live log before any restart rotates
 it. The watchdog (`shell\tools\shell-watchdog.ps1`, installed 22:36) now
 backstops that experiment.
 
+## RESOLUTION 2026-08-16 23:16 -- the third attempt held
+
+Plain unelevated arrangement (HKCU Shell -> `stable\CairoDesktop.exe` directly,
+HKLM = explorer.exe net intact, elevated bootstrap inert). Restart 23:09, sign-in
+23:15. Measured by first-light (`app\first-light\20260816-231605`): explorer NOT
+running; the fork Winlogon-started at **Medium, not-elevated**, `Running as
+shell: True`; EsotericOS.exe up **High/elevated** -- silent UAC
+(`ConsentPromptBehaviorAdmin=0`) brokered its RUNASADMIN flag through the Medium
+shell; BT stood down; OpenSpan-Codex running; watchdog "shell alive -- no
+action". Doug: everything seemed to go really well.
+
+The working Medium counter-example disproves the original theory outright, and
+the afternoon's failures now attribute cleanly to the ELEVATED task-launched
+instance (AppX refuses elevated callers). Whatever additionally went wrong at
+the unrecorded 17:18 sign-in did not recur and is unknowable -- closed as
+overtaken by evidence.
+
+Open residue: StartupRunner logs `Failed to start program: ` (blank name) at
+23:15:24, same as the 17:34 session, while everything that matters started
+anyway. Tracked as a follow-up, not a blocker.
+
 **Leftover state flagged:** the task "EsotericOS Shell (elevated)" is still
 registered (Ready) while the elevated arrangement is NOT active -- HKCU Shell
 is absent. Orphaned half of a removed arrangement; Doug to rule on keeping it
