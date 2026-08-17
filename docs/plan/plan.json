@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 135,
+  "nextSid": 136,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2030,11 +2030,11 @@
       "costDrivers": "audit + fixes on contact; Forge always running",
       "estTime": "1h",
       "model": "main session + Opus",
-      "status": "todo",
-      "actualTokens": null,
-      "actualTime": null,
+      "status": "done",
+      "actualTokens": "in-session",
+      "actualTime": "~5m checklist",
       "extra": {
-        "note": "De-blocked 16 Aug: Doug ordered the swap ahead of the audit. Now a POST-HOC check (does the Forge behave under Cairo-as-shell), run after his next sign-in, not a gate."
+        "note": "PASSED 2026-08-16 23:2x, Doug's eyes, all 5: taskbar button/focus, tray icon, file dialogs, Win+Shift+S, Claude desktop app -- under the fork AS shell (Winlogon-started, Medium). Post-hoc audit closed."
       }
     },
     {
@@ -2402,6 +2402,27 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {}
+    },
+    {
+      "sid": "v3.135",
+      "hcidx": 135,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.110",
+        "v3.114"
+      ],
+      "title": "De-Cairo I -- excision at source: WinSparkle/update machinery OUT of the build (it asked to update TONIGHT despite the registry key), Cairo branding/tour/first-run OUT, EsotericOS identity in window classes + about + log paths; rebuild, re-freeze stable, one restart test  [de-cairo-excise]",
+      "why": "Doug 16 Aug 23:2x: move away from Cairo -- use what we want from it and move on",
+      "estTokens": "80k-160k",
+      "costDrivers": "csproj/service-registration surgery; nothing visual yet; must not disturb ManagedShell interop",
+      "estTime": "1.5-2h",
+      "model": "Builder (Opus) + Architect review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "Registry silencing FAILED the field test: CheckForUpdates=0 was set at 23:06 assert and the update ask still appeared. The code path must not exist. Scope: remove WinSparkle service registration + package ref, ENABLEFIRSTRUN/tour remnants, upstream update UI; keep ManagedShell + AppBar plumbing intact. Explicitly NOT the skin (v3.109) or Dock (v3.111)."
+      }
     }
   ],
   "history": [

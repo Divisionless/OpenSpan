@@ -56,6 +56,25 @@ Cairo's log copied before rotation eats it.
 now carries the Next Action Item rule as law, because a rule said in
 conversation does not survive.
 
+**And it held.** Third attempt, 23:15 sign-in: the fork Winlogon-started at
+Medium from `stable\`, no Explorer in the session, app up elevated through
+silent UAC, VM running, watchdog quiet, Forge 5/5 (taskbar, tray, dialogs,
+Win+Shift+S, Claude app). Full verdict in the postmortem's RESOLUTION.
+
+**The doctrine, set the same hour it held — Cairo is scaffold, not
+foundation.** Doug, with the swap proven under him: "move away from Cairo —
+it asks to update, it seems clunky/outdated, let's use what we want from it
+and move on." And it *did* ask to update tonight, straight past the
+`CheckForUpdates=0` key set at 23:06 — the field test that settles how
+removal works here: registry silencing is a reminder; only excision refuses.
+The divergence path on the board: v3.135 De-Cairo I (update machinery and
+Cairo identity out of the build at source) → v3.109 (our skin) → v3.111
+(taskbar → Dock, our desktop) → v3.112 (our modules in the shell). What we
+keep is the fork's plumbing — ManagedShell interop, AppBar/WorkArea handling,
+the shell-hosting bones. What we replace is everything with Cairo's name or
+Cairo's face on it. The licence lineage already permits exactly this; that is
+why the fork is GPL-3.0-or-later.
+
 ---
 
 ## 2026-08-16 evening — the boundary drawn at boot, and copyleft made law
