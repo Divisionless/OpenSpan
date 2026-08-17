@@ -604,6 +604,64 @@ check("busy: an in-flight device defers the audio auto-reconnect",
 _st["inflight"] = False
 
 
+# === the follow-up transport check after "connected ✓" ======================
+# The check-mark was true when printed and stopped being true 2.1s later while
+# nothing was looking (2026-08-17: btready.sh bounced wireplumber out from
+# under a live A2DP stream). _verify_conn is the one plain re-read that catches
+# it. Only the guest's answer is mocked; the decision logic is the real one.
+_saved_ssh = openspan.ssh_guest
+
+
+def _answer(token):
+    openspan.ssh_guest = lambda *a, **k: R(0, token, "")
+
+
+app._auto_conn_lost = 0
+app._auto_conn_fails = 0
+_reconnects.clear()
+
+_answer("LIVE")
+app._verify_conn("AA:BB:CC:00:00:09", "Buds")
+check("verify: a transport that is still live triggers no retry",
+      _reconnects == [])
+check("verify: and it clears the teardown counter",
+      app._auto_conn_lost == 0)
+
+_answer("GONE")
+app._verify_conn("AA:BB:CC:00:00:09", "Buds")
+check("verify: a vanished transport re-runs the auto-reconnect path",
+      len(_reconnects) == 1)
+check("verify: and counts the teardown", app._auto_conn_lost == 1)
+check("verify: the retry bypasses the 90s cooldown, which exists to stop us "
+      "paging idle buds -- not to stop us repairing a link we watched die",
+      app._auto_conn_last == 0.0)
+
+# an unreadable answer is not evidence of a teardown -- claim nothing
+_answer("")
+app._verify_conn("AA:BB:CC:00:00:09", "Buds")
+check("verify: an unreadable answer neither retries nor counts",
+      len(_reconnects) == 1 and app._auto_conn_lost == 1)
+
+# the chain is bounded on its own: a successful reconnect resets
+# _auto_conn_fails to 0, so without _auto_conn_lost a link that connects and
+# dies forever would ping-pong every 7s for the life of the session
+_answer("GONE")
+app._auto_conn_lost = app._CONN_VERIFY_MAX - 1
+app._verify_conn("AA:BB:CC:00:00:09", "Buds")
+check("verify: the retry chain stops after _CONN_VERIFY_MAX teardowns",
+      len(_reconnects) == 1)
+
+# The session-wide 3-fail pause is NOT asserted here on purpose:
+# _auto_reconnect_audio is stubbed at the top of this file, so a call to it
+# would only prove the stub appends. The retry goes through that same real
+# guard in production; what this section owns is the decision to retry at all.
+
+app._auto_conn_lost = 0
+app._auto_conn_fails = 0
+_reconnects.clear()
+openspan.ssh_guest = _saved_ssh
+
+
 # --- a new SCREEN belongs to the device you are editing ---------------------
 # Adding a screen used to mint "mac-N" whatever device was open -- the last
 # hardcoded remnant of the two-device model, in the one dialog used for every

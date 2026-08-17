@@ -7161,6 +7161,7 @@ class App:
         self._auto_conn_last = 0.0     # last firing (cooldown anchor)
         self._auto_conn_cooldown = 90.0  # min seconds between auto firings
         self._auto_conn_fails = 0      # 3 failed rounds -> pause for session
+        self._auto_conn_lost = 0       # consecutive post-connect teardowns
         self._manual_bt_ops = 0        # in-flight manual BT actions
         self._bt_ops_lock = threading.Lock()
         self._broadcast_started = 0.0
@@ -9328,6 +9329,10 @@ class App:
                     if "CONNECTED" in tok:
                         ok = True
                         _emit("event", f"auto-reconnect: “{name}” connected ✓")
+                        # The check-mark was TRUE when printed and then stopped
+                        # being true seconds later, and nobody was looking
+                        # (2026-08-17). Look once, later.
+                        self._schedule_conn_verify(mac, name)
                         break
                     if "NOT_BONDED" in tok:
                         break  # bond gone/unreadable -> hands off, no retry
@@ -9345,6 +9350,64 @@ class App:
                         else self._auto_conn_fails + 1
                 self._auto_conn_busy = False
         threading.Thread(target=work, daemon=True).start()
+
+    # A connect that holds for 7s has survived the boot sequence; anything that
+    # kills it later is a new event and gets its own reconnect round.
+    _CONN_VERIFY_DELAY = 7000   # ms after the check-mark
+    _CONN_VERIFY_MAX = 3        # consecutive teardowns before we stop retrying
+
+    def _schedule_conn_verify(self, mac, name):
+        """One follow-up read, ~7s after we printed "connected ✓", asking the
+        only question that matters: is the A2DP transport still there?
+
+        No latch and no watcher thread -- a single plain re-read that either
+        confirms the check-mark or contradicts it out loud. If it is gone we
+        say so honestly and run the SAME auto-reconnect path again, which
+        still honours the 3-fail session pause; _auto_conn_lost bounds the
+        retry chain on its own so a link that connects and dies forever can
+        never ping-pong (a bare retry would, because a successful connect
+        resets _auto_conn_fails to 0)."""
+        self.ui(lambda: self.root.after(
+            self._CONN_VERIFY_DELAY,
+            lambda: threading.Thread(
+                target=self._verify_conn, args=(mac, name),
+                daemon=True).start()))
+
+    def _verify_conn(self, mac, name):
+        # the transport object itself, not the device's Connected flag: the
+        # device stayed "connected" through the teardown while its transport
+        # was dead. Controller-agnostic, so it is correct on a multi-radio
+        # desk without having to know which hciN the buds landed on.
+        mac_u = mac.replace(":", "_")
+        cmd = ('if command -v busctl >/dev/null 2>&1; then '
+               'busctl --system call org.bluez / '
+               'org.freedesktop.DBus.ObjectManager GetManagedObjects '
+               f'2>/dev/null | grep -q "dev_{mac_u}/fd" '
+               '&& echo LIVE || echo GONE; else '
+               f'bluetoothctl info {mac} 2>/dev/null '
+               '| grep -q "Connected: yes" '
+               '&& echo LIVE || echo GONE; fi')
+        try:
+            r = ssh_guest(cmd, timeout=20, quiet=True)
+        except Exception:  # noqa: BLE001
+            return  # couldn't ask -> claim nothing either way
+        tok = ((r.stdout or "").strip().splitlines() or [""])[-1]
+        if "LIVE" in tok:
+            self._auto_conn_lost = 0
+            return
+        if "GONE" not in tok:
+            return  # unreadable answer is not evidence of a teardown
+        self._auto_conn_lost += 1
+        if self._auto_conn_lost >= self._CONN_VERIFY_MAX:
+            _emit("event", f"“{name}”: connection lost after connect again — "
+                           "something is tearing it down; not retrying.")
+            return
+        _emit("event", f"“{name}”: connection lost after connect — retrying…")
+        # the 90s cooldown exists to stop us paging idle buds, not to stop us
+        # repairing a link we just watched die. The fail counter and the
+        # teardown counter are what bound this.
+        self._auto_conn_last = 0.0
+        self._auto_reconnect_audio("connection was lost after connecting")
 
     # ---- System control (full manual control, nothing hidden) ----
     def stop_vm(self):
@@ -9893,6 +9956,45 @@ class App:
             except Exception:  # noqa: BLE001
                 pass
 
+    # how long we will wait for btready.sh before calling the bridge READY
+    # anyway. Its systemd unit allows 200s; we allow a little more so a helper
+    # that is genuinely still working is never cut off mid-bounce, and then we
+    # give up LOUDLY rather than leaving the banner on "Booting…" forever. A
+    # guest too old to write the marker never reaches this: is-active tells us
+    # the helper is finished on the very first poll.
+    _BTREADY_WAIT = 210
+
+    def _wait_btready(self):
+        """Block until the guest's boot helper has finished its last restart.
+
+        Two independent completion signals, either of which releases us:
+          * /run/openspan/btready.done -- written by btready.sh on EVERY exit
+            path (bash EXIT trap), so a helper that dies early still releases;
+          * the unit is not 'activating' -- systemd's own view, which also
+            covers a guest whose btready.sh predates the marker, and a guest
+            with no such unit at all.
+        Neither is trusted to arrive: _BTREADY_WAIT bounds the whole thing.
+        READY is allowed to be late. It is not allowed to never happen."""
+        deadline = time.time() + self._BTREADY_WAIT
+        said = False
+        while time.time() < deadline:
+            r = ssh_guest(
+                "test -f /run/openspan/btready.done && echo DONE; "
+                "systemctl is-active openspan-btready 2>/dev/null",
+                timeout=10, quiet=True)
+            out = (r.stdout or "")
+            if "DONE" in out:
+                return
+            if "activating" not in out:
+                return  # helper finished (or was never there)
+            if not said:
+                said = True
+                _emit("event", "VM up — waiting for the radio helper to "
+                               "finish before calling it READY…")
+            threading.Event().wait(2)
+        _emit("event", "radio helper never reported finished — going READY "
+                       f"anyway after {self._BTREADY_WAIT}s.")
+
     def _sync_guest_scripts(self):
         """Deploy app-bundled guest scripts to the VM once it's reachable, so a
         fix in the app also fixes the VM-side logic -- no manual deploy needed.
@@ -9930,6 +10032,12 @@ class App:
                 if ssh_guest("echo ok", timeout=5, quiet=True).stdout.strip() \
                         == "ok":
                     reachable = True
+                    # ssh answering is NOT the bridge being ready: btready.sh is
+                    # still bouncing bluetoothd and wireplumber for a while
+                    # after it. Announcing READY here is what invited the buds
+                    # onto the radio mid-bounce and got their stream torn down
+                    # 2.1s later (2026-08-17). Wait for the helper to finish.
+                    self._wait_btready()
                     self._vm_reachable = True
                     break
                 threading.Event().wait(3)
