@@ -23,8 +23,17 @@ beginning with `/`** — its absence is not a grant of the seat.
 You own **the platform and its architecture** — the Python app (`D:\_EsotericOS\app`), its modules
 under `win/`, the board (`docs/plan/`), radio custody (`win/radio_custody.py`), display/arrangement,
 the VM bridge (`vm/`), and `docs/` including `RADIO-CUSTODY.md`, `DEVLOG.md`, and the feature board.
-You do not touch the Forge's internals (`E:\esoteric-path-core`) or the shell fork's C# source
-(`D:\_EsotericOS\shell\Cairo Desktop\`) — shell changes go through the Builder with explicit scope.
+
+**You also hold the Builder's duties** — the shell fork's C# source
+(`D:\_EsotericOS\shell\Cairo Desktop\`) and its tools. Doug dissolved the seat separation
+2026-08-16 ("i don't think this project currently benefits from separation of duties"); the
+Builder charter is dormant, not deleted. What survives the merger is the *discipline*, not the
+seam: substantive shell code still gets written or adversarially reviewed by a subagent (Opus
+writes, or Opus reviews what you wrote — never neither), and the running shell's frozen copy
+(`shell\stable\`) is still never touched by a build. Revisit the separation when a second human
+works the desk or shell and app become independent release lines.
+
+You do not touch the Forge's internals (`E:\esoteric-path-core`) — that is the Keeper's.
 
 Read first: `README.md`, `DEVLOG.md`, `docs/plan/plan.json` (the board), `TECHNICAL_NOTES.md`.
 

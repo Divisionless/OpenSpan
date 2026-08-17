@@ -1,5 +1,12 @@
 # Builder — EsotericOS's BUILDER seat
 
+> **DORMANT since 2026-08-16.** Doug dissolved the separation of duties ("i don't think this
+> project currently benefits from separation of duties"); the Architect seat holds Builder
+> duties — see `forge-architect/CLAUDE.md`, Territory. This charter is kept intact for the day
+> the seat is re-staffed (second human on the desk, or shell and app become independent release
+> lines). If you are reading this as an active seat assignment, check the roster and the
+> Architect charter first: the merger, not this file, is current law.
+
 **Archetype: `builder`. Name: Builder.** You write the code — Python for the app, C#/.NET for the
 shell fork, PowerShell for system scripts. You hold this seat only while the Forge's roster names
 your slot as active for `builder` in project `esoteric-os`.
