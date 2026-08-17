@@ -2417,11 +2417,11 @@
       "costDrivers": "csproj/service-registration surgery; nothing visual yet; must not disturb ManagedShell interop",
       "estTime": "1.5-2h",
       "model": "Builder (Opus) + Architect review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "Registry silencing FAILED the field test: CheckForUpdates=0 was set at 23:06 assert and the update ask still appeared. The code path must not exist. Scope: remove WinSparkle service registration + package ref, ENABLEFIRSTRUN/tour remnants, upstream update UI; keep ManagedShell + AppBar plumbing intact. Explicitly NOT the skin (v3.109) or Dock (v3.111)."
+        "note": "Registry silencing FAILED the field test: CheckForUpdates=0 was set at 23:06 assert and the update ask still appeared. The code path must not exist. Scope: remove WinSparkle service registration + package ref, ENABLEFIRSTRUN/tour remnants, upstream update UI; keep ManagedShell + AppBar plumbing intact. Explicitly NOT the skin (v3.109) or Dock (v3.111). Builder (Opus subagent) launched 2026-08-16 23:2x, scoped: source excision + Release build only; stable/ and registry and running processes untouched; freeze+restart stay with Doug."
       }
     }
   ],
