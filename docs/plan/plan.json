@@ -2534,7 +2534,9 @@
       "status": "doing",
       "actualTokens": null,
       "actualTime": null,
-      "extra": {}
+      "extra": {
+        "note": "PHASE 1 LANDED (shell b02fc50, ~116k Opus): freeze-frame region snip, per-monitor overlays (deliberately NOT legacy's single spanning window -- mixed-DPI has no single scale factor), physical-pixel coordinate space with one conversion per window, crop from frozen frames (zero resampling single-monitor), clipboard dual-format + atomic PNG save, ms-screenclip:/SnippingTool path DELETED. Builds clean both TFMs at baseline warnings. CORRECTIONS to the record: legacy repo has no v1.15 marker anywhere, and capture-overlay's RECORDING half was never built (button says not-in-this-build; FEATURE_STATUS marks partial) -- the deferred rows describe intent, not shipped code. Phase-2 menu mined from legacy: annotation port (real), toolbar/modes, window mode (z-list snapshot trick), keyboard nudge, destinations+delivery, DRM black-frame detection, OCR (760-line COM vtable file, own pass), recording = from scratch or drop. EXPANSION IN FLIGHT (Doug 02:3x): Win+Shift+S = region, Alt+Win+Shift+S = capture a screen; both bound EXPLICITLY via new D:/_EsotericOS/config/bindings.json (EsotericOS-wide bindings home, outside Cairo's store) -- agent resumed with the spec. Live-test risks queued for first light: AppBar z-order reassert, Esc foreground activation, mixed-DPI drag."
+      }
     }
   ],
   "history": [
