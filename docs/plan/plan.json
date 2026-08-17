@@ -2497,7 +2497,7 @@
       "actualTokens": null,
       "actualTime": null,
       "extra": {
-        "note": "Evidence: app log 00:49:17 bridge READY -> auto-reconnect Onn_; 00:49:21 connected CHECK claimed; lanes iPad/Mac/Laptop ready 00:49:28-29 AFTER; Doug observed connect -> pairing x2 -> not connected. App's claim and reality disagree. Suspects: auto-reconnect fires at bridge-READY while guest lane bring-up still running; guest bluetoothd/agent serialization across controllers; or Windows-side flash before stand-down. Triage is read-only."
+        "note": "Evidence: app log 00:49:17 bridge READY -> auto-reconnect Onn_; 00:49:21 connected CHECK claimed; lanes iPad/Mac/Laptop ready 00:49:28-29 AFTER; Doug observed connect -> pairing x2 -> not connected. App's claim and reality disagree. Suspects: auto-reconnect fires at bridge-READY while guest lane bring-up still running; guest bluetoothd/agent serialization across controllers; or Windows-side flash before stand-down. Triage is read-only. REFINED (Doug's ears): Pairing -> Connected -> Pairing -> Pairing. It DID land; the 00:49:21 claim was true at claim time; TEARDOWN within seconds, then earbuds kicked into pairing mode x2. Re-ranked to post-connect teardown by what ran after: openspan_bt.py list at 00:49:22 and lane bring-ups landing 00:49:28-29. Second defect: no post-claim monitoring -- the app never noticed the loss. Triage agent updated mid-flight."
       }
     }
   ],
