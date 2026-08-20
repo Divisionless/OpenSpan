@@ -1,5 +1,37 @@
 # OpenSpan — Devlog
 
+## 2026-08-19 — Programs leaves Cairo AppGrabber
+
+Doug rejected v3.143 because it repaired a handler while leaving Cairo's
+AppGrabber in authority. v3.144 replaces that runtime architecture with the
+standalone `EsotericOS.Shell.Applications` assembly. It owns immutable launch
+identity, live Start Menu and AppX discovery, ShellExecuteEx and
+IApplicationActivationManager activation, search, retained groups, and Quick
+Launch persistence. Existing Cairo categories and pins are read once for
+migration; the new store is `%APPDATA%\EsotericOS\applications.json`, and the
+live catalog is rediscovered instead of frozen into that file.
+
+The executable, MenuBar, Taskbar, settings, open-file path, task buttons, and
+task thumbnails now have no AppGrabber or old AppLauncher dependency. Mouse,
+Enter, detached context-menu, Quick Launch, task pin, and direct-path routes
+all cross the EsotericOS-owned typed boundary. Adversarial review corrected
+three release defects before freezing: transient discovery was initially being
+persisted, `.lnk` arguments could have been applied twice, and the grouped UI
+had lost its visible TabControl template.
+
+The deterministic no-UI harness passes 607 assertions. Full net6.0-windows x64
+build passes with zero errors and the five existing warnings; the new assembly,
+MenuBar, and Taskbar each pass net480 with zero warnings and errors. Source and
+built dependency audits both exclude `CairoDesktop.AppGrabber`. Shell
+`5f51761`, executable SHA8 `31a15c8a`, is frozen and armed at
+`stable-20260819-232647`; PID 6220 remains untouched on the old known-good.
+Live acceptance is deliberately gated: `OpenSpan-Codex` currently holds all
+three configured USB radios, so Windows must not restart until Doug stops that
+VM. Chrome mouse/Enter, packaged Claude, groups, and Quick Launch remain the
+post-sign-in checks.
+
+---
+
 ## 2026-08-19 — Programs becomes one observable command
 
 Google Chrome exposed a second launch failure after the v3.142 activation

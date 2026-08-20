@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-16",
-  "nextSid": 144,
+  "nextSid": 145,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2575,7 +2575,27 @@
       "actualTokens": "not surfaced (subagent + Overseer review)",
       "actualTime": "~20m implementation + review + arm",
       "extra": {
-        "note": "Do not touch the running stable-20260817-175603 copy. Chrome is the live acceptance case; packaged Claude remains the AppX regression case. LANDED+REVIEWED+ARMED 2026-08-19 (shell 062a317, frozen SHA8 6df60468 -> stable-20260819-195930; HKCU pointer advanced, HKLM explorer.exe safety net intact, running PID 6220 remains on stable-20260817-175603). Proven boundary: exact Programs click created no chrome.exe while the same .lnk and the same ShellExecuteEx flags both succeeded, so the failure was before AppLauncher; no narrower WPF cause is claimed because the retired routed Click path had no observation point. Replacement: AppGrabberService owns one typed ApplicationLaunchCommand; category, search mouse, search Enter, context Open, Quick Launch primary and Quick Launch context all dispatch the displayed ApplicationInfo object. Detached context menus bind both command and parameter explicitly through PlacementTarget. Logs now record name/path/target, dispatch, accepted/failed completion; AppLauncher logs successful ShellExecuteEx acceptance. AppX IApplicationActivationManager and explicit administrator routes are preserved. Deterministic no-UI harness passes six contracts; targeted MenuBar+Taskbar builds pass net6.0-windows and net480 with 0 warnings/errors; full net6.0-windows x64 desktop build passes with 0 errors and five existing baseline warnings. Stable copy hash exactly matches build. LIVE UNVERIFIED until Doug restarts/signs in: Chrome mouse + Enter are acceptance; packaged Claude is AppX regression."
+        "note": "Do not touch the running stable-20260817-175603 copy. Chrome is the live acceptance case; packaged Claude remains the AppX regression case. LANDED+REVIEWED+ARMED 2026-08-19 (shell 062a317, frozen SHA8 6df60468 -> stable-20260819-195930; HKCU pointer advanced, HKLM explorer.exe safety net intact, running PID 6220 remains on stable-20260817-175603). Proven boundary: exact Programs click created no chrome.exe while the same .lnk and the same ShellExecuteEx flags both succeeded, so the failure was before AppLauncher; no narrower WPF cause is claimed because the retired routed Click path had no observation point. Replacement: AppGrabberService owns one typed ApplicationLaunchCommand; category, search mouse, search Enter, context Open, Quick Launch primary and Quick Launch context all dispatch the displayed ApplicationInfo object. Detached context menus bind both command and parameter explicitly through PlacementTarget. Logs now record name/path/target, dispatch, accepted/failed completion; AppLauncher logs successful ShellExecuteEx acceptance. AppX IApplicationActivationManager and explicit administrator routes are preserved. Deterministic no-UI harness passes six contracts; targeted MenuBar+Taskbar builds pass net6.0-windows and net480 with 0 warnings/errors; full net6.0-windows x64 desktop build passes with 0 errors and five existing baseline warnings. Stable copy hash exactly matches build. LIVE UNVERIFIED until Doug restarts/signs in: Chrome mouse + Enter are acceptance; packaged Claude is AppX regression. SCOPE REJECTED BY DOUG 2026-08-19 after arming: this replaced only the dispatch seam and left Cairo AppGrabber in authority, so it is not the requested architecture replacement. Do not restart into stable-20260819-195930 as acceptance. v3.144 supersedes it with an EsotericOS-owned runtime subsystem and will replace the armed image."
+      }
+    },
+    {
+      "sid": "v3.144",
+      "hcidx": 144,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.143"
+      ],
+      "title": "EsotericOS Programs -- remove Cairo AppGrabber from the runtime; own application identity, live catalog, launch activation, search, categories and Quick Launch persistence in an EsotericOS assembly; migrate existing user placements once  [esoteric-programs]",
+      "why": "Doug rejected v3.143 as a handler repair: get rid of the broken architecture and replace it without Cairo. The runtime Programs and pinning authority must no longer reference or load CairoDesktop.AppGrabber",
+      "estTokens": "200k-400k",
+      "costDrivers": "clean assembly boundary; Start Menu and AppX discovery; one-time category and pin migration; three DI consumers; taskbar pin and grouping removal",
+      "estTime": "2-4h",
+      "model": "subagent implementation + Overseer adversarial review",
+      "status": "done",
+      "actualTokens": "not surfaced (subagent + Overseer adversarial review)",
+      "actualTime": "~1h implementation, review, verification and arm",
+      "extra": {
+        "note": "LANDED+REVIEWED+ARMED 2026-08-19 (shell 5f51761, frozen SHA8 31a15c8a -> stable-20260819-232647; HKCU pointer advanced, HKLM explorer.exe safety net intact, running PID 6220 remains on stable-20260817-175603). New standalone EsotericOS.Shell.Applications assembly owns immutable typed application identity, live Start Menu and AppX discovery, ShellExecuteEx and IApplicationActivationManager activation, structured launch logs, search, visible migrated groups, Quick Launch persistence, corrupt-store recovery, and one-time read-only Cairo XML migration into %APPDATA%\\EsotericOS\\applications.json. Discovery is transient; only retained group/pin identities persist. Executable, MenuBar, Taskbar, Settings, OpenFileCommand, TaskButton and TaskThumbnail have zero AppGrabber/AppLauncher runtime dependencies; built deps.json contains EsotericOS.Shell.Applications and no CairoDesktop.AppGrabber. Programs mouse, Enter and detached context menu share entry-owned commands; Quick Launch open/add/remove/reorder/drop and task pin use the new service; task grouping no longer consults AppGrabber. Adversarial review corrected transient-catalog persistence, shortcut identity/preserved migration, duplicate .lnk argument application, refresh overlap, async icon dispatch, collection subscription lifetime, and the visible group template before release. Deterministic no-UI harness passes 607 assertions. Full net6.0-windows x64 build passes with 0 errors and five existing warnings; new assembly, MenuBar and Taskbar net480 builds pass with 0 warnings/errors; git diff check and AGPL boundary audit pass. LIVE UNVERIFIED: OpenSpan-Codex currently holds all three configured USB radios, so do not restart Windows until Doug stops that VM. Afterward Chrome mouse + Enter, packaged Claude, groups and Quick Launch are acceptance."
       }
     }
   ],
