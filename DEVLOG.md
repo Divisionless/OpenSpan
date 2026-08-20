@@ -1,5 +1,31 @@
 # OpenSpan — Devlog
 
+## 2026-08-19 — Programs becomes one observable command
+
+Google Chrome exposed a second launch failure after the v3.142 activation
+work. The exact Start Menu shortcut launched directly, and the same
+`ShellExecuteEx` flags succeeded through a headless probe, but clicking its
+exact Programs entry created no process. That seals the failure boundary before
+`AppLauncher`; the retired routed WPF event had no observation point, so the
+record does not pretend to name a narrower cause.
+
+v3.143 replaces that dispatch system. Category entries, search mouse, search
+Enter, context-menu Open, and Quick Launch now send the displayed
+`ApplicationInfo` object through one service-owned typed command. Detached
+context menus bind both command and parameter explicitly through their
+placement target. Every attempt logs name, path, target, dispatch, and the
+accepted/failed result while preserving v3.142's `IApplicationActivationManager`
+AppX door and `ShellExecuteEx` file/shortcut door.
+
+The no-UI contract harness passes all six routes; MenuBar and Taskbar compile
+cleanly for net480 and net6.0-windows; the full x64 desktop build succeeds at
+the existing warning baseline. Shell `062a317`, executable SHA8 `6df60468`, is
+frozen to `stable-20260819-195930` and armed for the next sign-in. The running
+PID 6220 remains untouched on `stable-20260817-175603`. Chrome by mouse and
+Enter, plus packaged Claude, remain the live acceptance checks.
+
+---
+
 ## 2026-08-17 small hours — first morning under our own shell
 
 The first full working session with the fork as the Windows shell, and it held
