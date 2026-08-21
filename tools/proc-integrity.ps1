@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 <#
 .SYNOPSIS
   Read-only: report the integrity level (and elevation) of running processes.
@@ -11,10 +13,10 @@
   Opens each process read-only (QUERY_LIMITED_INFORMATION), reads
   TokenIntegrityLevel and TokenElevation, closes. Changes nothing.
 
-    .\proc-integrity.ps1                       explorer, CairoDesktop, EsotericOS
+    .\proc-integrity.ps1                       explorer, EsotericOS.Shell, CairoDesktop, EsotericOS
     .\proc-integrity.ps1 -Names explorer,code  any names you like
 #>
-param([string[]]$Names = @('explorer', 'CairoDesktop', 'EsotericOS', 'powershell'))
+param([string[]]$Names = @('explorer', 'EsotericOS.Shell', 'CairoDesktop', 'EsotericOS', 'powershell'))
 
 $ErrorActionPreference = 'Stop'
 

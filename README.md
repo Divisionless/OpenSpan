@@ -228,17 +228,20 @@ keymap. In the portal, cross the arranged edge to control the iPad;
 The app asks **once at startup** who the session's shell is (`win/surface_mode.py`)
 and is one of two things for the rest of its life:
 
-- **Surface mode** — the EsotericOS Shell (`CairoDesktop`) is the shell. The app
-  is part of the desktop surface: **no minimize button, no X, and WM_CLOSE is
-  refused**, so Alt+F4 and the taskbar's Close do nothing but log a line. Sign-out,
+- **Surface mode** — `EsotericOS.Shell.exe` is the shell. During the
+  one-release identity bridge, the legacy `CairoDesktop.exe` alias is accepted
+  as the same shell. The app is part of the desktop surface: **no minimize
+  button, no X, and WM_CLOSE is refused**, so Alt+F4 and the taskbar's Close do
+  nothing but log a line. Sign-out,
   restart and shutdown are unaffected — Windows ends a session with
   `WM_QUERYENDSESSION`, which never reaches that handler.
 - **Window mode** — Explorer is the shell (the deliberate debugging visit).
   Exactly the behaviour it has always had: minimize, X, the close dialog.
 
 The detection is a **live probe, not the registry**: the process owning
-`GetShellWindow()`, then a running `CairoDesktop`, and only then the Winlogon
-`Shell` value. The registry says what will start at *next* sign-in, and the one
+`GetShellWindow()`, then either recognized EsotericOS Shell image, and only
+then the Winlogon `Shell` value. The registry says what will start at *next*
+sign-in, and the one
 moment the two disagree is the debugging visit itself. Anything uncertain
 resolves to **window mode** — the direction that stays closeable.
 

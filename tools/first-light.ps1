@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 <#
 .SYNOPSIS
   Evidence capture for an armed shell sign-in: record what the shell actually
   is, at what integrity, before anything can rotate or restart it away.
 
 .DESCRIPTION
-  The 2026-08-16 takeover attempt taught this the hard way: Cairo keeps ONE
+  The 2026-08-16 takeover attempt taught this the hard way: the legacy shell keeps ONE
   same-day log backup, so the session that mattered was overwritten by the
   troubleshooting session that followed, and the original failure was never
   recorded. This script is the camera that is already rolling.
@@ -14,7 +16,7 @@
     1. snapshots process list (shell candidates) with INTEGRITY + elevation
        via tools\proc-integrity.ps1
     2. reads both Winlogon Shell values and the Run key
-    3. copies TODAY's Cairo logs out of the rotation's reach
+    3. copies TODAY's canonical and legacy shell logs out of rotation's reach
     4. appends a dated report to D:\_EsotericOS\app\first-light\<stamp>\
 
   Install/remove (the task survives until removed; each sign-in gets a folder):
@@ -30,7 +32,10 @@ $ErrorActionPreference = 'Continue'   # capture must not die on one bad read
 $TaskName = 'EsotericOS First Light'
 $AppRoot  = Split-Path -Parent $PSScriptRoot                 # D:\_EsotericOS\app
 $OutRoot  = Join-Path $AppRoot 'first-light'
-$CairoLogs = Join-Path $env:LOCALAPPDATA 'Cairo Desktop\Logs'
+$ShellLogRoots = @(
+    @{ Label = 'canonical'; Path = (Join-Path $env:LOCALAPPDATA 'EsotericOS\Shell\Logs') },
+    @{ Label = 'legacy'; Path = (Join-Path $env:LOCALAPPDATA 'Cairo Desktop\Logs') }
+)
 
 if ($Run) {
     if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }
@@ -43,7 +48,7 @@ if ($Run) {
     "" | Add-Content $report
 
     "== integrity (proc-integrity.ps1) ==" | Add-Content $report
-    & (Join-Path $PSScriptRoot 'proc-integrity.ps1') -Names explorer,CairoDesktop,EsotericOS,wscript 2>&1 |
+    & (Join-Path $PSScriptRoot 'proc-integrity.ps1') -Names explorer,EsotericOS.Shell,CairoDesktop,EsotericOS,wscript 2>&1 |
         Add-Content $report
 
     "" | Add-Content $report
@@ -61,16 +66,19 @@ if ($Run) {
     }
 
     "" | Add-Content $report
-    "== cairo logs copied ==" | Add-Content $report
-    if (Test-Path $CairoLogs) {
-        $today = Get-Date -Format 'MM-dd-yyyy'
-        $files = Get-ChildItem $CairoLogs -Filter "$today*.log" -ErrorAction SilentlyContinue
-        foreach ($f in $files) {
-            Copy-Item $f.FullName (Join-Path $out $f.Name) -Force
-            ("copied " + $f.Name + "  (" + $f.Length + " bytes, written " + $f.LastWriteTime.ToString('HH:mm:ss') + ")") | Add-Content $report
-        }
-        if (-not $files) { "(no Cairo log for today)" | Add-Content $report }
-    } else { "(Cairo log dir absent)" | Add-Content $report }
+    "== shell logs copied ==" | Add-Content $report
+    $today = Get-Date -Format 'MM-dd-yyyy'
+    foreach ($root in $ShellLogRoots) {
+        if (Test-Path $root.Path) {
+            $files = Get-ChildItem $root.Path -Filter "$today*.log" -ErrorAction SilentlyContinue
+            foreach ($f in $files) {
+                $destName = $root.Label + '-' + $f.Name
+                Copy-Item $f.FullName (Join-Path $out $destName) -Force
+                ("copied " + $destName + "  (" + $f.Length + " bytes, written " + $f.LastWriteTime.ToString('HH:mm:ss') + ")") | Add-Content $report
+            }
+            if (-not $files) { ("(no " + $root.Label + " shell log for today)") | Add-Content $report }
+        } else { ("(" + $root.Label + " shell log dir absent)") | Add-Content $report }
+    }
 
     "" | Add-Content $report
     "== boot.log tail ==" | Add-Content $report
@@ -92,7 +100,7 @@ if ($Install) {
                     -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew -StartWhenAvailable
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings -Force `
-        -Description 'Records shell identity, integrity, registry and Cairo logs 60s after sign-in. Read-only except its own output folder.' | Out-Null
+        -Description 'Records shell identity, integrity, registry and shell logs 60s after sign-in. Read-only except its own output folder.' | Out-Null
     "installed task '$TaskName' (delay ${DelaySeconds}s) for $user"
     $Check = $true
 }

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Which shell owns this session, and therefore what kind of thing we are.
 
 Doug: "there is never a point when i want to be operating this computer
@@ -7,7 +9,7 @@ desktop, remove the minimize, X buttons."
 
 So the app is two things depending on who is the shell:
 
-  SURFACE MODE -- the EsotericOS Shell (a Cairo fork, process CairoDesktop) is
+  SURFACE MODE -- the EsotericOS Shell is
       the shell. The app is part of the desktop surface: no minimize button, no
       close button, WM_CLOSE (which is what Alt+F4 becomes) ignored. There is
       no casual way to be left with a machine that has a shell and no app.
@@ -33,9 +35,12 @@ import sys
 SURFACE = "surface"
 WINDOW = "window"
 
-# The EsotericOS Shell is a Cairo Shell fork; its image name is what both the
-# live probe and the registry string are matched against, lowercased.
-CAIRO_IMAGE = "cairodesktop.exe"
+# The canonical image is first. The legacy image remains accepted for the
+# one-release compatibility bridge, so the app stays a surface before and
+# after the public shell identity cutover.
+ESOTERICOS_SHELL_IMAGE = "esotericos.shell.exe"
+LEGACY_SHELL_IMAGE = "cairodesktop.exe"
+SHELL_IMAGES = (ESOTERICOS_SHELL_IMAGE, LEGACY_SHELL_IMAGE)
 EXPLORER_IMAGE = "explorer.exe"
 
 FORCE_WINDOW_FLAG = "--window"
@@ -67,7 +72,7 @@ def decide_mode(argv=None, shell_probe=None):
         image = (probe() or "").strip().lower()
     except Exception:  # noqa: BLE001 -- a probe fault must not decide anything
         return WINDOW
-    return SURFACE if image == CAIRO_IMAGE else WINDOW
+    return SURFACE if image in SHELL_IMAGES else WINDOW
 
 
 def is_surface(mode):
@@ -79,8 +84,9 @@ def is_surface(mode):
 # WHY NOT THE REGISTRY FIRST. HKCU\...\Winlogon\Shell says what Winlogon WILL
 # start at the next sign-in. It does not say what is running now, and the one
 # case that matters is exactly the case where the two disagree: Doug kills the
-# Cairo shell and starts Explorer to debug something. The registry still reads
-# CairoDesktop, so a registry-led check would lock the app into surface mode
+# EsotericOS shell and starts Explorer to debug something. The registry can
+# still name either shell image, so a registry-led check would lock the app
+# into surface mode
 # during the very visit that mode exists to stay out of. The live process is
 # the fact; the registry is an intention. So: probe the session, and consult
 # the registry only when the probe cannot see anything at all (which is what
@@ -192,8 +198,8 @@ def session_shell_image(shell_window=None, running=None, registry=None):
 
     The order is live-fact first:
       1. the process owning GetShellWindow() -- decisive when it answers;
-      2. a running CairoDesktop with no Explorer shell window -- which is what
-         a Cairo session looks like, since Cairo registers no shell window;
+      2. a running EsotericOS shell with no Explorer shell window -- the shell
+         intentionally registers no Explorer-compatible shell window;
       3. the Winlogon Shell value -- intention only, for the pre-shell window
          during boot.
     """
@@ -207,8 +213,10 @@ def session_shell_image(shell_window=None, running=None, registry=None):
         images = (running or _running_images)()
     except Exception:  # noqa: BLE001
         images = []
-    if CAIRO_IMAGE in images:
-        return CAIRO_IMAGE
+    lowered = {image.lower() for image in images}
+    for shell_image in SHELL_IMAGES:
+        if shell_image in lowered:
+            return shell_image
     if EXPLORER_IMAGE in images:
         # Explorer is up but owns no shell window yet: still Explorer's session.
         return EXPLORER_IMAGE

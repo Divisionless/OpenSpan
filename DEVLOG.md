@@ -1,5 +1,54 @@
 # OpenSpan — Devlog
 
+## 2026-08-21 — The shell receives its own public identity
+
+De-Cairo II replaces the fork's public executable and manifest identity with
+`EsotericOS.Shell.exe` and `Divisionless.EsotericOS.Shell`. Internal
+`CairoDesktop.*` namespaces and serialized setting keys remain as compatibility
+ABI for this release; a byte-identical `CairoDesktop.exe` apphost alias protects
+existing boot entries for one accepted release.
+
+The new startup bridge acquires both the canonical and legacy mutexes and
+copies legacy settings, logs, extensions, themes, and stacks into
+`%LOCALAPPDATA%\EsotericOS\Shell` and `%APPDATA%\EsotericOS\Shell`. Migration
+is copy-only, per-file atomic, idempotent, and target-wins: it never modifies or
+deletes the legacy data. Autorun, watchdog, First Light, surface-mode detection,
+restart, and shell bootstrap tooling recognize the transition while writing
+only the canonical identity. The existing one-time read-only
+`CairoAppConfig.xml` applications migration remains deliberately available.
+
+Tracked AppGrabber source and resources, the obsolete launch verifier, the
+upstream NSIS scripts, and Cairo WinGet publication are gone. All 19 language
+dictionaries remain, with dead AppGrabber, Welcome, and updater resources
+removed and live product text changed to EsotericOS Shell. The repository is
+now consistently AGPL-3.0-or-later while preserving Cairo and ManagedShell
+attribution in NOTICE.
+
+Independent verification passed: net6.0-windows x64 builds with the five
+existing warnings and no errors; net480 x64 builds with no warnings or errors;
+the deterministic no-UI harness passes 4,722 assertions; both framework
+outputs contain byte-identical canonical and compatibility apphosts; pack URI,
+localization, runtime dependency, script syntax, licence-header, and diff
+audits pass. The ignored `.verify` tree and ignored AppGrabber `bin`/`obj`
+residue are not referenced or shipped, but the execution policy rejected their
+validated targeted recursive deletion. The live shell, existing stable trees,
+registry, scheduled tasks, and processes were not changed.
+
+Shell commit `b03d004` was frozen without arming to
+`stable-20260821-143851`; canonical and compatibility executables both hash to
+SHA-256 `71f47a2cde6359811d02a2a3ba589cb9580b16d2b84bde09826f5145038fa779`.
+The running process and HKCU Winlogon pointer remain on
+`stable-20260819-232647`, so deployment and live acceptance are a separate
+decision rather than a hidden consequence of the build.
+
+The Files follow-up is now framed as an architectural extraction before more
+UI work: an EsotericOS-owned identity/navigation/operation-ledger core, a
+Windows adapter for NTFS/USN, IFileOperation, Restart Manager, and watchers,
+and WPF panes consuming those boundaries rather than expanding the existing
+window-owned monolith.
+
+---
+
 ## 2026-08-19 — Programs leaves Cairo AppGrabber
 
 Doug rejected v3.143 because it repaired a handler while leaving Cairo's

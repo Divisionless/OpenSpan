@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 <#
 .SYNOPSIS
   Back up known-good, freeze a stable EsotericOS, and make Windows boot into it
@@ -20,7 +22,6 @@
          destroyed the net the moment it was needed. Never again.
        * the user Run key keeps launching EsotericOS.exe (displays, Bluetooth
          stand-down, bridge VM) -- the fork's StartupRunner runs it as shell.
-       * Cairo's foreign self-assertion stays stripped (WinSparkle update off).
        * Windows Fast Startup OFF, so every shutdown is a true cold boot -- the
          cold boot the VM and the passed-through radios need (no hybrid-resume
          wedge). This is the only firmware-adjacent setting that matters; it is
@@ -65,12 +66,11 @@ $appExe    = Join-Path $appRoot "EsotericOS.exe"
 # rollback ladder; prune by hand when the newest has survived a sign-in.
 $stamp   = (Get-Date).ToString("yyyyMMdd-HHmmss")
 $shellStable = Join-Path $shellRepo ("stable-" + $stamp)
-$stableShellExe = Join-Path $shellStable "CairoDesktop.exe"
+$stableShellExe = Join-Path $shellStable "EsotericOS.Shell.exe"
 
 $runKey    = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $wlCU      = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wlLM      = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-$wsKey     = "HKCU:\Software\Cairo Development Team\Cairo Desktop Environment\WinSparkle"
 $powerKey  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power"
 
 function Line { Write-Host ("-" * 68) }
@@ -104,7 +104,8 @@ if (Test-Path $appExe) { Copy-Item $appExe (Join-Path $backup "EsotericOS.exe") 
 $manifest = @()
 $manifest += "EsotericOS known-good backup  " + $stamp
 $manifest += "app  EsotericOS.exe     sha8 " + (Sha8 $appExe)
-$manifest += "shell CairoDesktop.exe  sha8 " + (Sha8 (Join-Path $shellBuild "CairoDesktop.exe"))
+$manifest += "shell EsotericOS.Shell.exe  sha8 " + (Sha8 (Join-Path $shellBuild "EsotericOS.Shell.exe"))
+$manifest += "alias CairoDesktop.exe      sha8 " + (Sha8 (Join-Path $shellBuild "CairoDesktop.exe"))
 try { $manifest += "app git    " + (git -C $appRoot rev-parse --short HEAD 2>$null) } catch {}
 try { $manifest += "shell git  " + (git -C $shellRepo rev-parse --short HEAD 2>$null) } catch {}
 $manifest | Set-Content -Path (Join-Path $backup "MANIFEST.txt") -Encoding ASCII
@@ -113,7 +114,7 @@ $manifest | ForEach-Object { Write-Host ("  " + $_) }
 
 # ========================================================= 2. FREEZE SHELL ==
 Line; Write-Host "2. FREEZE the stable shell -> $shellStable"
-if (-not (Test-Path (Join-Path $shellBuild "CairoDesktop.exe"))) {
+if (-not (Test-Path (Join-Path $shellBuild "EsotericOS.Shell.exe"))) {
     Write-Host "  REFUSING: shell not built at $shellBuild"; return
 }
 robocopy $shellBuild $shellStable /MIR /NJH /NJS /NP /NDL /NFL | Out-Null
@@ -144,15 +145,10 @@ if (Test-Path $appExe) {
     Write-Host "  Run\EsotericOS -> EsotericOS.exe (StartupRunner launches it as shell)"
 } else { Write-Host "  WARNING: EsotericOS.exe missing at $appExe" }
 
-foreach ($dead in @("EsotericOS Shell","OpenSpan")) {
+foreach ($dead in @("EsotericOS Shell","CairoShell","OpenSpan")) {
     if ((Get-ItemProperty -Path $runKey -Name $dead -ErrorAction SilentlyContinue).$dead) {
         Remove-ItemProperty -Path $runKey -Name $dead; Write-Host "  removed redundant Run\$dead"
     }
-}
-
-if (Test-Path $wsKey) {
-    Set-ItemProperty -Path $wsKey -Name CheckForUpdates -Value 0 -Type DWord
-    Write-Host "  WinSparkle upstream update check OFF (no 'install stock Cairo' pop)"
 }
 
 Set-ItemProperty -Path $powerKey -Name HiberbootEnabled -Value 0 -Type DWord
@@ -188,7 +184,7 @@ Write-Host "DONE. On your next restart:"
 Write-Host "  * Windows starts the EsotericOS shell (the frozen fork) -- no Explorer."
 Write-Host "  * It launches EsotericOS.exe: your displays, Bluetooth stand-down, the"
 Write-Host "    bridge VM, radios in custody, the portal."
-Write-Host "  * No Cairo tour, no update pop. Fast Startup is off (true cold boot)."
+Write-Host "  * Fast Startup is off (true cold boot)."
 Write-Host ""
 Write-Host "RECOVERY if a sign-in comes up wrong:"
 Write-Host "  Ctrl+Shift+Esc -> File -> Run new task -> explorer.exe   then run:"

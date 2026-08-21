@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Checks for surface_mode.py and its wiring into openspan.py.
 
 No real session, no real HWND: the probes are parameters, so every branch of
@@ -38,8 +40,10 @@ check("a flag anywhere in argv is seen, not just first",
 
 # ---- decide_mode: the shell decides ---------------------------------------
 
-check("Cairo shell -> surface",
+check("legacy shell -> surface",
       sm.decide_mode([], lambda: "CairoDesktop.exe") == sm.SURFACE)
+check("canonical EsotericOS shell -> surface",
+      sm.decide_mode([], lambda: "EsotericOS.Shell.exe") == sm.SURFACE)
 check("Explorer shell -> window",
       sm.decide_mode([], lambda: "explorer.exe") == sm.WINDOW)
 check("unknown shell -> window (uncertainty stays closeable)",
@@ -64,21 +68,29 @@ check("a live shell window is decisive",
       sm.session_shell_image(lambda: "explorer.exe",
                              lambda: ["cairodesktop.exe"],
                              lambda: "cairodesktop.exe") == "explorer.exe")
-check("no shell window + Cairo running -> Cairo (Cairo registers none)",
+check("no shell window + canonical shell running -> canonical shell",
+      sm.session_shell_image(lambda: "", lambda: ["svchost.exe",
+                                                   "EsotericOS.Shell.exe"],
+                             lambda: "") == sm.ESOTERICOS_SHELL_IMAGE)
+check("no shell window + legacy shell running -> legacy shell",
       sm.session_shell_image(lambda: "", lambda: ["svchost.exe",
                                                   "CairoDesktop.exe".lower()],
-                             lambda: "") == sm.CAIRO_IMAGE)
+                             lambda: "") == sm.LEGACY_SHELL_IMAGE)
+check("canonical shell wins if both transition images are present",
+      sm.session_shell_image(lambda: "", lambda: ["cairodesktop.exe",
+                                                   "esotericos.shell.exe"],
+                             lambda: "") == sm.ESOTERICOS_SHELL_IMAGE)
 check("no shell window, Explorer running -> Explorer",
       sm.session_shell_image(lambda: "", lambda: ["explorer.exe"],
                              lambda: "cairodesktop.exe") == sm.EXPLORER_IMAGE)
 check("nothing running -> the registry intention, last",
       sm.session_shell_image(lambda: "", lambda: [],
-                             lambda: "cairodesktop.exe") == sm.CAIRO_IMAGE)
+                             lambda: "cairodesktop.exe") == sm.LEGACY_SHELL_IMAGE)
 check("nothing anywhere -> empty, which decides window",
       sm.session_shell_image(lambda: "", lambda: [], lambda: "") == "")
 check("a throwing shell-window probe falls through instead of raising",
       sm.session_shell_image(_boom, lambda: ["cairodesktop.exe"],
-                             lambda: "") == sm.CAIRO_IMAGE)
+                             lambda: "") == sm.LEGACY_SHELL_IMAGE)
 check("a throwing process list falls through to the registry",
       sm.session_shell_image(lambda: "", _boom,
                              lambda: "explorer.exe") == sm.EXPLORER_IMAGE)
@@ -89,8 +101,31 @@ check("a throwing registry read ends in empty, not an exception",
 # ---- the wiring in openspan.py --------------------------------------------
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 SRC = open(os.path.join(HERE, "openspan.py"), encoding="utf-8").read()
 TREE = ast.parse(SRC)
+
+assert_control = open(os.path.join(ROOT, "assert-control.ps1"),
+                      encoding="utf-8").read()
+first_light = open(os.path.join(ROOT, "tools", "first-light.ps1"),
+                   encoding="utf-8").read()
+proc_integrity = open(os.path.join(ROOT, "tools", "proc-integrity.ps1"),
+                      encoding="utf-8").read()
+
+check("freeze and Winlogon target the canonical shell executable",
+      '$stableShellExe = Join-Path $shellStable "EsotericOS.Shell.exe"'
+      in assert_control)
+check("assert-control carries no dead WinSparkle mutation",
+      "WinSparkle" not in assert_control)
+check("assert-control removes both shell autorun identities",
+      '@("EsotericOS Shell","CairoShell","OpenSpan")' in assert_control)
+check("First Light observes canonical and legacy shell processes",
+      "EsotericOS.Shell,CairoDesktop" in first_light)
+check("First Light preserves canonical and legacy shell logs",
+      "EsotericOS\\Shell\\Logs" in first_light
+      and "Cairo Desktop\\Logs" in first_light)
+check("integrity defaults observe both transition images",
+      "'EsotericOS.Shell', 'CairoDesktop'" in proc_integrity)
 
 
 def _class(name):
