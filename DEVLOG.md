@@ -34,18 +34,22 @@ residue are not referenced or shipped, but the execution policy rejected their
 validated targeted recursive deletion. The live shell, existing stable trees,
 registry, scheduled tasks, and processes were not changed.
 
-Shell commit `b03d004` was frozen without arming to
+Shell commit `b03d004` was first frozen without arming to
 `stable-20260821-143851`; canonical and compatibility executables both hash to
 SHA-256 `71f47a2cde6359811d02a2a3ba589cb9580b16d2b84bde09826f5145038fa779`.
-The running process and HKCU Winlogon pointer remain on
-`stable-20260819-232647`, so deployment and live acceptance are a separate
-decision rather than a hidden consequence of the build.
+Doug then explicitly ordered it armed. The prior boot state was exported to
+`D:\_EsotericOS\backups\known-good-20260821-145513`, and HKCU Winlogon now
+points to that candidate's `EsotericOS.Shell.exe`. HKLM remains `explorer.exe`,
+Fast Startup remains off, app autorun plus First Light and the shell watchdog
+are ready, and the current August 19 shell process remains untouched. The next
+system restart is the live-acceptance boundary.
 
 The Files follow-up is now framed as an architectural extraction before more
 UI work: an EsotericOS-owned identity/navigation/operation-ledger core, a
 Windows adapter for NTFS/USN, IFileOperation, Restart Manager, and watchers,
 and WPF panes consuming those boundaries rather than expanding the existing
-window-owned monolith.
+window-owned monolith. Doug paused Files implementation until after this shell
+restart acceptance; no Files source changed in this turn.
 
 ---
 
