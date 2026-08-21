@@ -2437,10 +2437,12 @@
       "costDrivers": "settings/data migration on first run; installer+mutex+process-name coupling; do winget.yml + tools cleanup first, they are free",
       "estTime": "3-4h",
       "model": "Opus subagent + Architect review",
-      "status": "todo",
+      "status": "doing",
       "actualTokens": null,
       "actualTime": null,
-      "extra": {}
+      "extra": {
+        "note": "STARTED 2026-08-21 after v3.144 live acceptance. Running stable-20260819-232647 is frozen and must remain untouched. Migration must preserve the current settings/data and coordinate process name, mutex, watchdog, Winlogon, VBS, installer, manifest, language resources and recovery paths as one boundary; no blind rename."
+      }
     },
     {
       "sid": "v3.137",
