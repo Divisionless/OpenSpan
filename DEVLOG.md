@@ -24,11 +24,13 @@ build passes with zero errors and the five existing warnings; the new assembly,
 MenuBar, and Taskbar each pass net480 with zero warnings and errors. Source and
 built dependency audits both exclude `CairoDesktop.AppGrabber`. Shell
 `5f51761`, executable SHA8 `31a15c8a`, is frozen and armed at
-`stable-20260819-232647`; PID 6220 remains untouched on the old known-good.
-Live acceptance is deliberately gated: `OpenSpan-Codex` currently holds all
-three configured USB radios, so Windows must not restart until Doug stops that
-VM. Chrome mouse/Enter, packaged Claude, groups, and Quick Launch remain the
-post-sign-in checks.
+`stable-20260819-232647`. Live verification passed after the 2026-08-21
+restart: First Light recorded the new shell at Medium integrity with Explorer
+absent, the built dependency graph loaded the EsotericOS assembly without
+AppGrabber, migration retained 20 entries, five Quick Launch pins, and seven
+groups, and Doug opened Google Chrome successfully from Programs. The VM,
+portal, audio, and all three captured radios recovered through the normal host
+restart path.
 
 ---
 
