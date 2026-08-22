@@ -31,8 +31,12 @@ The acceptance build is
 `D:\_EsotericOS\app\EsotericOS-desktop-role.exe` (73,474,308 bytes,
 SHA-256 `38ed0489f72b3d9febdee9bbcc390b5a6003dd05db6e14fd26cc990d63ff9206`).
 PyInstaller completed successfully and the archive contains `openspan`,
-`on_desktop`, and `monitor_identity`. The running app and shell, registry, VM,
-portal, and radios were not touched. Files implementation remains paused.
+`on_desktop`, and `monitor_identity`. For restart acceptance, the existing
+`HKCU\...\Run\EsotericOS` value now points to that exact staged executable;
+the prior Run and user Winlogon keys are exported under
+`D:\_EsotericOS\backups\desktop-role-20260821-214717`. The running app and
+shell, shell pointers, VM, portal, and radios were not touched. Files
+implementation remains paused.
 
 ---
 
