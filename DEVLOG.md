@@ -1,5 +1,41 @@
 # OpenSpan — Devlog
 
+## 2026-08-21 — Desktop is not Windows primary
+
+The Desk arrangement now models two independent roles on each local display.
+Windows owns **PRIMARY**, shown as a white labelled edge at the top of its
+rectangle. EsotericOS owns **DESKTOP**, shown as a violet labelled edge at the
+bottom. A screen may wear either role or both. Right-clicking a local screen
+offers **Use as EsotericOS Desktop**; it never changes Windows display settings
+or the Windows primary flag.
+
+The distinction is functional, not decorative. The built-in EsotericOS surface
+now sizes and docks against the selected Desktop monitor's real `rcWork` rather
+than `SPI_GETWORKAREA`, which only describes primary. The choice lives in
+`openspan_settings.json`, outside arrangement profiles. It is persisted through
+the existing stable monitor identity model with the GDI name and last virtual
+position as compatibility/twin-panel tiebreakers. If that panel is detached,
+the effective Desktop falls back to current primary without overwriting the
+choice; reconnecting or a `DISPLAYn` rename restores the physical panel.
+
+Focused arrangement, context-menu, profile, and on-desktop suites pass. A
+read-only live probe resolved all three attached panels to separate durable
+preferences and separate work areas. The complete 59-file run reached 55 pass;
+one randomized LAN signature case passed on immediate rerun, while three
+unrelated live-tree checks remain red: the PC-block and portal-invariant suites
+disagree with the arrangement currently on disk, and repository hygiene names
+the pre-existing `assert-control.ps1` output paths. None is in this feature's
+write boundary.
+
+The acceptance build is
+`D:\_EsotericOS\app\EsotericOS-desktop-role.exe` (73,474,308 bytes,
+SHA-256 `38ed0489f72b3d9febdee9bbcc390b5a6003dd05db6e14fd26cc990d63ff9206`).
+PyInstaller completed successfully and the archive contains `openspan`,
+`on_desktop`, and `monitor_identity`. The running app and shell, registry, VM,
+portal, and radios were not touched. Files implementation remains paused.
+
+---
+
 ## 2026-08-21 — The shell receives its own public identity
 
 De-Cairo II replaces the fork's public executable and manifest identity with

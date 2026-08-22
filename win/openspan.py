@@ -1216,11 +1216,19 @@ def bind_wraplength(label, inset=LABEL_CHROME_W, floor=240):
 LAYOUT_MAX_CONTENT_H = 1600
 
 
-def work_area_height(default=1080):
-    """Usable vertical space on the primary monitor -- the screen minus the
-    taskbar. winfo_screenheight() is the wrong number here: it counts pixels the
-    taskbar already owns, so sizing to it puts the last panel under the clock."""
+def work_area_height(default=1080, device_name=None):
+    """Usable vertical space on a monitor, Windows primary by default.
+
+    ``winfo_screenheight()`` is the wrong number here: it counts pixels a shell
+    bar already owns. A named secondary is the EsotericOS Desktop case; without
+    a name this keeps the historical primary-monitor behaviour.
+    """
     try:
+        if device_name:
+            import on_desktop
+            left, top, right, bottom = on_desktop.Win32Bindings().work_area(
+                device_name)
+            return max(400, bottom - top)
         import ctypes
         import ctypes.wintypes as wt
         rect = wt.RECT()
@@ -1230,6 +1238,98 @@ def work_area_height(default=1080):
     except Exception:  # noqa: BLE001
         pass
     return default
+
+
+def _desktop_identities(identities=None):
+    if identities is not None:
+        return list(identities)
+    try:
+        from monitor_identity import attached_identities
+        return attached_identities()
+    except Exception:  # noqa: BLE001 -- identity enriches, never gates Desktop
+        return []
+
+
+def desktop_monitor_preference(device_name, identities=None):
+    """Durable settings value for a physical Desktop monitor.
+
+    GDI names are volatile. The stable key is authoritative when available;
+    name and last position disambiguate identical panels and preserve a useful
+    fallback on machines whose display stack exposes no durable identity.
+    """
+    name = str(device_name or "")
+    identity = next(
+        (row for row in _desktop_identities(identities)
+         if str(getattr(row, "device_name", "")).casefold()
+         == name.casefold()), None)
+    result = {"device_name": name}
+    if identity is not None:
+        stable = getattr(identity, "stable_key", None)
+        if stable:
+            result["stable_key"] = str(stable)
+        result["virtual_x"] = int(getattr(identity, "virtual_x", 0))
+        result["virtual_y"] = int(getattr(identity, "virtual_y", 0))
+    return result
+
+
+def effective_desktop_monitor(monitors, requested=None, identities=None):
+    """GDI name wearing the EsotericOS Desktop role right now.
+
+    The requested role is independent of Windows ``primary``. If its panel is
+    temporarily absent, Windows' current primary is the safe effective home;
+    the saved request is deliberately not rewritten, so reconnecting the panel
+    restores the chosen Desktop.
+    """
+    rows = [row for row in (monitors or []) if isinstance(row, dict)]
+    request = requested if isinstance(requested, dict) else {
+        "device_name": str(requested or "")}
+    wanted = str(request.get("device_name", "")).casefold()
+    stable = str(request.get("stable_key", "") or "").casefold()
+    by_name = {str(row.get("name", "")).casefold(): row for row in rows}
+
+    attached = []
+    if stable:
+        attached = _desktop_identities(identities)
+        current_identity = next(
+            (row for row in attached
+             if str(getattr(row, "device_name", "")).casefold() == wanted),
+            None)
+        if (current_identity is not None
+                and str(getattr(current_identity, "stable_key", "") or "")
+                .casefold() == stable
+                and wanted in by_name):
+            return str(by_name[wanted].get("name", ""))
+
+        candidates = [
+            row for row in attached
+            if str(getattr(row, "stable_key", "") or "").casefold() == stable
+            and str(getattr(row, "device_name", "")).casefold() in by_name]
+        if candidates:
+            old_x = int(request.get("virtual_x", 0) or 0)
+            old_y = int(request.get("virtual_y", 0) or 0)
+            # Identical panels can share a model-derived stable key. Their last
+            # virtual position is the deterministic tiebreaker already used by
+            # the display-profile identity model.
+            chosen = min(
+                candidates,
+                key=lambda row: (
+                    abs(int(getattr(row, "virtual_x", 0)) - old_x)
+                    + abs(int(getattr(row, "virtual_y", 0)) - old_y),
+                    str(getattr(row, "device_name", "")).casefold()))
+            name = str(getattr(chosen, "device_name", ""))
+            return str(by_name[name.casefold()].get("name", ""))
+        if not attached and wanted in by_name:
+            # Identity discovery itself is optional. When Windows will not
+            # expose it, retaining the last known GDI name is a better
+            # compatibility fallback than silently moving a present Desktop.
+            return str(by_name[wanted].get("name", ""))
+    elif wanted in by_name:
+        # Compatibility for the original string setting and for display stacks
+        # that cannot expose a durable identity.
+        return str(by_name[wanted].get("name", ""))
+    primary = next((row for row in rows if row.get("primary")), None)
+    fallback = primary or (rows[0] if rows else None)
+    return str(fallback.get("name", "")) if fallback else ""
 
 
 def window_height_plan(content_h, avail_h=None, ceiling=LAYOUT_MAX_CONTENT_H):
@@ -4532,9 +4632,16 @@ class MultiArrangeCanvas(tk.Canvas):
     # constant, so the drawing and the labels can never disagree again.
     UNITS_PER_INCH = DESK_UNITS_PER_INCH
 
-    def __init__(self, master, on_change=None, **kw):
+    def __init__(self, master, on_change=None, desktop_monitor=None, **kw):
         super().__init__(master, bg=PANEL, highlightthickness=0, **kw)
         self.on_change = on_change
+        # The request and its effective attached monitor are separate. Keeping
+        # the request means a temporarily disconnected Desktop panel resumes
+        # its role when it returns instead of losing the choice to fallback.
+        self.desktop_monitor_request = (
+            dict(desktop_monitor) if isinstance(desktop_monitor, dict)
+            else str(desktop_monitor or ""))
+        self.desktop_monitor = ""
         # Re-entry guard for _fit_height. configure(height=) raises <Configure>,
         # whose handler calls _fit_height again; without this the two chase each
         # other. Set BEFORE adopt(), which fits on its way out.
@@ -4627,6 +4734,12 @@ class MultiArrangeCanvas(tk.Canvas):
                 self.config[key] = value
         _migrate_radio_assignments(self.config)
         self.monitors = self.config["monitors"]
+        if not hasattr(self, "desktop_monitor_request"):
+            # Config-only harnesses construct the model via __new__ so they can
+            # exercise arrangement adoption without creating a Tk window.
+            self.desktop_monitor_request = ""
+        self.desktop_monitor = effective_desktop_monitor(
+            self.monitors, self.desktop_monitor_request)
         self.targets = self.config["devices"]
         # No device is privileged. `ipad` here is simply "the first display of
         # the first device" -- a convenience handle for the legacy single-device
@@ -4652,6 +4765,25 @@ class MultiArrangeCanvas(tk.Canvas):
         # in fires no <Configure> at all. Fit here or the canvas keeps the
         # previous desk's height until something else happens to resize it.
         self._fit_height()
+
+    def set_desktop_monitor(self, requested, redraw=True):
+        """Select the EsotericOS Desktop role without changing Windows.
+
+        Persistence belongs to the App settings writer; the canvas owns only
+        the visible role and its detached-monitor fallback.
+        """
+        self.desktop_monitor_request = (
+            dict(requested) if isinstance(requested, dict)
+            else str(requested or ""))
+        self.desktop_monitor = effective_desktop_monitor(
+            self.monitors, self.desktop_monitor_request)
+        if redraw:
+            self.redraw()
+        return self.desktop_monitor
+
+    def is_desktop_monitor(self, monitor):
+        return (str(monitor.get("name", "")).casefold()
+                == str(self.desktop_monitor or "").casefold())
 
     def target(self, target_id):
         return device_by_id(self.config, target_id)
@@ -5040,14 +5172,26 @@ class MultiArrangeCanvas(tk.Canvas):
                 fill=text_color, justify="center", width=max(40, x1 - x0 - 10),
                 font=(FONT_UI, 9, "bold"))
             if key[0] == "local":
-                # THE PRIMARY WEARS ITS MARK ON THE RECTANGLE. macOS puts the
-                # menu-bar strip on the primary's picture and nowhere else;
-                # Windows hides it in a checkbox in another pane. A strip is
-                # read at a glance, and it does not cost the label a line.
+                # TWO INDEPENDENT ROLES, TWO INDEPENDENT EDGES. Windows owns
+                # primary (white at the top); EsotericOS owns Desktop (violet
+                # at the bottom). They may be on different screens or the same
+                # screen, and neither mark implies the other.
                 if item.get("primary"):
                     self.create_rectangle(
                         x0 + 3, y0 + 3, x1 - 3, y0 + 8,
-                        fill="#EDE9FF", outline="")
+                        fill="#EDE9FF", outline="", tags="primary-role")
+                    self.create_text(
+                        x1 - 7, y0 + 12, anchor="ne", text="PRIMARY",
+                        fill="#EDE9FF", font=(FONT_UI, 7, "bold"),
+                        tags="primary-role")
+                if self.is_desktop_monitor(item):
+                    self.create_rectangle(
+                        x0 + 3, y1 - 8, x1 - 3, y1 - 3,
+                        fill=ACCENT, outline="", tags="desktop-role")
+                    self.create_text(
+                        (x0 + x1) / 2, y1 - 11, anchor="s", text="DESKTOP",
+                        fill="#D8C8FF", font=(FONT_UI, 7, "bold"),
+                        tags="desktop-role")
                 # A NUMBER, THE SAME ONE IDENTIFY FLASHES ON THE REAL SCREEN.
                 # Two of Doug's panels are the same model; "This PC" twice
                 # tells nobody which is which. Windows numbers its tiles for
@@ -5140,7 +5284,12 @@ class MultiArrangeCanvas(tk.Canvas):
         frame.pack(fill="both", expand=True)
         tk.Label(frame, text=str(number), bg="#0A0A0C", fg="#FFD166",
                  font=(FONT_UI, 72, "bold")).pack(expand=True)
-        tk.Label(frame, text=("primary" if monitor.get("primary") else "This PC"),
+        roles = []
+        if self.is_desktop_monitor(monitor):
+            roles.append("EsotericOS Desktop")
+        if monitor.get("primary"):
+            roles.append("Windows primary")
+        tk.Label(frame, text=("  ·  ".join(roles) if roles else "This PC"),
                  bg="#0A0A0C", fg="#EDE9FF", font=(FONT_UI, 10)).pack(pady=(0, 10))
         card.after(self.IDENTIFY_MS, card.destroy)
         return card
@@ -5162,7 +5311,12 @@ class MultiArrangeCanvas(tk.Canvas):
     def _detail_lines(self, key, item):
         """Everything about one surface, for the hover card."""
         if key[0] == "local":
-            title = "This PC" + ("  ·  primary" if item["primary"] else "")
+            roles = []
+            if self.is_desktop_monitor(item):
+                roles.append("EsotericOS Desktop")
+            if item.get("primary"):
+                roles.append("Windows primary")
+            title = "This PC" + (("  ·  " + "  ·  ".join(roles)) if roles else "")
             res_w, res_h, rotation = item["w"], item["h"], 0
         else:
             target = self.target(key[1])
@@ -7430,7 +7584,8 @@ class App:
         # name another widget. The canvas now draws its own one-line tell,
         # inside itself, for free.
         self.canvas = MultiArrangeCanvas(
-            arr_wrap, on_change=self._portal_changed, height=270)
+            arr_wrap, on_change=self._portal_changed,
+            desktop_monitor=load_setting("desktop_monitor", ""), height=270)
         # Right-click is bound HERE, not inside MultiArrangeCanvas: the handler
         # opens MacDisplayEditor, dark_prompt and the Windows re-read, none of
         # which the canvas knows about. The canvas keeps only its on_change
@@ -7881,7 +8036,8 @@ class App:
         self.canvas._fit_height()         # canvas now knows its real width
         self.root.update_idletasks()      # ...and its height propagates upward
         content_h = full.winfo_reqheight()
-        avail_h = work_area_height(self.root.winfo_screenheight())
+        avail_h = work_area_height(
+            self.root.winfo_screenheight(), self._desktop_monitor_name())
         geom_h, min_h, over_budget, clipped = window_height_plan(
             content_h, avail_h)
         # ...and the floor no pane may go under, so the shortest pane in the app
@@ -8143,11 +8299,11 @@ class App:
         host.switch_space_hook = switch
 
     # ---- where the window lives ---------------------------------------
-    # On the desktop is the NORMAL state: docked to the right of the primary
-    # work area, full height, no caption, and refused every raise so it sits
-    # behind ordinary windows while staying completely usable. `float_window`
-    # is the escape hatch back to a framed window, and it is off by default --
-    # a fresh install comes up on the desktop with nothing to turn on.
+    # On the desktop is the NORMAL state: docked to the right of the chosen
+    # EsotericOS Desktop work area, full height, no caption, and refused every
+    # raise so it sits behind ordinary windows while staying completely usable.
+    # Windows primary is a separate, read-only fact. `float_window` is the
+    # escape hatch back to a framed window, and it is off by default.
 
     def _floating(self):
         return bool(load_setting("float_window", False))
@@ -8157,6 +8313,25 @@ class App:
         return "Return to the desktop" if self._floating() \
             else "Float as a window"
 
+    def _desktop_monitor_name(self):
+        """The attached monitor wearing EsotericOS Desktop, primary fallback."""
+        canvas = getattr(self, "canvas", None)
+        if canvas is not None:
+            return canvas.desktop_monitor
+        return effective_desktop_monitor(
+            enum_monitors(), load_setting("desktop_monitor", ""))
+
+    def _sync_desktop_monitor(self):
+        """Re-resolve a saved Desktop after the attached display set changes."""
+        canvas = getattr(self, "canvas", None)
+        if canvas is None:
+            return ""
+        name = canvas.set_desktop_monitor(
+            load_setting("desktop_monitor", ""), redraw=False)
+        if self._desktop is not None:
+            self._desktop.set_monitor(name)
+        return name
+
     def _desktop_controller(self):
         """The on-desktop controller, built on first use. None if unavailable."""
         if self._desktop is None:
@@ -8164,7 +8339,8 @@ class App:
                 import on_desktop
                 self._desktop = on_desktop.OnDesktop(
                     lambda: on_desktop.toplevel_hwnd(self.root),
-                    self._desktop_geometry)
+                    self._desktop_geometry,
+                    monitor_name=self._desktop_monitor_name())
             except Exception as exc:  # noqa: BLE001
                 _emit("err", f"desktop placement unavailable: {exc}")
                 return None
@@ -8175,8 +8351,9 @@ class App:
         it happens on the Tk thread -- never from inside the window proc."""
         import on_desktop
         width = self.root.winfo_width() or 0
-        return on_desktop.dock_rect(on_desktop.Win32Bindings().work_area(),
-                                    width)
+        work = on_desktop.Win32Bindings().work_area(
+            self._desktop_monitor_name())
+        return on_desktop.dock_rect(work, width)
 
     def _apply_window_placement(self):
         """Put the window where the setting says. Both directions, live."""
@@ -11215,6 +11392,18 @@ class App:
         size." That is exactly the ownership boundary, so it is exactly what
         this menu offers."""
         item = self.canvas._lookup(key) or {}
+        if self.canvas.is_desktop_monitor(item):
+            menu.add_command(label="✓ EsotericOS Desktop", state="disabled")
+        else:
+            menu.add_command(
+                label="Use as EsotericOS Desktop",
+                command=self._deferred(self._menu_set_desktop, key))
+        menu.add_command(
+            label=("✓ Windows primary   — Windows owns this"
+                   if item.get("primary")
+                   else "Windows secondary   — Windows owns this"),
+            state="disabled")
+        menu.add_separator()
         menu.add_command(
             label=f"Resolution   {item.get('w')} × {item.get('h')}"
                   "   — Windows owns this",
@@ -11252,6 +11441,27 @@ class App:
                          command=self._deferred(self._menu_refresh_monitors))
         menu.add_command(label="Open Windows display settings…",
                          command=self._deferred(self._menu_display_settings))
+
+    def _menu_set_desktop(self, key):
+        """Move EsotericOS Desktop here; never touch Windows primary."""
+        item = self.canvas._lookup(key)
+        if item is None or key[0] != "local":
+            return
+        name = str(item.get("name", ""))
+        if not name:
+            return
+        save_setting("desktop_monitor", desktop_monitor_preference(name))
+        self._sync_desktop_monitor()
+        self.canvas.redraw()
+        number = self.canvas._monitor_number(name)
+        where = f"screen {number}" if number else name.replace("\\\\.\\", "")
+        _emit("ok", f"EsotericOS Desktop moved to {where}; Windows primary "
+                    "was not changed.")
+        try:
+            self.status.set(f"EsotericOS Desktop: {where}  ·  Windows primary "
+                            "unchanged")
+        except tk.TclError:
+            pass
 
     def _menu_use_edid_size(self, key):
         """Drop a typed diagonal and let the panel's EDID size it again.
@@ -11508,6 +11718,10 @@ class App:
         # One list object, referenced from both places the canvas reads it.
         self.canvas.config["monitors"] = merged
         self.canvas.monitors = merged
+        # Re-resolve the EsotericOS Desktop against the new attached set. Its
+        # saved choice survives an unplug; only the effective dock falls back
+        # to Windows primary until the chosen panel returns.
+        self._sync_desktop_monitor()
         # The button carries no cost label because most re-reads cost nothing.
         # A real Windows change -- a resolution, a panel added or removed --
         # moves the merged rectangles, and save() below taskkills and respawns

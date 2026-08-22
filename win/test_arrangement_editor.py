@@ -29,6 +29,7 @@ except Exception:  # noqa: BLE001
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import openspan as A  # noqa: E402
+from monitor_identity import MonitorIdentity  # noqa: E402
 
 fails = []
 
@@ -197,6 +198,54 @@ check("the hover card says where the size came from",
       any("EDID" in l for l in lines), str(lines))
 check("and which number Identify will flash", any("screen 3" in l for l in lines))
 
+# ---- 5b. EsotericOS Desktop and Windows primary are independent roles ------
+
+check("an attached Desktop request wins even when that screen is not primary",
+      A.effective_desktop_monitor(MONITORS, "\\\\.\\DISPLAY1")
+      == "\\\\.\\DISPLAY1")
+check("a missing Desktop request falls back to Windows primary without guessing",
+      A.effective_desktop_monitor(MONITORS, "\\\\.\\DISPLAY99")
+      == "\\\\.\\DISPLAY5")
+old_identity = MonitorIdentity(
+    manufacturer_id="ABC", product_code="123", native_width=1920,
+    native_height=1080, device_name="\\\\.\\DISPLAY99",
+    virtual_x=2560, virtual_y=360)
+new_identity = MonitorIdentity(
+    manufacturer_id="ABC", product_code="123", native_width=1920,
+    native_height=1080, device_name="\\\\.\\DISPLAY1",
+    virtual_x=2560, virtual_y=360)
+durable = A.desktop_monitor_preference(
+    "\\\\.\\DISPLAY99", [old_identity])
+check("Desktop follows its physical monitor when Windows renames the adapter",
+      A.effective_desktop_monitor(MONITORS, durable, [new_identity])
+      == "\\\\.\\DISPLAY1")
+canvas.set_desktop_monitor("\\\\.\\DISPLAY1")
+check("choosing EsotericOS Desktop does not change Windows primary",
+      canvas.is_desktop_monitor(m1) and not m1["primary"]
+      and m5["primary"] and not canvas.is_desktop_monitor(m5))
+desktop_title, _desktop_lines = canvas._detail_lines(K1, m1)
+primary_title, _primary_lines = canvas._detail_lines(K5, m5)
+check("the hover names Desktop and Windows primary separately",
+      "EsotericOS Desktop" in desktop_title
+      and "Windows primary" not in desktop_title
+      and "Windows primary" in primary_title
+      and "EsotericOS Desktop" not in primary_title)
+canvas.redraw()
+desktop_marks = [canvas.itemcget(item, "text")
+                 for item in canvas.find_withtag("desktop-role")
+                 if canvas.type(item) == "text"]
+primary_marks = [canvas.itemcget(item, "text")
+                 for item in canvas.find_withtag("primary-role")
+                 if canvas.type(item) == "text"]
+check("the canvas visibly labels both independent roles",
+      desktop_marks == ["DESKTOP"] and primary_marks == ["PRIMARY"],
+      f"desktop={desktop_marks}, primary={primary_marks}")
+canvas.set_desktop_monitor("\\\\.\\DISPLAY5")
+same_title, _same_lines = canvas._detail_lines(K5, m5)
+check("one screen can wear both roles without either being collapsed",
+      "EsotericOS Desktop" in same_title and "Windows primary" in same_title)
+canvas.set_desktop_monitor("\\\\.\\DISPLAY1")
+
 # ---- 6. Identify: one card per real screen, gone again by itself ------------
 
 made = []
@@ -259,6 +308,14 @@ check("the hint says the PC moves as one block",
       "This PC moves as one block" in src)
 check("the merge is told where the devices are, so a returning screen cannot land on one",
       "obstacles=self.canvas.device_rects()" in src)
+check("a local screen menu can assign Desktop without claiming to set primary",
+      "Use as EsotericOS Desktop" in src
+      and "Windows primary   — Windows owns this" in src
+      and 'save_setting("desktop_monitor", desktop_monitor_preference(name))'
+      in src)
+check("Desktop placement resolves the selected monitor's work area",
+      "work_area(\n            self._desktop_monitor_name())" in src
+      and "monitor_name=self._desktop_monitor_name()" in src)
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))

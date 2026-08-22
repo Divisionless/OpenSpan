@@ -62,8 +62,8 @@ class FakeBindings:
         self.user32 = FakeUser32(self.calls, dict(styles or {}))
         self.proc = None
 
-    def work_area(self):
-        self.calls.append(("work_area", ()))
+    def work_area(self, device_name=None):
+        self.calls.append(("work_area", (device_name,)))
         return self._work
 
     def window_rect(self, hwnd):
@@ -146,7 +146,7 @@ fake = FakeBindings(styles={on_desktop.GWL_STYLE: STYLE,
                             on_desktop.GWL_EXSTYLE: EXSTYLE})
 ctl = on_desktop.OnDesktop(lambda: 4242,
                            lambda: on_desktop.dock_rect(fake.work_area(), 700),
-                           bindings=fake)
+                           bindings=fake, monitor_name="\\\\.\\DISPLAY2")
 applied = ctl.apply()
 check("apply() reports success and marks itself active", applied and ctl.active)
 
@@ -223,7 +223,13 @@ check("a work-area change (a shell bar appearing) re-docks too",
       args_of(fake, "SetWindowPos") != [])
 check("the re-dock reads the work area natively and never calls back into the "
       "geometry provider, which would touch Tk inside message dispatch",
-      ("work_area", ()) in fake.calls)
+      ("work_area", ("\\\\.\\DISPLAY2",)) in fake.calls)
+
+fake.calls.clear()
+check("the Desktop monitor is independent state on the controller",
+      ctl.set_monitor("\\\\.\\DISPLAY1")
+      and ctl.monitor_name == "\\\\.\\DISPLAY1"
+      and ("work_area", ("\\\\.\\DISPLAY1",)) in fake.calls)
 
 fake.calls.clear()
 fake.proc(4242, 0x000F, 0, 0)      # WM_PAINT: nothing of ours, just forwarded
@@ -359,6 +365,9 @@ with tempfile.TemporaryDirectory() as tmp:
           written["vm_name"] == "OpenSpan" and written["float_window"] is True)
     ns["save_setting"]("float_window", False)
     check("and back again", ns["load_setting"]("float_window", False) is False)
+    ns["save_setting"]("desktop_monitor", "\\\\.\\DISPLAY1")
+    check("the EsotericOS Desktop monitor round-trips independently",
+          ns["load_setting"]("desktop_monitor") == "\\\\.\\DISPLAY1")
 
 
 # ---- the label flips with the state ----------------------------------------

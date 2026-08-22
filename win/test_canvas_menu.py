@@ -85,6 +85,7 @@ SCRATCH = tempfile.mkdtemp(prefix="openspan-menu-")
 A.CONFIG = os.path.join(SCRATCH, "live.json")
 A.PROFILE_DIR = os.path.join(SCRATCH, "profiles")
 A.BT_PREFS = os.path.join(SCRATCH, "bt_prefs.json")
+A.SETTINGS = os.path.join(SCRATCH, "settings.json")
 
 
 # ---- (b) the golden round-trip, against the real desk ----------------------
@@ -434,6 +435,7 @@ class StubApp:
     def __init__(self, root_widget, arrange):
         self.root = root_widget
         self.canvas = arrange
+        self._desktop = None
         self._surface_menu = tk.Menu(root_widget, tearoff=0, **A.MENU_STYLE)
         self._desk_menu = tk.Menu(root_widget, tearoff=0, **A.MENU_STYLE)
         # Built ONCE and repopulated in place, exactly as App.__init__ does.
@@ -462,6 +464,8 @@ for _name_ in ("_deferred", "_canvas_menu", "_fill_surface_menu",
                "_edit_display", "_menu_set_resolution", "_menu_rotate",
                "_menu_set_refresh", "_menu_diagonal", "_menu_device_editor",
                "_menu_refresh_monitors", "_menu_display_settings",
+               "_menu_set_desktop", "_sync_desktop_monitor",
+               "_desktop_monitor_name",
                "_screen_sizes_dialog", "_dev_state", "_device_verb_facts",
                "_device_verb_entries", "_verb_menu_label",
                "_fill_device_verb_entries", "device_record"):
@@ -837,6 +841,20 @@ check("(d) the canvas and the config point at the SAME monitor list",
 check("(d) it says what changed instead of rewriting the desk silently",
       "DISPLAY7" in app.status.get() and "2560x1440" in app.status.get(),
       app.status.get())
+
+# Desktop is an EsotericOS role, not a synonym for Windows primary. Assign the
+# newly attached secondary and prove both state owners remain intact.
+SECONDARY_KEY = ("local", "windows", "\\\\.\\DISPLAY7")
+app._menu_set_desktop(SECONDARY_KEY)
+check("(d) a secondary can become EsotericOS Desktop without becoming primary",
+      canvas.desktop_monitor == "\\\\.\\DISPLAY7"
+      and canvas._lookup(SECONDARY_KEY)["primary"] is False
+      and canvas._lookup(LOCAL_KEY)["primary"] is True)
+with open(A.SETTINGS, encoding="utf-8") as handle:
+    desktop_settings = json.load(handle)
+check("(d) the Desktop choice persists in settings, outside arrangements",
+      desktop_settings.get("desktop_monitor", {}).get("device_name")
+      == "\\\\.\\DISPLAY7")
 A.enum_monitors = lambda: [dict(row) for row in SYNTHETIC_MONITORS]
 
 

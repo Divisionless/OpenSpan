@@ -139,8 +139,12 @@ filter. The helper does not restart Windows or power off the VM.
   Windows has them. Every screen is drawn to real physical scale: PC monitors
   read their size from the panel's EDID (a typed diagonal overrides it), Mac
   and iPad screens take a typed diagonal. **Identify** flashes a number on each
-  real PC monitor, matching the number on its rectangle. Screens snap edge to
-  edge and are never allowed to overlap.
+  real PC monitor, matching the number on its rectangle. Windows **PRIMARY**
+  and the EsotericOS **DESKTOP** are independent marks on each PC screen; use a
+  screen's right-click menu to move the built-in EsotericOS surface without
+  changing Windows' primary monitor. The Desktop choice follows the physical
+  panel if Windows renumbers it. Screens snap edge to edge and are never
+  allowed to overlap.
 - **Bluetooth audio routing** — send Windows audio to BT earbuds through the
   same radio, with the normal Windows volume slider and an in-app L/R balance.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync

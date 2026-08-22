@@ -1,9 +1,9 @@
 """The app lives ON THE DESKTOP.
 
-This is not a mode. Docked to the right edge of the primary monitor's work
-area, full height, no caption, and pinned to the BOTTOM of the z-order is what
-this application *is*; `float_window` is the escape hatch that gives it back an
-ordinary frame, and it is off unless someone asks for it.
+This is not a mode. Docked to the right edge of the chosen EsotericOS Desktop
+monitor's work area, full height, no caption, and pinned to the BOTTOM of the
+z-order is what this application *is*; `float_window` is the escape hatch that
+gives it back an ordinary frame, and it is off unless someone asks for it.
 
 The whole trick is one message. Windows lets a window refuse to be raised:
 on WM_WINDOWPOSCHANGING we rewrite the WINDOWPOS Windows is about to act on so
@@ -104,6 +104,16 @@ class _RECT(ctypes.Structure):
                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
 
+class _MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", _RECT),
+                ("rcWork", _RECT), ("dwFlags", wt.DWORD),
+                ("szDevice", ctypes.c_wchar * 32)]
+
+
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(_RECT), wt.LPARAM)
+
+
 class WINDOWPOS(ctypes.Structure):
     _fields_ = [("hwnd", wt.HWND), ("hwndInsertAfter", wt.HWND),
                 ("x", ctypes.c_int), ("y", ctypes.c_int),
@@ -129,7 +139,64 @@ class Win32Bindings:
                                       wt.WPARAM, wt.LPARAM]
         self.user32 = u
 
-    def work_area(self):
+        # A private handle for monitor enumeration. Prototyping functions on
+        # ctypes.windll.user32 mutates the process-wide cached object; this app
+        # has several Win32 modules, and one stale prototype already made a
+        # large HMONITOR disappear from the arrangement. Keep this surface
+        # private and fully typed.
+        monitors = ctypes.WinDLL("user32", use_last_error=True)
+        monitors.EnumDisplayMonitors.restype = wt.BOOL
+        monitors.EnumDisplayMonitors.argtypes = [
+            wt.HDC, ctypes.c_void_p, _MONITORENUMPROC, wt.LPARAM]
+        monitors.GetMonitorInfoW.restype = wt.BOOL
+        monitors.GetMonitorInfoW.argtypes = [
+            wt.HMONITOR, ctypes.POINTER(_MONITORINFOEXW)]
+        self._monitor_user32 = monitors
+
+    def work_area(self, device_name=None):
+        """Usable bounds for one GDI display name, primary as fallback.
+
+        ``SPI_GETWORKAREA`` can only describe Windows' primary display. The
+        EsotericOS Desktop is an independent role, so a chosen secondary needs
+        its own ``rcWork`` from ``GetMonitorInfoW``. A detached or renamed
+        choice falls back to Windows' current primary without rewriting the
+        preference; reconnecting the panel therefore restores it.
+        """
+        wanted = str(device_name or "").casefold()
+        if wanted:
+            selected = []
+            primary = []
+            callback_errors = []
+
+            def collect(hmonitor, _hdc, _rect, _data):
+                try:
+                    info = _MONITORINFOEXW()
+                    info.cbSize = ctypes.sizeof(info)
+                    if not self._monitor_user32.GetMonitorInfoW(
+                            hmonitor, ctypes.byref(info)):
+                        return True
+                    work = info.rcWork
+                    bounds = (int(work.left), int(work.top),
+                              int(work.right), int(work.bottom))
+                    if str(info.szDevice).casefold() == wanted:
+                        selected.append(bounds)
+                    if info.dwFlags & 1:
+                        primary.append(bounds)
+                    return True
+                except BaseException as exc:  # never escape a native callback
+                    callback_errors.append(exc)
+                    return False
+
+            callback = _MONITORENUMPROC(collect)
+            ok = self._monitor_user32.EnumDisplayMonitors(
+                None, None, callback, 0)
+            if callback_errors:
+                raise callback_errors[0]
+            if ok and selected:
+                return selected[0]
+            if ok and primary:
+                return primary[0]
+
         rect = _RECT()
         self.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0,
                                           ctypes.byref(rect), 0)
@@ -180,7 +247,8 @@ class OnDesktop:
     it safe to call parts of it from inside a window procedure.
     """
 
-    def __init__(self, hwnd_provider, geometry_provider, bindings=None):
+    def __init__(self, hwnd_provider, geometry_provider, bindings=None,
+                 monitor_name=None):
         self._hwnd_provider = hwnd_provider
         self._geometry_provider = geometry_provider
         self._bindings = bindings or Win32Bindings()
@@ -192,6 +260,7 @@ class OnDesktop:
         self._old_rect = None      # the framed geometry, to come back to
         self._docked_width = None  # what a re-dock re-uses; no Tk read needed
         self._placing = False      # True only inside our own SetWindowPos
+        self._monitor_name = str(monitor_name or "")
         self.active = False
         self.last_error = ""
 
@@ -199,6 +268,19 @@ class OnDesktop:
     @property
     def saved_rect(self):
         return self._old_rect
+
+    @property
+    def monitor_name(self):
+        return self._monitor_name
+
+    def set_monitor(self, device_name):
+        """Choose the EsotericOS Desktop monitor and re-dock if it is live.
+
+        This changes no Windows display setting. Windows primary and the
+        EsotericOS Desktop remain two independent roles.
+        """
+        self._monitor_name = str(device_name or "")
+        return self.redock_from_work_area() if self.active else True
 
     # -- apply / release ---------------------------------------------------
     def apply(self):
@@ -310,7 +392,8 @@ class OnDesktop:
         if not self.active or self._hwnd is None:
             return False
         width = self._docked_width or MIN_WIDTH
-        x, y, w, h = dock_rect(self._bindings.work_area(), width)
+        x, y, w, h = dock_rect(
+            self._bindings.work_area(self._monitor_name), width)
         self._docked_width = w
         self._placing = True
         try:

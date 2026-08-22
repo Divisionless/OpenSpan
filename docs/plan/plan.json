@@ -4,8 +4,8 @@
   "version": 3,
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
-  "updated": "2026-08-16",
-  "nextSid": 145,
+  "updated": "2026-08-21",
+  "nextSid": 146,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2599,6 +2599,26 @@
       "actualTime": "~1h implementation, review, verification and arm",
       "extra": {
         "note": "LANDED+REVIEWED+ARMED 2026-08-19 (shell 5f51761, frozen SHA8 31a15c8a -> stable-20260819-232647; HKCU pointer advanced, HKLM explorer.exe safety net intact). New standalone EsotericOS.Shell.Applications assembly owns immutable typed application identity, live Start Menu and AppX discovery, ShellExecuteEx and IApplicationActivationManager activation, structured launch logs, search, visible migrated groups, Quick Launch persistence, corrupt-store recovery, and one-time read-only Cairo XML migration into %APPDATA%\\EsotericOS\\applications.json. Discovery is transient; only retained group/pin identities persist. Executable, MenuBar, Taskbar, Settings, OpenFileCommand, TaskButton and TaskThumbnail have zero AppGrabber/AppLauncher runtime dependencies; built deps.json contains EsotericOS.Shell.Applications and no CairoDesktop.AppGrabber. Programs mouse, Enter and detached context menu share entry-owned commands; Quick Launch open/add/remove/reorder/drop and task pin use the new service; task grouping no longer consults AppGrabber. Adversarial review corrected transient-catalog persistence, shortcut identity/preserved migration, duplicate .lnk argument application, refresh overlap, async icon dispatch, collection subscription lifetime, and the visible group template before release. Deterministic no-UI harness passes 607 assertions. Full net6.0-windows x64 build passes with 0 errors and five existing warnings; new assembly, MenuBar and Taskbar net480 builds pass with 0 warnings/errors; git diff check and AGPL boundary audit pass. LIVE VERIFIED 2026-08-21: First Light recorded stable-20260819-232647 at Medium/not-elevated integrity with Explorer absent; executable SHA8 31a15c8a and built deps remained exact; migration retained 20 entries, five Quick Launch pins and seven groups; VM, portal, audio and all three radios recovered through the normal host restart path; Doug opened Google Chrome successfully from Programs."
+      }
+    },
+    {
+      "sid": "v3.145",
+      "hcidx": 145,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.138"
+      ],
+      "title": "Independent Desktop monitor role -- distinguish the EsotericOS Desktop from Windows primary in the Desk canvas; persist by physical monitor identity and dock the built-in surface to it without changing Windows  [desktop-monitor-role]",
+      "why": "Doug: I need to be able to separate what EsotericOS desktop is vs the primary monitor associated with the machine -- they are not always the same",
+      "estTokens": "40k-80k",
+      "costDrivers": "independent role semantics; durable monitor identity; per-monitor work-area docking; canvas and context-menu presentation; packaged acceptance build",
+      "estTime": "1-2h",
+      "model": "Overseer implementation and deterministic review",
+      "status": "doing",
+      "actualTokens": "not surfaced",
+      "actualTime": "~45m implementation, verification and packaging",
+      "extra": {
+        "note": "SOURCE+BUILD COMPLETE 2026-08-21; live visual acceptance pending. Windows primary remains read-only and is rendered as a white PRIMARY top edge; EsotericOS Desktop is independently rendered as a violet DESKTOP bottom edge. A local screen's right-click menu assigns Desktop immediately without changing Windows. The choice is stored in openspan_settings.json by existing stable monitor identity plus name/position fallback, survives DISPLAYn renumbering, falls back to current primary while detached, and returns when the physical panel reconnects. The built-in surface sizes and docks against the selected monitor's real rcWork; display refresh re-resolves and re-docks it. Focused arrangement, context-menu, profile and on-desktop suites pass; live read-only probes resolved all three physical panels and their distinct work areas. The full 59-file run reached 55 pass; the LAN signature fuzz failure passed immediate rerun, while existing live-fixture failures remain in pc_block/portal_invariants and assert-control triggers repo_hygiene. Staged binary: D:\\_EsotericOS\\app\\EsotericOS-desktop-role.exe, 73,474,308 bytes, SHA-256 38ed0489f72b3d9febdee9bbcc390b5a6003dd05db6e14fd26cc990d63ff9206. Running app/shell, registry, VM, portal and radios were untouched."
       }
     }
   ],
@@ -6214,5 +6234,5 @@
     }
   ],
   "extraCols": [],
-  "rev": 24
+  "rev": 25
 }
