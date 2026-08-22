@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-22",
-  "nextSid": 152,
+  "nextSid": 153,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2741,6 +2741,26 @@
       "actualTime": "~25m implementation, verification, packaging and arming",
       "extra": {
         "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; combined restart acceptance pending. Commit 71afe2b gives all three main GUI scrollbars -- page, Bluetooth device list and Console -- one named EsotericOS vertical style with BG trough, CARD thumb, MUTED arrow, PRESS hover, ACCENT_DIM pressed and PANEL disabled states; borders and bevel colors remain dark. The single-page harness measures the actual Tk style and structurally proves every Scrollbar call opts in. Single-page plus five neighboring theme/control/layout suites pass. Full suite: 62 files, 58 pass, with exactly the same four unrelated failures. Candidate: D:\\_EsotericOS\\app\\EsotericOS-unified-desktop-dark-scrollbars-admin-bt-isolation.exe, 73,471,675 bytes, SHA-256 8dfeec62bbf4c7a4ffc5cae7e2a0d0ef10caceda54c28515502023287ee178cd. Recursive archive verification finds openspan, launcher, portal, audio, on_desktop and monitor_identity. Backup: D:\\_EsotericOS\\backups\\dark-scrollbars-arm-20260822-140739. The Highest interactive PT30S task and exact Private/LocalSubnet firewall rules now name the candidate; Run is absent and obsolete product rules are zero. HKCU Winlogon still names the separately armed dock-shell candidate and HKLM remains explorer.exe. Six old-app processes and the old shell remain unchanged; both new candidate counts are zero. VM, portal, audio and radios were untouched. NEXT: Doug restart, then confirm all scrollbars are dark and the dock joins the GUI, top bar and icons on Display 5."
+      }
+    },
+    {
+      "sid": "v3.152",
+      "hcidx": 152,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.144"
+      ],
+      "title": "Programs administrator launch -- restore Run as administrator for retained desktop entries [programs-run-as-admin]",
+      "why": "Doug: return the ability to start programs as administrator to the corrected Programs-list context menu",
+      "estTokens": "8k-15k",
+      "costDrivers": "persisted entry rehydration; exact-object command identity; category/search/context-menu parity; immutable shell packaging",
+      "estTime": "15-30m",
+      "model": "Overseer implementation and deterministic verification",
+      "status": "doing",
+      "actualTokens": "~12k Codex",
+      "actualTime": "~20m diagnosis, implementation, verification, packaging and arming",
+      "extra": {
+        "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; restart acceptance pending. Root cause: the replacement retained the typed RunAsAdministrator command and Programs XAML item, but persisted desktop entries were rehydrated with AllowRunAsAdministrator=false. Newly discovered Start-menu objects recovered eligibility during refresh; retained Quick Launch/category objects that were not rediscovered kept the false value, so the shared context-menu handler collapsed the command. Shell commit f66de14 derives elevation eligibility from desktop kind while persisted AppX entries remain ineligible. Exact owned objects can execute; copied/stale identities remain rejected. The shared Programs template covers All, migrated categories and search. Harness: 4,727 deterministic assertions PASS, including migration, service restart, typed identity rejection and XAML binding/visibility contracts. Full net6 x64 build PASS with the same five existing warnings; full net480 x64 build PASS with zero warnings/errors; git diff check clean. Candidate: D:\\_EsotericOS\\shell\\stable-20260822-141435, 614 files / 175,605,725 bytes, every file SHA-256-equal to the verified net6 output. Canonical and compatibility apphosts are byte-identical; SHA-256 856f14fe22a84c8512d94005b45c1b305cd5b75a9152c298cc0c3cfeb7d9148b. Applications assembly SHA-256 c229844666c8d798ea0e90beea897aea2f4a271a071d7e93062054c860fb918f. Pointer backup: D:\\_EsotericOS\\backups\\programs-admin-arm-20260822-141702. HKCU Winlogon names the candidate; HKLM remains explorer.exe. The old stable-20260822-004409 shell remains the sole live shell and candidate process count is zero. Elevated app task is unchanged. No app, shell, VM, portal, audio or radio process was touched; Files remains paused. NEXT: Doug restart, then right-click a retained desktop program in Programs and confirm Run as administrator is visible and launches it elevated."
       }
     }
   ],
@@ -6356,5 +6376,5 @@
     }
   ],
   "extraCols": [],
-  "rev": 25
+  "rev": 26
 }

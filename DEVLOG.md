@@ -1,5 +1,42 @@
 # OpenSpan — Devlog
 
+## 2026-08-22 — Programs retains administrator launch across restarts
+
+The EsotericOS Programs replacement still owned a typed **Run as
+administrator** command and bound it in the shared Programs context-menu
+template. The missing command was a persistence defect: desktop entries loaded
+from `applications.json` were reconstructed with elevation eligibility set to
+false. Entries found again in the live Start-menu scan were replaced with
+eligible objects, but retained Quick Launch and migrated-category entries could
+keep the persisted object, causing the menu-open handler to collapse the item.
+
+Shell commit `f66de14` derives restored eligibility from the entry kind: desktop
+programs permit the existing `runas` route, while persisted AppX entries remain
+ineligible. The exact-object guard is unchanged, so a copied or stale object
+cannot use the command. All, category, and search results share the same typed
+entry template. Deterministic coverage now proves migration, service restart,
+owned-versus-copied identity, and the context-menu binding and visibility
+contract. The harness passes 4,727 assertions. Full net6 x64 passes with the
+same five existing warnings; full net480 x64 passes with zero warnings or
+errors.
+
+The candidate is
+`D:\_EsotericOS\shell\stable-20260822-141435` (614 files, 175,605,725
+bytes). Every file hash-matches the verified net6 output. The canonical and
+compatibility apphosts are byte-identical at SHA-256
+`856f14fe22a84c8512d94005b45c1b305cd5b75a9152c298cc0c3cfeb7d9148b`;
+the corrected applications assembly is
+`c229844666c8d798ea0e90beea897aea2f4a271a071d7e93062054c860fb918f`.
+Both Winlogon hives and the user Run key were backed up under
+`D:\_EsotericOS\backups\programs-admin-arm-20260822-141702` before HKCU
+Winlogon advanced to the candidate; HKLM remains `explorer.exe`. The old
+`stable-20260822-004409` shell is still the sole live shell, the candidate has
+zero processes, and the elevated app task is unchanged. Files remains paused;
+no app, shell, VM, portal, audio, or radio process was touched. Restart and live
+context-menu acceptance are Doug's next step.
+
+---
+
 ## 2026-08-22 — Every control scrollbar stays in the dark register
 
 The single-page GUI still had three platform-default `ttk.Scrollbar` widgets:
