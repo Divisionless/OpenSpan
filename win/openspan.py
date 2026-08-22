@@ -367,6 +367,7 @@ FG = "#E6E6F0"
 MUTED = "#A6A1B0"
 ACCENT = "#8A5CFF"
 ACCENT_DIM = "#5F3DC4"
+SCROLLBAR_STYLE = "EsotericOS.Vertical.TScrollbar"
 WARN = "#f5c451"   # amber: connected but idle (portal off)
 MON_FILL = "#1D1930"
 MON_LINE = "#6B5CA8"
@@ -5941,7 +5942,8 @@ class BtPanel(tk.Frame):
         # The height cap is already fully delivered by body above, which no
         # longer expands -- so this parcel is exactly reqheight either way.
         self.tree.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(body, command=self.tree.yview)
+        sb = ttk.Scrollbar(body, orient="vertical", style=SCROLLBAR_STYLE,
+                           command=self.tree.yview)
         sb.pack(side="right", fill="y")
         self.tree.config(yscrollcommand=sb.set)
         self.tree.bind("<Double-1>", lambda e: self.connect())
@@ -7321,7 +7323,8 @@ class App:
         # back into the embedded window so every section stays one column wide.
         main = tk.Frame(full, bg=BG)
         main.pack(fill="both", expand=True, padx=10, pady=PAD_SM)
-        page_scroll = ttk.Scrollbar(main, orient="vertical")
+        page_scroll = ttk.Scrollbar(main, orient="vertical",
+                                    style=SCROLLBAR_STYLE)
         page_scroll.pack(side="right", fill="y")
         page_canvas = tk.Canvas(main, bg=BG, bd=0, highlightthickness=0,
                                 yscrollcommand=page_scroll.set)
@@ -7372,7 +7375,8 @@ class App:
         self.console = tk.Text(cwrap, bg="#05080D", fg="#B8B3C2", bd=0,
                                font=("Consolas", 9), wrap="word",
                                state="disabled", insertbackground=FG)
-        csb = ttk.Scrollbar(cwrap, command=self.console.yview)
+        csb = ttk.Scrollbar(cwrap, orient="vertical", style=SCROLLBAR_STYLE,
+                            command=self.console.yview)
         csb.pack(side="right", fill="y")
         self.console.config(yscrollcommand=csb.set)
         self.console.pack(side="left", fill="both", expand=True)
@@ -8551,6 +8555,18 @@ class App:
         st.configure("Horizontal.TScale", background=BG, troughcolor=CARD,
                      bordercolor=CARD, lightcolor=ACCENT_DIM,
                      darkcolor=ACCENT_DIM)
+        # One named style owns every scrollbar in the control GUI. Without an
+        # explicit style, ttk falls back to the platform theme and paints a
+        # bright native trough through the otherwise dark single-page surface.
+        st.configure(SCROLLBAR_STYLE, background=CARD, troughcolor=BG,
+                     bordercolor=BG, lightcolor=CARD, darkcolor=CARD,
+                     arrowcolor=MUTED, relief="flat", borderwidth=0,
+                     arrowsize=14)
+        st.map(SCROLLBAR_STYLE,
+               background=[("disabled", PANEL), ("pressed", ACCENT_DIM),
+                           ("active", PRESS)],
+               arrowcolor=[("disabled", "#6E687A"), ("pressed", FG),
+                           ("active", FG)])
         # THE EFFECTIVE MAP: this replaces the TButton map set above, so a
         # "pressed" entry that exists only up there would be dead. Order is
         # load-bearing -- disabled first (a disabled button must never look

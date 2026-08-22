@@ -9,6 +9,7 @@ import ast
 import os
 import sys
 import tkinter as tk
+from tkinter import ttk
 from types import SimpleNamespace
 
 try:
@@ -92,7 +93,7 @@ check("the old pane API is absent", not hasattr(A.App, "select_pane")
       and not hasattr(A, "PANE_SPEC") and "_bridge_spacer" not in SOURCE)
 check("there is one page Canvas and one vertical Scrollbar",
       "page_canvas = tk.Canvas(main" in SOURCE
-      and 'page_scroll = ttk.Scrollbar(main, orient="vertical")' in SOURCE)
+      and "page_scroll = ttk.Scrollbar(main, orient=\"vertical\"," in SOURCE)
 check("the scrollbar and Canvas are wired in both directions",
       "yscrollcommand=page_scroll.set" in init_src
       and "page_scroll.config(command=page_canvas.yview)" in init_src)
@@ -108,6 +109,18 @@ check("mouse wheel and legacy wheel buttons use the same page handler",
       all(token in SOURCE for token in
           ('bind_all("<MouseWheel>"', 'bind_all("<Button-4>"',
            'bind_all("<Button-5>"')))
+
+scrollbars = [node for node in ast.walk(MODULE)
+              if isinstance(node, ast.Call)
+              and _name(node.func) == "ttk.Scrollbar"]
+check("all three GUI scrollbars use the dark named style",
+      len(scrollbars) == 3 and all(
+          any(keyword.arg == "style"
+              and isinstance(keyword.value, ast.Name)
+              and keyword.value.id == "SCROLLBAR_STYLE"
+              for keyword in node.keywords)
+          for node in scrollbars),
+      f"{len(scrollbars)} Scrollbar calls")
 
 
 section_locals = ("pane_desk", "pane_devices", "pane_bluetooth",
@@ -232,6 +245,22 @@ check("wheel outside the page is untouched",
 
 root = tk.Tk()
 root.withdraw()
+themed_app = A.App.__new__(A.App)
+themed_app.root = root
+themed_app._theme()
+style = ttk.Style(root)
+check("dark scrollbar has no light platform trough",
+      style.lookup(A.SCROLLBAR_STYLE, "troughcolor").lower() == A.BG.lower()
+      and style.lookup(A.SCROLLBAR_STYLE, "background").lower()
+      == A.CARD.lower()
+      and style.lookup(A.SCROLLBAR_STYLE, "arrowcolor").lower()
+      == A.MUTED.lower())
+scroll_map = dict(style.map(A.SCROLLBAR_STYLE, "background"))
+check("dark scrollbar exposes pressed, hover and disabled feedback",
+      scroll_map.get("pressed", "").lower() == A.ACCENT_DIM.lower()
+      and scroll_map.get("active", "").lower() == A.PRESS.lower()
+      and scroll_map.get("disabled", "").lower() == A.PANEL.lower(),
+      repr(scroll_map))
 nested = tk.Text(root)
 nested.master = app._page_canvas
 before = list(app._page_canvas.scrolls)
