@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Headless unit checks for OpenSpanBLE's local state machine.
 
 This runs on Windows without BlueZ by stubbing only the import-time dbus/GLib
@@ -179,6 +180,41 @@ reply = app.dispatch({"cmd": "adv", "on": False})
 check("stop returns confirmed success",
       reply["ok"] is True and reply["advertising"] is False
       and reply["advertising_state"] == "off")
+
+# A shared controller may host the iPad HID peripheral role and an audio
+# central link at the same time. Even the explicit HID disconnect command must
+# address only the HID host; audio is a separate lifecycle on the same radio.
+shared_objects = {
+    "/org/bluez/hci0/dev_IPAD": {
+        "org.bluez.Device1": {"Connected": True,
+                              "Icon": "input-keyboard"}},
+    "/org/bluez/hci0/dev_AUDIO": {
+        "org.bluez.Device1": {"Connected": True,
+                              "Icon": "audio-card"}},
+}
+shared_disconnects = []
+
+
+class SharedRoot:
+    def GetManagedObjects(self):
+        return shared_objects
+
+
+class SharedDevice:
+    def __init__(self, path):
+        self.path = path
+
+    def Disconnect(self):
+        shared_disconnects.append(self.path)
+
+
+app.bus = types.SimpleNamespace(
+    get_object=lambda _service, path: (
+        SharedRoot() if path == "/" else SharedDevice(path)))
+reply = app.dispatch({"cmd": "disconnect"})
+check("HID disconnect preserves same-radio audio",
+      reply == {"ok": True, "disconnected": 1}
+      and shared_disconnects == ["/org/bluez/hci0/dev_IPAD"])
 
 manager.defer_start = True
 check("a start timeout is not reported as broadcasting",

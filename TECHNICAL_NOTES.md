@@ -115,6 +115,12 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   decoy) in the iPad's device list. BR/EDR stays *enabled* (audio needs it), just
   not discoverable. The iPad still finds the real keyboard via its LE
   advertisement.
+- **Shared hardware does not mean shared connection lifecycle.** BlueZ can
+  keep the A2DP central link and BLE HID peripheral link active concurrently on
+  one controller. HID prepare, pair, connect, reset, advertising, and explicit
+  HID disconnect paths must never call `Disconnect` on an audio `Device1`.
+  Different controllers improve airtime and fault isolation, but semantic
+  isolation is mandatory even on the original one-radio topology.
 - **Restarting the keyboard daemon must not power-cycle the radio.**
   `openspanble`'s `ExecStartPre` uses `ensure-dualmode.sh`, which **only**
   toggles bearers if the adapter isn't *already* powered + dual-mode, and

@@ -1,5 +1,24 @@
 # OpenSpan — Devlog
 
+## 2026-08-21 — Shared radio, separate Bluetooth lifecycles
+
+Doug reproduced headphone audio disconnecting when the iPad connection was
+prepared and restated the project finding: iPad HID and audio are independent
+connections even when they share one physical radio. The source contained the
+opposite policy in `Bluez.prepare_hid`: it read the pinned audio device and
+deliberately called `Disconnect` whenever audio occupied the selected HID
+controller. A new same-radio test failed on that exact call before the fix.
+
+The teardown is removed. HID preparation and reset now operate only on HID
+device objects; audio is never consulted. Deterministic coverage proves both
+ordinary and reset iPad preparation preserve the same-radio audio link, and
+the daemon's explicit HID disconnect command targets the connected HID host
+while skipping the connected audio device on that controller. Separate radios
+remain useful for airtime and hardware-fault isolation, not as a prerequisite
+for connection-lifecycle isolation.
+
+---
+
 ## 2026-08-21 — Administrator is a launch invariant
 
 Live inspection after the Desktop-role restart proved every EsotericOS app
@@ -737,8 +756,9 @@ is free to renumber adapters after any reboot.
 Every multi-radio action is controller-scoped through `openspan_bt.py`.
 The HID daemon can move to the selected adapter via a systemd drop-in, while
 the audio pin records `controller|device` (and still reads the old MAC-only
-format). Pairing the iPad only disconnects audio when both are deliberately
-assigned to the same controller. Audio on another controller is left live.
+format). Corrected 2026-08-21: pairing the iPad never disconnects audio, even
+when both roles deliberately share one controller. The earlier shared-radio
+disconnect policy was operational coupling, not a hardware requirement.
 
 The first bench machine now has all three physical radios live together: the
 internal Intel controller plus two TP-Link USB adapters. The two RTL8761BU

@@ -106,17 +106,21 @@ paired node becomes an ordinary device on the desk (`kind: "node"`, `lane:
 If this PC has no VirtualBox or no guest VM, that is not an error — it is a
 **LAN node**, it says so once, and nothing polls a VM that is not there.
 
-The single radio time-shares both jobs (BLE HID to the iPad, A2DP audio to the
-earbuds). Keeping the BLE link's airtime modest is what lets the audio stay
-clean — see `TECHNICAL_NOTES.md`.
+The single radio runs both jobs concurrently: BLE HID peripheral service to the
+iPad and an A2DP central connection to the earbuds. Those are independent
+BlueZ device/profile lifecycles even when they share one controller. Preparing,
+pairing, connecting, resetting, or disconnecting the iPad lane must never
+disconnect audio. Keeping the BLE link's airtime modest is what lets both links
+stay clean — see `TECHNICAL_NOTES.md`.
 
 Single-radio operation remains the default and uses the original compatibility
 path. An opt-in **Multiple radios** setting exposes every controller seen by the
 VM, lets the iPad keyboard, managed Mac, and scans choose radios, and adds **Assign to radio**
 to each Bluetooth device's right-click menu. Assignments are stored by
-controller MAC address so they survive `hci0`/`hci1` renumbering. When the iPad
-and headphones use different radios, pairing the iPad leaves headphone audio
-alone.
+controller MAC address so they survive `hci0`/`hci1` renumbering. Different
+radios add airtime and hardware-fault isolation; they are not required for
+connection-lifecycle isolation. Pairing the iPad leaves headphone audio alone
+in either arrangement.
 
 With three radios, the recommended layout is the internal controller for the
 iPad compatibility/backup lane, one external TP-Link controller for the

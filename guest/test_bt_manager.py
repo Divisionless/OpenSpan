@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Headless checks for controller-scoped OpenSpan Bluetooth operations."""
 
 import importlib.util
@@ -248,12 +249,24 @@ check("wrong iPad bond cannot make the Mac lane look paired",
       and bluez.hid_paired("hci1", target="mac") is False)
 removed = []
 disconnected = []
-bluez.read_audio_pin = lambda: ("", "")
 bluez.adapter_iface = lambda _radio: types.SimpleNamespace(
     RemoveDevice=lambda path, **_kwargs: removed.append(str(path)))
 bluez.device_iface = lambda row: types.SimpleNamespace(
     Disconnect=lambda **_kwargs: disconnected.append(row["path"]))
 bluez.set_property = lambda *_args, **_kwargs: None
+bluez.read_audio_pin = lambda: (
+    "AA:BB:CC:00:00:02", "AA:BB:CC:00:00:20")
+check("iPad preparation preserves same-radio audio",
+      bluez.prepare_hid("hci1", target="ipad") == "READY"
+      and disconnected == [])
+disconnected.clear()
+removed.clear()
+check("iPad reset preparation still preserves same-radio audio",
+      bluez.prepare_hid("hci1", reset=True, target="ipad") == "READY"
+      and disconnected == [])
+disconnected.clear()
+removed.clear()
+bluez.read_audio_pin = lambda: ("", "")
 check("Mac preparation removes the wrong-lane iPad bond",
       bluez.prepare_hid("hci1", target="mac") == "READY"
       and removed == ["/org/bluez/hci1/dev_60_8B_0E_05_72_82"])

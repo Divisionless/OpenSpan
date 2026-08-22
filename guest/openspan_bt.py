@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Controller-scoped BlueZ and per-device audio operations for OpenSpan.
 
 The original shell/bluetoothctl path remains the single-radio default.  This
@@ -498,15 +499,13 @@ class Bluez:
     def prepare_hid(self, controller, reset=False, target=""):
         radio = self.radio(controller)
         controller = radio["address"]
-        pin_controller, pin_device = self.read_audio_pin()
-        if pin_device:
-            audio = (
-                self.device(pin_controller, pin_device)
-                if pin_controller else self.device_any(pin_device)
-            )
-            actual_controller = audio["controller"] if audio else pin_controller
-            if actual_controller == controller and audio and audio["connected"]:
-                self.device_iface(audio).Disconnect(timeout=20)
+
+        # HID peripheral service and an audio central link are independent
+        # roles that BlueZ can keep on one controller concurrently. Earlier
+        # code deliberately disconnected the pinned audio device here before
+        # preparing an iPad lane. That was not a hardware requirement; it was
+        # the isolation regression Doug reproduced. Never touch audio from an
+        # HID prepare/reset path, even when both roles share this controller.
 
         for row in list(self.devices()):
             if row["controller"] != controller or is_audio(row):

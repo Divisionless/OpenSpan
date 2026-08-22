@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-21",
-  "nextSid": 147,
+  "nextSid": 148,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2640,6 +2640,26 @@
       "actualTime": "~35m implementation, verification, packaging and arming",
       "extra": {
         "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-21; restart acceptance pending. Live evidence proves the current Desktop-role process tree is High/elevated while EsotericOS.Shell is Medium/not-elevated; ConsentPromptBehaviorAdmin=0 explains why the prior runas elevation was silent. Source commit 3eafa70 removes the optional Ignore path: a non-elevated bootstrap releases the mutex, requests the same command through runas, and exits before key, VM or audio work; failure exits inert. tools/app-autostart.ps1 creates one per-user interactive-logon task at RunLevel Highest, verifies action/trigger/run level and owner SID, then removes HKCU Run. bake-in.ps1 delegates to that owner. Deterministic admin startup, pair-flow, Desktop-role, arrangement, canvas, module, status and pane suites pass; both PowerShell scripts parse cleanly. Staged binary: D:\\_EsotericOS\\app\\EsotericOS-desktop-role-admin.exe, 73,473,841 bytes, SHA-256 37f0e211698a22adcde9700c852dfcbfa4ef2b8a6e8d7f942ea3d14198e0b603; archive contains openspan, openspan_launcher, on_desktop and monitor_identity. ARMED: task EsotericOS App (elevated) is Ready, Highest, exact candidate action, PT30S delay and has never run; HKCU Run\\EsotericOS is absent. Prior Run state: D:\\_EsotericOS\\backups\\admin-app-20260821-220337. Current elevated app remains untouched; candidate has no process; shell pointers, VM, portal and radios are unchanged. Files work remains paused."
+      }
+    },
+    {
+      "sid": "v3.147",
+      "hcidx": 147,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.146"
+      ],
+      "title": "Shared-radio Bluetooth isolation -- iPad HID lifecycle must never disconnect audio even when both connections use one controller  [shared-radio-isolation]",
+      "why": "Doug: connecting the iPad should not disconnect the audio Bluetooth, even if their radio is shared -- this is a key finding of this research project",
+      "estTokens": "10k-25k",
+      "costDrivers": "guest BlueZ lifecycle audit; failing same-radio regression harness; packaged acceptance build; safe guest-script synchronization",
+      "estTime": "20-45m",
+      "model": "Overseer implementation and deterministic verification",
+      "status": "doing",
+      "actualTokens": "not surfaced",
+      "actualTime": "in progress",
+      "extra": {
+        "note": "ROOT CAUSE PROVEN 2026-08-21. guest/openspan_bt.py Bluez.prepare_hid explicitly read the pinned audio device and called Device1.Disconnect when audio shared the selected HID controller. A new same-radio regression test failed before the change and passes after removing that teardown. HID prepare and reset no longer consult audio; daemon disconnect already filters audio Device1 objects and now has a dynamic same-controller test proving only the HID host is disconnected. Source verification is in progress; live radios remain untouched and Files work remains paused."
       }
     }
   ],
