@@ -71,8 +71,8 @@ Doug is promoting his starter set on the board. The moment he says done:
 ## Product state beneath the board
 
 - Running build = **iteration-3 line + recovery cycle + rebrand**, launched
-  as D:\_EsotericOS\app\EsotericOS.exe (admin — the app enforces its own elevation
-  gate at openspan.py:_elevation_gate for hook survival under UIPI).
+  as D:\_EsotericOS\app\EsotericOS.exe (admin — non-elevated startup
+  automatically relaunches through `runas` and exits; no Ignore path).
   OpenSpan.exe = promoted v3; OpenSpan.exe.prev = sealed v2;
   STABLE-V2.md return path on both disks.
 - Recovery machinery landed (tasks #2/#12 arc): explicit PnP handoff

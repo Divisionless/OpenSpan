@@ -1,5 +1,24 @@
 # OpenSpan — Devlog
 
+## 2026-08-21 — Administrator is a launch invariant
+
+Live inspection after the Desktop-role restart proved every EsotericOS app
+process was already High/elevated while the shell remained Medium. No prompt
+was visible because this machine's UAC policy is `ConsentPromptBehaviorAdmin=0`:
+the existing `runas` request elevates silently. The source contract was still
+wrong, however, because its startup dialog offered an **Ignore** path.
+
+That choice is gone. A non-elevated control-app bootstrap now releases the
+single-instance mutex, requests the same command through `runas`, and exits
+before key setup or any VM/audio work. Failure exits inert. Automatic sign-in
+is moving from HKCU Run to the per-user `EsotericOS App (elevated)` scheduled
+task: interactive logon, RunLevel Highest, exact executable action, 30-second
+delay. The installer verifies the task before removing the old Run value and
+never launches or stops the current app. `bake-in.ps1` delegates to this single
+owner rather than recreating the old route.
+
+---
+
 ## 2026-08-21 — Desktop is not Windows primary
 
 The Desk arrangement now models two independent roles on each local display.

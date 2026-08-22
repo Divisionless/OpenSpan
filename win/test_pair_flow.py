@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Headless smoke test for the deliberate-pair flow in openspan.py.
 
 Runs the App through the whole Pair/Broadcast state machine with every real
@@ -241,40 +242,46 @@ check("multi-radio USB recovery: root hub is never selected",
           ])) == [])
 
 
-# Startup choice is intentionally tested without constructing another App.
-# Both Close and Restart must return before key setup or VM/audio workers.
+# Admin-only startup is tested without constructing another App. A
+# non-elevated process must always release its mutex, request an elevated
+# replacement, and return before key setup or VM/audio workers. There is no
+# Ignore path.
 _startup_originals = {
     "is_elevated": openspan.is_elevated,
     "single_lock": openspan._single_instance_lock,
-    "gate": openspan._elevation_gate,
     "release": openspan._release_single_instance_lock,
     "launch": openspan._launch_elevated,
+    "failed": openspan._show_elevation_launch_failed,
     "key": openspan.ensure_ssh_key,
 }
-_startup = {"key_calls": 0, "released": [], "launched": 0}
+_startup = {"key_calls": 0, "released": [], "launched": 0, "failed": 0}
 openspan.is_elevated = lambda: False
 openspan._single_instance_lock = lambda: 9876
 openspan.ensure_ssh_key = \
     lambda: _startup.update(key_calls=_startup["key_calls"] + 1)
-openspan._elevation_gate = lambda: "close"
-openspan.run_app()
-check("startup gate: Close exits before key/VM/audio setup",
-      _startup["key_calls"] == 0)
-
-openspan._elevation_gate = lambda: "restart"
 openspan._release_single_instance_lock = \
     lambda lock: _startup["released"].append(lock)
 openspan._launch_elevated = \
     lambda: _startup.update(launched=_startup["launched"] + 1) or True
+openspan._show_elevation_launch_failed = \
+    lambda: _startup.update(failed=_startup["failed"] + 1)
 openspan.run_app()
-check("startup gate: Restart releases mutex and launches replacement",
+check("admin-only startup releases mutex and launches elevated replacement",
       _startup["released"] == [9876] and _startup["launched"] == 1
-      and _startup["key_calls"] == 0)
+      and _startup["failed"] == 0 and _startup["key_calls"] == 0)
+
+_startup.update(released=[], launched=0, failed=0, key_calls=0)
+openspan._launch_elevated = \
+    lambda: _startup.update(launched=_startup["launched"] + 1) or False
+openspan.run_app()
+check("failed elevation exits inert and reports the failure",
+      _startup["released"] == [9876] and _startup["launched"] == 1
+      and _startup["failed"] == 1 and _startup["key_calls"] == 0)
 openspan.is_elevated = _startup_originals["is_elevated"]
 openspan._single_instance_lock = _startup_originals["single_lock"]
-openspan._elevation_gate = _startup_originals["gate"]
 openspan._release_single_instance_lock = _startup_originals["release"]
 openspan._launch_elevated = _startup_originals["launch"]
+openspan._show_elevation_launch_failed = _startup_originals["failed"]
 openspan.ensure_ssh_key = _startup_originals["key"]
 
 

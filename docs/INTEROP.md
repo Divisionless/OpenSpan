@@ -263,8 +263,16 @@ constant in the portal carries one of those two prefixes.
 
 ## 6. Elevation
 
-OpenSpan offers an elevation gate at startup. EsotericOS runs unelevated
-(`asInvoker`) and will not change that; see their spec, "Elevation posture".
+The EsotericOS control GUI is admin-only. Its unflagged (`asInvoker`) packaged
+executable is only a bootstrap: when its token is not elevated, it releases the
+single-instance mutex, asks Windows to run the exact same command through
+`ShellExecute(..., "runas", ...)`, and exits before keys, radios, audio, or the
+VM are touched. Failure or cancellation is inert. There is no Ignore path.
+
+At interactive sign-in, `tools\app-autostart.ps1` registers the per-user
+`EsotericOS App (elevated)` task with RunLevel Highest and a short delay, then
+removes the legacy HKCU Run value only after verifying that exact task. This
+makes elevation a boot contract instead of a dialog outcome.
 
 **The consequence, stated plainly: a non-elevated process receives nothing from
 its low-level hooks while an elevated window has focus — silently, with the
@@ -278,16 +286,10 @@ arranging screens, editing a display, working through settings — because
 capturing means the pointer has left this machine. The dead zone is common in
 normal use, not rare.
 
-Two things bound it:
-
-- On a machine with UAC disabled the question does not arise: every process
-  already carries the elevated token and nothing goes deaf.
-- Otherwise it is a real choice. **OpenSpan's elevation gate offers "Ignore —
-  normal mode for this run only"**, which trades bridging input while another
-  elevated window is focused for keeping the counterpart's gestures alive.
-
-This is a stated consequence of the contract, agreed by both sides. It is not a
-bug and neither side is going to fix it.
+The mandatory elevation deliberately chooses reliable cross-integrity input
+bridging over a medium-integrity control process. Peer gesture consumers must
+account for that boundary; lowering the EsotericOS GUI is not a supported
+workaround.
 
 ---
 

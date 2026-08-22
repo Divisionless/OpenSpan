@@ -1,12 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 <#
 .SYNOPSIS
   Bake EsotericOS into the desktop: start it at sign-in, on the desktop, every time.
 
 .DESCRIPTION
-  Writes HKCU\Software\Microsoft\Windows\CurrentVersion\Run : EsotericOS = "<this folder>\EsotericOS.exe".
-  Per-user, no admin needed to write. Both Explorer and EsotericOS Shell run the Run key at
-  sign-in, so this holds before and after the shell swap. UAC is off on this machine, so the
-  process comes up elevated as the app requires (UIPI: hooks die under elevated windows otherwise).
+  Installs the per-user "EsotericOS App (elevated)" logon task through
+  tools\app-autostart.ps1. The task is RunLevel Highest and becomes the sole
+  automatic launch owner; the legacy HKCU Run value is removed only after the
+  exact task contract is verified. This keeps the GUI elevated because UIPI
+  silences its hooks whenever a higher-integrity window has focus.
 
   It also adds the Windows Firewall rule EsotericOS needs to be a LAN node: allow the
   PROGRAM EsotericOS.exe, inbound and outbound, on private networks.
@@ -35,8 +37,8 @@
   and uninstalling must not quietly leave one behind: see docs\RADIO-CUSTODY.md.
 #>
 param([switch]$Check, [switch]$Undo, [switch]$Custody)
-$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $exe = Join-Path $PSScriptRoot 'EsotericOS.exe'
+$autostart = Join-Path $PSScriptRoot 'tools\app-autostart.ps1'
 $py = 'C:\Python313\python.exe'
 $custodyScript = Join-Path $PSScriptRoot 'win\radio_custody.py'
 
@@ -100,12 +102,16 @@ function Add-FirewallRule {
     }
 }
 
-$cur = (Get-ItemProperty -Path $key -Name EsotericOS -ErrorAction SilentlyContinue).EsotericOS
-"Run\EsotericOS : " + $(if ($null -eq $cur) { '(absent)' } else { $cur })
 if ($Custody) { Show-Custody -Verb 'take'; exit 0 }
-if ($Check) { Show-Firewall; exit 0 }
+if ($Check) {
+    & $autostart -Check -ExePath $exe
+    $autostartExit = $LASTEXITCODE
+    Show-Firewall
+    exit $autostartExit
+}
 if ($Undo) {
-    if ($null -ne $cur) { Remove-ItemProperty -Path $key -Name EsotericOS; "removed" } else { "nothing to remove" }
+    & $autostart -Undo -ExePath $exe
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if (Get-FirewallRuleState) {
         netsh advfirewall firewall delete rule name="$ruleName" | Out-Null
         "firewall rule '$ruleName' removed"
@@ -114,9 +120,6 @@ if ($Undo) {
     exit 0
 }
 if (-not (Test-Path $exe)) { "no EsotericOS.exe beside this script: $exe"; exit 1 }
-$want = '"' + $exe + '"'
-if ($cur -ne $want) {
-    Set-ItemProperty -Path $key -Name EsotericOS -Value $want
-    "Run\EsotericOS -> $want"
-} else { "already baked in" }
+& $autostart -ExePath $exe
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Add-FirewallRule

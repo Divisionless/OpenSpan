@@ -45,9 +45,13 @@ hand OpenSpan to another machine, copy the exe **plus those files**.
 `OpenSpan.exe`, `build/`, `dist/`, and `*.spec` are gitignored — the binary
 is rebuilt on demand, not stored in the repo.
 
-## No-console / no-elevation
+## No-console / admin-only GUI
 
 Built `--noconsole` (GUI, no console flash) with PyInstaller's `runw`
-bootloader, and unsigned-but-unflagged, so it launches unelevated — dodging
-the same shell-reputation gate that made the `openspanw.exe` interpreter copy
-necessary for the raw `.py` path.
+bootloader. The executable remains unsigned and unflagged so Windows can start
+its tiny bootstrap from any shell. That bootstrap never constructs the GUI at
+medium integrity: it immediately invokes the same command through the `runas`
+verb and exits. A failed or cancelled elevation exits inert. At sign-in,
+`tools\app-autostart.ps1` bypasses the bootstrap entirely with a per-user
+RunLevel Highest logon task and removes the legacy HKCU Run value only after
+verifying the exact task contract.

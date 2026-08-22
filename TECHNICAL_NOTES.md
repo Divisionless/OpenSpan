@@ -174,15 +174,17 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   portal/audio processes become **role flags of the same exe** (`--portal`,
   `--audio`, `--setup`) dispatched by `openspan_launcher.py` (the frozen
   entry script); every module switches its path anchor from `__file__` to
-  `sys.executable` under `sys.frozen`. Built `--noconsole` + unflagged →
-  unelevated, no console flash. The exe / `build/` / `dist/` are gitignored.
+  `sys.executable` under `sys.frozen`. Built `--noconsole` + unflagged: the
+  transient bootstrap can start reliably, but it must immediately relaunch
+  through `runas` and exit before constructing the GUI. The GUI is admin-only.
+  Automatic sign-in is owned by a per-user RunLevel Highest scheduled task,
+  never by HKCU Run. The exe / `build/` / `dist/` are gitignored.
 - **Why a renamed interpreter (`openspanw.exe`):** `C:\Python313\pythonw.exe`
   carries a `RUNASADMIN` AppCompatFlags layer that forces elevation of the
   unsigned interpreter, which trips Windows' shell reputation gate ("an
   administrator has blocked this app" — independent of the UAC prompt setting).
   A same-directory unflagged copy (`Copy-Item pythonw.exe openspanw.exe`) runs
-  unelevated → no block. OpenSpan needs no admin (VBoxManage / ssh / shutdown /
-  subprocess all work unelevated).
+  unelevated, after which EsotericOS performs its own explicit elevation.
 - **Do not put the launcher in a OneDrive-synced folder** — that was a false
   lead, but OneDrive placeholders add their own friction; keep launchers local
   (Start Menu / D: drive).

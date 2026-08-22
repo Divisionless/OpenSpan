@@ -31,9 +31,12 @@ no error, no exception, nothing in any log, and `SetWindowsHookEx` still reports
 success. Re-installing the hook does not help. Only closing the elevated window
 (or restarting OpenSpan, which steals focus back) appears to "fix" it.
 
-It looks exactly like a bug in OpenSpan. It isn't. Run OpenSpan elevated and it
-goes away. The app warns you at launch if it isn't elevated, and the status bar
-shows `⚠ NOT ADMIN`.
+It looks exactly like a bug in OpenSpan. It isn't. EsotericOS therefore treats
+administrator integrity as a launch invariant, not a user choice. A
+non-elevated bootstrap immediately requests an elevated copy and exits before
+keys, Bluetooth, audio, or the VM are touched; there is no normal-mode GUI.
+Automatic sign-in uses the verified `EsotericOS App (elevated)` scheduled task
+at RunLevel Highest rather than an HKCU Run entry.
 
 ## Why a VM?
 

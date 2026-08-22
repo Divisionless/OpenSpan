@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """EsotericOS (Astral Compass) — one dark window that runs the whole desk.
 
 Everything in one place: the live screen arrangement (drag the iPad to
@@ -2112,44 +2113,6 @@ def _theme_startup_buttons():
                  foreground="#FFD9EC", font=(FONT_UI_SEMI, 10))
     st.map("Danger.TButton",
            background=[("pressed", PRESS_DANGER), ("active", "#66294C")])
-
-
-def _elevation_gate():
-    """Ask what to do before keys, Bluetooth, audio, or the VM are touched."""
-    root = tk.Tk()
-    _resolve_brand_fonts(root)
-    try:
-        root.title(f"{APP_LABEL} — startup choice")
-        root.geometry("700x320")
-        root.minsize(640, 280)
-        root.configure(bg=BG)
-        try:
-            root.iconbitmap(ICON)
-        except Exception:  # noqa: BLE001
-            pass
-        _theme_startup_buttons()
-        root.update_idletasks()
-        _paint_dark_titlebar(root)
-        root.lift()
-        root.focus_force()
-        # Close is deliberately last: Escape or clicking outside the card must
-        # be fail-closed and must never count as permission to boot the bridge.
-        return _dialog(
-            root,
-            f"{APP_LABEL} is not running as administrator",
-            "Administrator mode keeps keyboard and mouse bridging alive while "
-            "an elevated window is focused.\n\n"
-            "Choose Restart as administrator to continue normally. Close "
-            "program exits without starting the VM or touching Bluetooth. "
-            "Ignore starts OpenSpan in normal mode for this run only.",
-            [("Restart as administrator", "restart", "Accent.TButton"),
-             ("Ignore", "ignore", "TButton"),
-             ("Close program", "close", "Danger.TButton")])
-    finally:
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
 
 
 def _elevated_launch_spec():
@@ -12788,17 +12751,16 @@ def run_app():
         # window or block on a dialog
         sys.exit(0)
 
-    # This decision must precede ensure_ssh_key and App(...): App construction
-    # starts the VM/audio workers. Close therefore means a truly inert exit.
+    # The control GUI is admin-only. This decision must precede ensure_ssh_key
+    # and App(...), because App construction starts the VM/audio workers. The
+    # unflagged/asInvoker executable is only a bootstrap: it releases the
+    # mutex, asks Windows to run the same command with the full token, and
+    # exits. There is deliberately no Ignore path and no medium-integrity GUI.
     if not is_elevated():
-        startup_choice = _elevation_gate()
-        if startup_choice == "close":
-            return
-        if startup_choice == "restart":
-            _release_single_instance_lock(lock)
-            if not _launch_elevated():
-                _show_elevation_launch_failed()
-            return
+        _release_single_instance_lock(lock)
+        if not _launch_elevated():
+            _show_elevation_launch_failed()
+        return
 
     key_ok = ensure_ssh_key()  # make + secure it before any guest operation
     root = tk.Tk()
