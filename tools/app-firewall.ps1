@@ -91,11 +91,18 @@ function Remove-ObsoleteRules {
     foreach ($rule in @(Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
         if ($rule.Name -in @($InboundId, $OutboundId)) { continue }
         $display = [string]$rule.DisplayName
-        $program = [string](@($rule | Get-NetFirewallApplicationFilter)[0].Program)
-        $leaf = try { [IO.Path]::GetFileName($program) } catch { '' }
         $legacyName = $display -in @('EsotericOS', 'OpenSpan clipboard')
-        $promptRule = ($display -match '^esotericos($|[-.])' -and
-                       $leaf -like 'EsotericOS*.exe')
+        $promptRule = $false
+        # Name first: asking Windows for the application filter of every
+        # firewall rule takes minutes on a normal installation. Only an
+        # EsotericOS-named prompt rule needs that comparatively expensive
+        # second test.
+        if ($display -match '^esotericos($|[-.])') {
+            $program = [string](@(
+                $rule | Get-NetFirewallApplicationFilter)[0].Program)
+            $leaf = try { [IO.Path]::GetFileName($program) } catch { '' }
+            $promptRule = $leaf -like 'EsotericOS*.exe'
+        }
         if (-not ($legacyName -or $promptRule)) { continue }
         $rule | Remove-NetFirewallRule
         $removed++

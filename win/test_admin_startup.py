@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parent.parent
 OPENSPAN = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
 INSTALLER = (ROOT / "tools" / "app-autostart.ps1").read_text(encoding="utf-8")
 FIREWALL = (ROOT / "tools" / "app-firewall.ps1").read_text(encoding="utf-8")
+FIREWALL_CLEANUP = FIREWALL[
+    FIREWALL.index("function Remove-ObsoleteRules"):
+    FIREWALL.index("function Show-State")]
 BAKE_IN = (ROOT / "bake-in.ps1").read_text(encoding="utf-8")
 failures = []
 
@@ -58,6 +61,9 @@ check("a renamed build replaces stale rules before cleaning prompt debris",
       "Remove-ManagedRules" in FIREWALL
       and "Remove-ObsoleteRules" in FIREWALL
       and "EsotericOS*.exe" in FIREWALL)
+check("cleanup filters by product name before requesting application filters",
+      FIREWALL_CLEANUP.index("$display -match")
+      < FIREWALL_CLEANUP.index("Get-NetFirewallApplicationFilter"))
 check("check mode rejects dual automatic launch ownership",
       "Legacy Run value '$RunName' is still present" in INSTALLER)
 check("bake-in delegates startup ownership to the elevated task installer",
