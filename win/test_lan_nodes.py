@@ -376,14 +376,17 @@ check("the node key is made of os.urandom and nothing else",
 # 9. THE FIREWALL RULE ALLOWS A PROGRAM, NOT A PORT.
 # =========================================================================
 rules = L.firewall_commands(r"C:\Somewhere\EsotericOS.exe")
-check("two rules: inbound and outbound", len(rules) == 2
-      and "dir=in" in rules[0] and "dir=out" in rules[1])
+check("stale managed rules are removed before replacement", len(rules) == 4
+      and "delete rule" in rules[0] and "delete rule" in rules[1]
+      and "dir=in" in rules[2] and "dir=out" in rules[3])
 check("both name the PROGRAM",
-      all('program="C:\\Somewhere\\EsotericOS.exe"' in r for r in rules))
+      all('program="C:\\Somewhere\\EsotericOS.exe"' in r for r in rules[2:]))
 check("NEITHER names a port -- the service port changes every launch",
       not any(("localport" in r or "protocol=" in r) for r in rules))
 check("scoped to the private profile, not to every network",
-      all("profile=private" in r for r in rules))
+      all("profile=private" in r for r in rules[2:]))
+check("inbound is restricted to this private subnet",
+      "remoteip=LocalSubnet" in rules[2])
 explain = L.firewall_explanation(r"C:\Somewhere\EsotericOS.exe")
 check("the explanation says program, and says WHY it is not a port",
       "PROGRAM" in explain and "every launch" in explain

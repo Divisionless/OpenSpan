@@ -497,20 +497,27 @@ def node_device_id(node_id):
 # the rule once when the user runs it elevated, and the app's own in-window
 # "Allow EsotericOS through the firewall" action runs exactly this command --
 # on a click, which is the consent. It is never run behind the user's back.
-FIREWALL_RULE_NAME = "EsotericOS"
+FIREWALL_RULE_NAME = "EsotericOS LAN"
 
 
 def firewall_commands(exe_path, rule_name=FIREWALL_RULE_NAME):
-    """The (inbound, outbound) netsh commands that let this program talk.
+    """Replacement netsh commands for the two managed program rules.
 
     Scoped to the PRIVATE profile: a LAN desk is a home/work network, and a
-    node has no business accepting connections on a coffee-shop wifi.
+    node has no business accepting connections on a coffee-shop wifi. Delete
+    first so a renamed acceptance build cannot leave a stale path looking
+    installed while Windows prompts for the new one.
     """
     exe = str(exe_path)
+    inbound = f"{rule_name} inbound"
+    outbound = f"{rule_name} outbound"
     return [
-        f'netsh advfirewall firewall add rule name="{rule_name}" '
-        f'dir=in action=allow program="{exe}" enable=yes profile=private',
-        f'netsh advfirewall firewall add rule name="{rule_name}" '
+        f'netsh advfirewall firewall delete rule name="{inbound}"',
+        f'netsh advfirewall firewall delete rule name="{outbound}"',
+        f'netsh advfirewall firewall add rule name="{inbound}" '
+        f'dir=in action=allow program="{exe}" enable=yes profile=private '
+        f'remoteip=LocalSubnet',
+        f'netsh advfirewall firewall add rule name="{outbound}" '
         f'dir=out action=allow program="{exe}" enable=yes profile=private',
     ]
 

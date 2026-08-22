@@ -1,8 +1,9 @@
 # EsotericOS — portable node
 
-This folder is the whole program. Copy it anywhere on a Windows 10/11 PC and
-run `EsotericOS.exe`. There is no installer, no registry setup to do by hand,
-and nothing to configure before it will start.
+This folder is the whole program. Copy it anywhere on a Windows 10/11 PC, run
+`bake-in.ps1` as administrator once, then run `EsotericOS.exe`. Bake-in owns the
+two machine integrations users should not have to click through: elevated
+sign-in startup and the narrow Private-network firewall exception.
 
 ## What happens on first run
 
@@ -48,15 +49,19 @@ never travels between machines.
 
 ## Windows Firewall
 
-Run `bake-in.ps1` **as administrator** once. It does two things:
+Run `bake-in.ps1` **as administrator before the first app launch**. It does two
+things:
 
-1. Starts EsotericOS at sign-in (per-user `Run` key).
-2. Adds a Windows Firewall rule allowing **the program** `EsotericOS.exe`,
-   inbound and outbound, on private networks.
+1. Starts EsotericOS at sign-in through a Highest, interactive per-user task.
+2. Installs verified Windows Firewall rules for the exact **program**
+   `EsotericOS.exe`: inbound from the local subnet and outbound, only on
+   private networks.
 
 The rule allows the *program*, not a port, and that is deliberate: this node's
 LAN service port is assigned by the OS at every launch and is different each
-time, so a port rule would be wrong by the next restart.
+time, so a port rule would be wrong by the next restart. Running `bake-in.ps1`
+again after moving or renaming the executable refreshes the rule to its exact
+new path and removes obsolete per-build prompt rules.
 
 If you skip that step, the app notices that inbound connections are being
 refused and offers **Allow EsotericOS through the firewall** in the window,

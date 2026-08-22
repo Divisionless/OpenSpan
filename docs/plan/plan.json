@@ -4,8 +4,8 @@
   "version": 3,
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
-  "updated": "2026-08-21",
-  "nextSid": 150,
+  "updated": "2026-08-22",
+  "nextSid": 151,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2701,6 +2701,26 @@
       "actualTime": "~60m implementation, review, verification, packaging and arming",
       "extra": {
         "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; live restart acceptance pending. App commit 0fce7d3 owns the durable physical Desktop choice and atomically publishes its effective attached GDI name through %LOCALAPPDATA%\\EsotericOS\\desktop-monitor.txt at startup, selection and display reconciliation. Shell commit 4d31b62 adds one validated watcher; the single top MenuBar reuses its AppBar window on the selected screen, the desktop icon grid uses that screen's post-AppBar work area, detached selection falls back to Windows primary, and reattachment restores through the app's physical identity. Multi-monitor MenuBar mode and the independent bottom taskbar retain their existing policies. Adversarial review fixed empty startup ScreenState placement and immediate single-AppBar recovery after target detach. Builds: full net6 x64 PASS with five existing warnings; full net480 x64 PASS with zero warnings. Harnesses: 4,722 application-boundary assertions PASS; Desktop-role 16 PASS on net6 and 16 PASS on net480. App suite: 62 files, 58 pass; the same four unrelated reds remain. Armed app: D:\\_EsotericOS\\app\\EsotericOS-unified-desktop-single-page-admin-bt-isolation.exe, 73,471,665 bytes, SHA-256 58bfdde8982f45aab787f7a56b1c1a67558b3e98c7e977a21fbd5e4ea2203220; recursive archive contains openspan, openspan_launcher, on_desktop and monitor_identity. Frozen shell: D:\\_EsotericOS\\shell\\stable-20260822-004409, 614 files / 175,605,633 bytes, all file hashes equal the verified net6 build; EsotericOS.Shell.exe and CairoDesktop.exe are byte-identical at SHA-256 1d48f7353254b118a3febbc1d42bee77b4a6d8b20dbf1700d1ea76e9966c3cff. Backup: D:\\_EsotericOS\\backups\\unified-desktop-20260822-004622. The Highest current-user interactive app task has its exact new action, one PT30S logon trigger and no legacy Run value. HKCU Winlogon has the exact frozen shell path; HKLM remains explorer.exe. Effective role is \\\\.\\DISPLAY5. Seven live EsotericOS processes were unchanged; candidate process counts are zero. VM, portal, audio, radios and running shell were untouched. Files implementation remains paused. NEXT: Doug restart, then verify GUI/top bar/icons share Desktop 5 while Windows primary and bottom taskbar remain independent; also accept elevation, one-page scrolling and same-radio audio continuity."
+      }
+    },
+    {
+      "sid": "v3.150",
+      "hcidx": 150,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.149"
+      ],
+      "title": "Installer-owned firewall identity -- prevent recurring Windows Security Alert after app updates [durable-firewall-install]",
+      "why": "Doug: make that part of the install path too -- users don't want this annoyance",
+      "estTokens": "15k-30k",
+      "costDrivers": "ephemeral LAN-node listener; exact executable identity; install/check/undo convergence; stale prompt-rule cleanup; portable assembly",
+      "estTime": "30-60m",
+      "model": "Overseer implementation and deterministic verification",
+      "status": "doing",
+      "actualTokens": "~25k Codex",
+      "actualTime": "~30m implementation and verification before live application",
+      "extra": {
+        "note": "SOURCE VERIFIED 2026-08-22; live rule application pending. Root cause: the LAN node intentionally binds TCP port 0 and receives a different OS-assigned listener each launch; Windows therefore needs a program rule, but acceptance builds use unique executable names and the old bake-in skipped whenever any rule named EsotericOS existed, even when it named a stale path. New tools/app-firewall.ps1 owns exact verified Private-profile rules: inbound Protocol Any from LocalSubnet and outbound Protocol Any. Re-running is semantically idempotent; a renamed executable replaces stale managed rules, verifies the new contract, then removes legacy OpenSpan/EsotericOS and per-build prompt rules. Partial creation rolls back. app-autostart now provisions/checks/undoes this rule beside the exact scheduled-task action before removing the legacy Run route; bake-in delegates; portable packaging ships both dependent tools and tells users to provision before first launch; the in-window fallback uses matching replacement names. PowerShell parse PASS. Focused LAN-node, admin-startup and portable assembly suites PASS. Full app suite remains the expected 58/62 with the same four unrelated reds. NEXT: commit, install for the running acceptance candidate, verify obsolete broad Private/Public prompt rules are gone, and prove a repeated install is inert."
       }
     }
   ],

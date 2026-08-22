@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OPENSPAN = (ROOT / "win" / "openspan.py").read_text(encoding="utf-8")
 INSTALLER = (ROOT / "tools" / "app-autostart.ps1").read_text(encoding="utf-8")
+FIREWALL = (ROOT / "tools" / "app-firewall.ps1").read_text(encoding="utf-8")
 BAKE_IN = (ROOT / "bake-in.ps1").read_text(encoding="utf-8")
 failures = []
 
@@ -40,6 +41,23 @@ check("task ownership is verified by SID, not normalized display name",
 check("legacy Run removal follows exact task verification",
       INSTALLER.index("Assert-TaskContract -Task $installed")
       < INSTALLER.index("Remove-ItemProperty -LiteralPath $RunKey"))
+check("firewall provisioning is part of every installed app path",
+      "app-firewall.ps1" in INSTALLER
+      and INSTALLER.index("Assert-TaskContract -Task $installed")
+      < INSTALLER.index("& $FirewallInstaller -ExePath $ExePath")
+      < INSTALLER.index("Remove-ItemProperty -LiteralPath $RunKey"))
+check("firewall check and undo share the same exact executable contract",
+      "& $FirewallInstaller -Check -ExePath $ExePath" in INSTALLER
+      and "& $FirewallInstaller -Undo -ExePath $ExePath" in INSTALLER)
+check("firewall identity is exact-program, private and local-subnet inbound",
+      "[IO.Path]::GetFullPath($actualProgram)" in FIREWALL
+      and "-Profile Private -Program $ExePath -Protocol Any" in FIREWALL
+      and "-RemoteAddress LocalSubnet" in FIREWALL
+      and "-Profile Public" not in FIREWALL)
+check("a renamed build replaces stale rules before cleaning prompt debris",
+      "Remove-ManagedRules" in FIREWALL
+      and "Remove-ObsoleteRules" in FIREWALL
+      and "EsotericOS*.exe" in FIREWALL)
 check("check mode rejects dual automatic launch ownership",
       "Legacy Run value '$RunName' is still present" in INSTALLER)
 check("bake-in delegates startup ownership to the elevated task installer",

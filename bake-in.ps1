@@ -10,8 +10,9 @@
   exact task contract is verified. This keeps the GUI elevated because UIPI
   silences its hooks whenever a higher-integrity window has focus.
 
-  It also adds the Windows Firewall rule EsotericOS needs to be a LAN node: allow the
-  PROGRAM EsotericOS.exe, inbound and outbound, on private networks.
+  The same installer adds the Windows Firewall rules EsotericOS needs to be a
+  LAN node: allow the exact PROGRAM EsotericOS.exe, inbound from LocalSubnet
+  and outbound, on private networks.
 
   THE RULE ALLOWS A PROGRAM, NOT A PORT, and it has to. The LAN service port is assigned
   by the OS at every launch (bind to 0, read it back, advertise it) so that nothing has to
@@ -19,11 +20,11 @@
   therefore be stale by the next restart. Allowing the executable covers whatever port the
   OS hands out, and covers mDNS discovery with it.
 
-  This is the one place a firewall rule is added without a click, and it is not behind the
-  user's back: running this script elevated IS the consent, it is idempotent, and it prints
-  exactly what it added. The app itself never adds a rule on its own -- it detects a blocked
-  inbound and offers an in-window "Allow EsotericOS through the firewall" button that runs
-  this same rule.
+  The install path adds this rule without a separate click, and it is not
+  behind the user's back: running this script elevated IS the consent, it is
+  idempotent, and it prints exactly what it installed. The app itself detects
+  blocked inbound and offers an in-window "Allow EsotericOS through the
+  firewall" repair action that installs the same narrow program contract.
 
   -Check   : report only.
   -Undo    : remove the value and the firewall rule, and print the commands that hand the
@@ -71,55 +72,17 @@ function Show-Custody {
     "Nothing above has been run. --apply is yours to type."
 }
 
-$ruleName = 'EsotericOS'
-
-function Get-FirewallRuleState {
-    $found = netsh advfirewall firewall show rule name="$ruleName" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $found -match 'Rule Name') { return $true }
-    return $false
-}
-
-function Show-Firewall {
-    ""
-    "--- Windows Firewall (LAN nodes) ---"
-    if (Get-FirewallRuleState) {
-        "rule '$ruleName' : present (allows the PROGRAM $exe)"
-    } else {
-        "rule '$ruleName' : (absent) -- this machine cannot accept node pairings"
-    }
-}
-
-function Add-FirewallRule {
-    if (-not (Test-Path $exe)) { "no EsotericOS.exe beside this script; firewall rule skipped"; return }
-    if (Get-FirewallRuleState) { "firewall rule '$ruleName' already present"; return }
-    # A PROGRAM rule. The service port is the OS's to choose and changes every launch.
-    netsh advfirewall firewall add rule name="$ruleName" dir=in action=allow program="$exe" enable=yes profile=private | Out-Null
-    netsh advfirewall firewall add rule name="$ruleName" dir=out action=allow program="$exe" enable=yes profile=private | Out-Null
-    if (Get-FirewallRuleState) {
-        "firewall rule '$ruleName' added: allow program `"$exe`" in+out, private profile"
-    } else {
-        "firewall rule '$ruleName' could NOT be added -- run this script as administrator"
-    }
-}
-
 if ($Custody) { Show-Custody -Verb 'take'; exit 0 }
 if ($Check) {
     & $autostart -Check -ExePath $exe
-    $autostartExit = $LASTEXITCODE
-    Show-Firewall
-    exit $autostartExit
+    exit $LASTEXITCODE
 }
 if ($Undo) {
     & $autostart -Undo -ExePath $exe
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    if (Get-FirewallRuleState) {
-        netsh advfirewall firewall delete rule name="$ruleName" | Out-Null
-        "firewall rule '$ruleName' removed"
-    } else { "no firewall rule to remove" }
     Show-Custody -Verb 'return'
     exit 0
 }
 if (-not (Test-Path $exe)) { "no EsotericOS.exe beside this script: $exe"; exit 1 }
 & $autostart -ExePath $exe
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Add-FirewallRule

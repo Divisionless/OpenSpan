@@ -10,14 +10,17 @@ time: delete the `clipboard_token` line, relaunch, update both shortcuts.
 Recommended: give the PC a DHCP reservation in the router so the IP never
 moves (mDNS `.local` is flakier than a pinned IP on both ends).*
 
-## 1. PC — firewall rule (once, elevated PowerShell/cmd)
+## 1. PC — install the product firewall contract once
 
 ```
-netsh advfirewall firewall add rule name="OpenSpan clipboard" dir=in action=allow protocol=TCP localport=9966 remoteip=LocalSubnet
+powershell -ExecutionPolicy Bypass -File .\bake-in.ps1
 ```
 
-(Skipping this and clicking through the Windows Security Alert also works
-since you're admin — but the netsh route is deliberate and LAN-scoped.)
+Run that from the EsotericOS folder in an elevated PowerShell. It installs the
+exact-program, Private/LocalSubnet rule used by both the changing LAN-node port
+and clipboard TCP/9966. Do not click through Windows Security Alert: those
+rules are tied to one build filename and cause the prompt to return after an
+update.
 
 ## 2. iPad — Shortcut "Paste from PC"  (Windows → iPad)
 

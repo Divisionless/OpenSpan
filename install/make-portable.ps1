@@ -148,6 +148,10 @@ function Add-Item-Copy {
 
 Add-Item-Copy $Exe "EsotericOS.exe"
 Add-Item-Copy (Join-Path $repo "bake-in.ps1") "bake-in.ps1"
+Add-Item-Copy (Join-Path $repo "tools\app-autostart.ps1") `
+    "tools\app-autostart.ps1"
+Add-Item-Copy (Join-Path $repo "tools\app-firewall.ps1") `
+    "tools\app-firewall.ps1"
 # swap-build.ps1 belongs here: it is the SAFE way to replace the exe on the
 # portable node when a new build is copied over, and it refuses while the
 # binary is running (matched by path, not by name). Without it the update
@@ -214,9 +218,9 @@ if ($Zip) {
 }
 
 Write-Host ""
-Write-Host "Copy the folder to the other PC and run EsotericOS.exe."
-Write-Host "It generates its own node key on first run. Run bake-in.ps1 as"
-Write-Host "administrator there once: it starts the app at sign-in and adds the"
+Write-Host "Copy the folder to the other PC. Before first launch, run"
+Write-Host "bake-in.ps1 as administrator: it starts the app at sign-in and adds the"
 Write-Host "Windows Firewall rule for the PROGRAM (the LAN service port is"
 Write-Host "assigned by the OS and is different every launch, so a port rule"
-Write-Host "would be stale by the next restart)."
+Write-Host "would be stale by the next restart). Then run EsotericOS.exe; it"
+Write-Host "generates its own node key on first run."

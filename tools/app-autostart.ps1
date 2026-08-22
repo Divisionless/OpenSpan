@@ -13,6 +13,11 @@
   Installing or removing the task requires an elevated PowerShell. Nothing
   currently running is stopped or launched; changes take effect at the next
   sign-in.
+
+  This is also the durable firewall install boundary. The LAN node uses an
+  OS-assigned service port which changes every launch, so tools\app-firewall.ps1
+  refreshes Private-profile program rules to the exact selected executable.
+  That prevents each newly named build from triggering Windows Security Alert.
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +33,7 @@ $TaskName = 'EsotericOS App (elevated)'
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $RunName = 'EsotericOS'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$FirewallInstaller = Join-Path $PSScriptRoot 'app-firewall.ps1'
 $UserId = '{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME
 if (-not $ExePath) { $ExePath = Join-Path $RepoRoot 'EsotericOS.exe' }
 $ExePath = [IO.Path]::GetFullPath($ExePath)
@@ -104,6 +110,8 @@ if ($Check) {
     if ($null -ne (Get-RunValue)) {
         throw "Legacy Run value '$RunName' is still present."
     }
+    & $FirewallInstaller -Check -ExePath $ExePath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     exit 0
 }
 
@@ -117,6 +125,8 @@ if ($Undo) {
     } else {
         "task '$TaskName' was already absent"
     }
+    & $FirewallInstaller -Undo -ExePath $ExePath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Show-State
     exit 0
 }
@@ -142,6 +152,13 @@ Register-ScheduledTask -TaskName $TaskName -Action $action `
 
 $installed = Get-AppTask
 Assert-TaskContract -Task $installed
+
+# The exact executable is also the firewall identity. Acceptance builds have
+# deliberately unique names, so leaving this to Windows' first-listen prompt
+# creates another broad pair of rules after every update. The installer owns
+# one verified Private-profile program contract and refreshes it here.
+& $FirewallInstaller -ExePath $ExePath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # The verified task is now the sole automatic launch owner. Removing this only
 # after verification makes a registration failure leave the old startup route

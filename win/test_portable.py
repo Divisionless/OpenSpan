@@ -100,10 +100,19 @@ check("-Zip produces the archive beside the folder",
 check("no '&&' anywhere -- PowerShell 5.1 cannot parse it", "&&" not in text)
 check("bake-in.ps1 and swap-build.ps1 ship with the exe",
       '"bake-in.ps1"' in text and '"swap-build.ps1"' in text)
+check("the complete autostart and firewall install path ships",
+      '"tools\\app-autostart.ps1"' in text
+      and '"tools\\app-firewall.ps1"' in text)
 check("brand\\ ships (the icons)", 'Join-Path $repo "brand"' in text)
 check("README-PORTABLE.md ships", "README-PORTABLE.md" in text)
 check("README-PORTABLE.md exists to be shipped",
       (REPO / "install" / "README-PORTABLE.md").is_file())
+portable_readme = (REPO / "install" / "README-PORTABLE.md").read_text(
+    encoding="utf-8")
+check("portable users provision before first launch instead of clicking a prompt",
+      portable_readme.index("bake-in.ps1")
+      < portable_readme.index("then run `EsotericOS.exe`")
+      and "before the first app launch" in portable_readme)
 
 
 # =========================================================================
@@ -143,6 +152,10 @@ else:
                 produced.append(os.path.relpath(os.path.join(base, name), out))
         check("it produced a folder with the exe in it",
               "EsotericOS.exe" in produced, str(sorted(produced)))
+        check("the portable folder contains its complete install path",
+              os.path.join("tools", "app-autostart.ps1") in produced
+              and os.path.join("tools", "app-firewall.ps1") in produced,
+              str(sorted(produced)))
         leaked = sorted(p for p in produced
                         if matches_excluded(os.path.basename(p)))
         check("NOTHING machine-specific was assembled", not leaked, str(leaked))
@@ -390,16 +403,26 @@ for name in ("node.json", "peers.json"):
 # 8. THE INSTALL PATH ADDS A PROGRAM RULE, AND SAYS SO.
 # =========================================================================
 bake = (REPO / "bake-in.ps1").read_text(encoding="utf-8")
-check("bake-in.ps1 adds a firewall rule for the PROGRAM",
-      'program="$exe"' in bake and "dir=in" in bake and "dir=out" in bake)
-check("...scoped to private networks", "profile=private" in bake)
-check("...and NOT for a port", "localport" not in bake)
-check("...idempotently", "already present" in bake)
-check("...and -Undo removes it again", "delete rule" in bake)
+autostart = (REPO / "tools" / "app-autostart.ps1").read_text(encoding="utf-8")
+firewall = (REPO / "tools" / "app-firewall.ps1").read_text(encoding="utf-8")
+check("bake-in delegates the firewall to the shared app installer",
+      "tools\\app-autostart.ps1" in bake and "app-firewall.ps1" in autostart
+      and "netsh advfirewall" not in bake)
+check("the shared installer adds rules for the exact PROGRAM",
+      "-Program $ExePath" in firewall and "GetFullPath($actualProgram)" in firewall)
+check("...scoped to private networks and LocalSubnet inbound",
+      "-Profile Private" in firewall and "-RemoteAddress LocalSubnet" in firewall)
+check("...and NOT for a fixed port", "-LocalPort" not in firewall)
+check("...idempotently refreshes a renamed executable",
+      "Test-InstalledContract" in firewall and "Remove-ManagedRules" in firewall)
+check("...and -Undo removes managed and obsolete rules",
+      "if ($Undo)" in firewall and "Remove-ObsoleteRules" in firewall)
 check("bake-in.ps1 explains why a port rule would be wrong",
       "every launch" in bake)
 check("bake-in.ps1 is ASCII-only",
       all(byte < 128 for byte in (REPO / "bake-in.ps1").read_bytes()))
+check("the firewall installer is ASCII-only",
+      all(byte < 128 for byte in (REPO / "tools" / "app-firewall.ps1").read_bytes()))
 
 
 if failures:
