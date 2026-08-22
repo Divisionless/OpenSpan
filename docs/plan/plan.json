@@ -2677,10 +2677,10 @@
       "estTime": "45-90m",
       "model": "Overseer implementation and deterministic verification",
       "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "actualTokens": "not surfaced",
+      "actualTime": "~60m implementation, review, verification and packaging",
       "extra": {
-        "note": "Implementation started 2026-08-22. Running app, VM and radios remain untouched; Files implementation remains paused."
+        "note": "SOURCE+BUILD COMPLETE 2026-08-22; live acceptance and arming pending. Commit e4dbcde removes the five-pane rail and packs Desk, Devices, Bluetooth, System and Console once into one Canvas-backed vertical document. Readiness and compact status stay pinned; Console is an anchor; ordinary wheel input scrolls the page while nested Text/Listbox/Treeview controls retain ownership. Document height drives only scrollregion; window height follows the selected EsotericOS Desktop work area. Footer is the final row and now states AGPL-3.0-or-later. New deterministic single-page and control-surface harnesses cover order, mapping, dynamic content, width, anchors, nested scrolling, fixed header, duplicate portal controls and wider Desk geometry. Full suite: 61 files, 57 pass; the four unchanged failures are test_brand.py font-call cardinality, live arrangement exactness in test_pc_block.py, existing live portal model checks, and assert-control.ps1 hygiene. Candidate: D:\\_EsotericOS\\app\\EsotericOS-single-page-admin-bt-isolation.exe, 73,470,107 bytes, SHA-256 76bf45fe3c55ef638e8408aee1201f403d0b93e0393c405b531a5efa44416f64. Recursive archive audit contains openspan, openspan_launcher, on_desktop and monitor_identity; external guest Bluetooth source remains SHA-256 1f441759f4e9f47cad8f507c646a04ae1d3f73ba06fee8f001885b17da7e3bfd. Candidate has no process. The existing Highest startup task remains untouched and points to EsotericOS-desktop-role-admin-bt-isolation.exe; running app, VM, portal, audio, radios and shell are untouched. Files implementation remains paused."
       }
     }
   ],

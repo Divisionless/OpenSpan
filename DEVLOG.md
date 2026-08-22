@@ -24,6 +24,19 @@ cover ordering, persistent mapping, dynamic scrollregion growth, viewport
 width, Console anchoring, nested scrolling, the pinned safety header, duplicate
 portal controls, and the wider Desk arrangement.
 
+The focused single-page, control-surface, layout, and build-stamp harnesses are
+green. The complete run is 57/61: the four red suites are unchanged live-tree
+checks outside this diff (brand-font call cardinality, the current arrangement
+fixture, existing portal-model invariants, and `assert-control.ps1` hygiene).
+The isolated package is
+`D:\_EsotericOS\app\EsotericOS-single-page-admin-bt-isolation.exe`
+(73,470,107 bytes, SHA-256
+`76bf45fe3c55ef638e8408aee1201f403d0b93e0393c405b531a5efa44416f64`).
+Its recursive archive contains `openspan`, `openspan_launcher`, `on_desktop`,
+and `monitor_identity`. It has not been launched or armed: the existing Highest
+task still points to the accepted Bluetooth-isolation build, and the running
+app, VM, portal, audio, radios, and shell remain untouched.
+
 ---
 
 ## 2026-08-21 — Shared radio, separate Bluetooth lifecycles
