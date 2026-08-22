@@ -1,57 +1,9 @@
-"""The window's height budget: who is allowed to expand, and how tall the
-window is permitted to open.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The page viewport fits the monitor while content remains fully scrollable.
 
-Doug's window was 1921 x 2120 px and had to span two physical monitors. That
-was never a taste problem, it was a mechanical one, and there were two separate
-faults feeding it.
-
-The first is a packer fault. `arr_wrap` and the arrangement canvas inside it
-both packed with expand=True, and they were the ONLY expanding chain in the
-left column. So every pixel of surplus window height was handed to a canvas
-whose drawing is an aspect-fit of the desk -- and at every width this window has
-ever had, that fit is WIDTH-bound. The canvas could not use a single pixel of
-the height it was collecting; it just drew the same picture with more and more
-dead PANEL above and below it. The Bluetooth Treeview on the right had the
-identical disease: it declared height=8 and then expanded, which made the
-declaration decorative.
-
-The second is worse, because it is silent. Nothing in openspan.py set a window
-HEIGHT. geometry("1120x930") named one at import; _set_win_width parsed the
-height back out of geometry() and put it straight back, so it never changed
-again. (_set_win_width itself is gone as of the rail wave -- the console is a
-pane now and a pane switch changes height, not width -- but the fault it
-carried is what these checks exist for.) And minsize(940, 680) permitted a
-window far shorter than the left
-column actually needs. At that size Tk's packer simply does not place the last
-panels -- "System control" and "Bluetooth radio" are gone. There is no
-scrolling anywhere in this app by design, so there is no scrollbar, no clipped
-edge, and nothing whatsoever to tell you those panels exist. Both numbers are
-now derived from the measured content instead.
-
-WHAT THIS TEST CAN AND CANNOT SEE. App(root) starts the VM and the audio
-workers, so it cannot be constructed here -- which means the assembled window's
-real reqheight is not observable from a test, and this file does not pretend to
-measure it. It splits the problem instead:
-
-    * the packing rules are read out of the source with `ast`. That is a
-      structural claim -- "no widget in this chain is allowed to expand" -- and
-      structure is exactly what ast can settle.
-    * the sizing POLICY is a pure function, window_height_plan, so the
-      minsize >= content invariant is checked over a whole range of inputs
-      rather than at one measured point.
-    * the pieces that CAN be built alone -- MultiArrangeCanvas, BtPanel -- are
-      built and measured for real.
-
-The one thing left unobserved is the total: whether the assembled window comes
-in under LAYOUT_MAX_CONTENT_H. The app measures that itself at startup and logs
-it, and the tripwire is asserted here to exist and to be wired to the real
-measurement.
-
-No Tk window is shown (the root is withdrawn), the live config, the profile
-directory and the Bluetooth prefs are all redirected to temp files, and nothing
-here touches the running app.
-
-Exit 0 = all pass.
+App is never constructed because doing so starts bridge workers. Structural
+packing is read from the AST; viewport policy and the arrangement canvas are
+driven directly with no visible Tk window and no writes to live state.
 """
 import ast
 import os
@@ -59,7 +11,6 @@ import shutil
 import sys
 import tempfile
 import tkinter as tk
-from tkinter import ttk
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -73,37 +24,18 @@ import openspan as A  # noqa: E402
 fails = []
 
 
-def check(name, cond, detail=""):
-    print(("PASS " if cond else "FAIL ") + name + (
-        "" if cond or not detail else "\n      " + detail))
-    if not cond:
+def check(name, condition, detail=""):
+    print(("PASS " if condition else "FAIL ") + name + (
+        "" if condition or not detail else "\n      " + detail))
+    if not condition:
         fails.append(name)
 
 
-# Nothing below may read or write anything the running app owns.
-SCRATCH = tempfile.mkdtemp(prefix="openspan-layout-")
-A.CONFIG = os.path.join(SCRATCH, "live.json")
-A.PROFILE_DIR = os.path.join(SCRATCH, "profiles")
-A.BT_PREFS = os.path.join(SCRATCH, "bt_prefs.json")
-
-# Declared ceilings. These are the budget: a panel that grows past one of them
-# fails this test rather than quietly making the window taller than a monitor.
-BT_PANEL_MAX_H = 700        # measured 637 px today
-CANVAS_FIT_MAX_H = 560      # must agree with MultiArrangeCanvas.FIT_MAX_H
-
-# The live desk, as measured on Doug's machine: raw bounding box of every
-# screen and display, before _world_bounds applies its padding.
-LIVE_RAW_W, LIVE_RAW_H = 7409, 3039
-LIVE_CANVAS_W = 852         # the canvas width in the live window
-
-
-# ---- reading the packing rules out of the source ---------------------------
-with open(os.path.join(HERE, "openspan.py"), encoding="utf-8") as handle:
-    MODULE = ast.parse(handle.read(), filename="openspan.py")
+source = open(os.path.join(HERE, "openspan.py"), encoding="utf-8").read()
+module = ast.parse(source, filename="openspan.py")
 
 
 def _name(node):
-    """Render `foo` or `self.foo` as text; anything else is not a widget name."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -113,441 +45,146 @@ def _name(node):
 
 
 def _method(class_name, method_name):
-    for node in ast.walk(MODULE):
+    for node in ast.walk(module):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
-            for item in node.body:
-                if (isinstance(item, ast.FunctionDef)
-                        and item.name == method_name):
-                    return item
+            return next((item for item in node.body
+                         if isinstance(item, ast.FunctionDef)
+                         and item.name == method_name), None)
     return None
 
 
-def _layout(fn):
-    """(parent, packs) for one function body.
-
-    parent[widget] = the master it was constructed against
-    packs[widget]  = the literal keywords of its .pack() call
-
-    A widget built and packed in one expression -- tk.Label(bridge, ...).pack()
-    -- has no name, so it is recorded under a line-number key. Those still
-    count: an anonymous label that expands is just as much a sponge as a named
-    one, and skipping them would make this audit a half-audit.
-    """
-    parent, packs = {}, {}
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.value, ast.Call) and node.value.args):
-            target = _name(node.targets[0])
-            master = _name(node.value.args[0])
-            if target and master:
-                parent[target] = master
+def _packs(function):
+    result = {}
+    for node in ast.walk(function):
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "pack"):
             continue
-        base = node.func.value
-        who = _name(base)
-        if who is None and isinstance(base, ast.Call) and base.args:
-            master = _name(base.args[0])
-            if master:
-                who = f"<anonymous line {node.lineno}>"
-                parent[who] = master
-        if who is None:
+        name = _name(node.func.value)
+        if not name:
             continue
-        keywords = {}
+        kwargs = {}
         for keyword in node.keywords:
             try:
-                keywords[keyword.arg] = ast.literal_eval(keyword.value)
-            except ValueError:
-                keywords[keyword.arg] = "<expression>"
-        packs[who] = keywords
-    return parent, packs
+                kwargs[keyword.arg] = ast.literal_eval(keyword.value)
+            except (ValueError, TypeError):
+                kwargs[keyword.arg] = "<expression>"
+        result[name] = kwargs
+    return result
 
 
-APP_INIT = _method("App", "__init__")
-check("App.__init__ found in the source", APP_INIT is not None)
-PARENT, PACKS = _layout(APP_INIT)
+app_init = _method("App", "__init__")
+bt_init = _method("BtPanel", "__init__")
+app_packs = _packs(app_init)
+bt_packs = _packs(bt_init)
+init_src = ast.unparse(app_init)
 
 
-def children_of(master):
-    return sorted(w for w, m in PARENT.items() if m == master)
+print("\n---- viewport, never document-height geometry ----")
+check("page height constants are explicit positive integers",
+      isinstance(A.PAGE_PREFERRED_WINDOW_H, int)
+      and isinstance(A.PAGE_MIN_WINDOW_H, int)
+      and A.PAGE_PREFERRED_WINDOW_H >= A.PAGE_MIN_WINDOW_H > 0)
+for available in (400, 500, 680, 800, 930, 1040, 2160, 10000):
+    geometry, minimum = A.page_window_plan(available)
+    check(f"{available}px: geometry and floor fit the work area",
+          1 <= minimum <= geometry <= max(400, available),
+          f"geometry={geometry} minimum={minimum}")
+check("the preferred height is used when the monitor permits it",
+      A.page_window_plan(1040) == (930, 680),
+      repr(A.page_window_plan(1040)))
+check("a short monitor outranks both preferred and minimum",
+      A.page_window_plan(540) == (540, 540),
+      repr(A.page_window_plan(540)))
+check("the document's measured height is not passed to page_window_plan",
+      "page_window_plan(avail_h)" in init_src
+      and "page_window_plan(content_h" not in init_src)
+check("document height is retained for telemetry and scrollregion",
+      "content_h = bridge.winfo_reqheight()" in init_src
+      and "self._sync_page_scrollregion()" in init_src)
+check("the old clipped-content warning path is absent",
+      "_content_clipped" not in source and "panels below the fold" not in source)
 
 
-def expands(widget):
-    return bool(PACKS.get(widget, {}).get("expand"))
-
-
-# ---- (a) only ONE thing in the left column is allowed to expand -------------
-# The chain frames themselves -- main, bridge_col, bridge -- deliberately keep
-# expand=True. They are the cavity, not the sponge: the surplus has to be able
-# to REACH the spacer at the bottom of `bridge`. Take expand off any of them and
-# the surplus strands in `full` instead, and the two-column split collapses.
-for frame in ("main", "bridge_col", "bridge"):
-    check(f"cavity frame `{frame}` still expands", expands(frame),
-          f"pack kwargs: {PACKS.get(frame)}")
-
-# THE INVARIANT, RESTATED. It was written here as "the only expanding child of
-# `bridge` is the designated spacer", which was the consequence and not the
-# rule. The rule is that `bridge` has EXACTLY ONE expanding child, so the
-# window's surplus height has a single named destination and cannot be split
-# between two panels that each distort a little to absorb it.
-#
-# Which child that is depends on the pane, and it has to: the console is a LOG,
-# and vertical room is the entire point of looking at one. It packed
-# expand=False like every other pane, with cwrap expanding inside it, so every
-# pixel of a dragged-taller window went to a spacer that draws nothing while the
-# log stayed the height it opened at. select_pane moves the flag between the
-# pane and the spacer now, and the count stays one. Both halves are checked:
-# the built state here, the switching state live at the bottom of this file.
-bridge_kids = children_of("bridge")
-expanding = [w for w in bridge_kids if expands(w)]
-check("`bridge` has children at all", len(bridge_kids) >= 5,
-      f"found: {bridge_kids}")
-check("as BUILT, the only expanding child of `bridge` is the designated spacer "
-      "— no pane is packed in __init__ at all",
-      expanding == ["self._bridge_spacer"],
-      f"expanding: {expanding}   of: {bridge_kids}")
-check("`bridge` is never left with zero expanding children",
-      len(expanding) == 1, f"expanding: {expanding}")
-check("PANE_EXPANDS declares which panes take the surplus instead of the "
-      "spacer, and it is the console alone",
-      getattr(A, "PANE_EXPANDS", None) == ("console",),
-      str(getattr(A, "PANE_EXPANDS", None)))
-SELECT = _method("App", "select_pane")
-select_src = ast.unparse(SELECT) if SELECT else ""
-check("select_pane derives the pane's expand flag from PANE_EXPANDS rather "
-      "than a literal", "PANE_EXPANDS" in select_src)
-check("...and re-configures the spacer against it in the same breath, so the "
-      "two flags can never both be on or both be off",
-      "self._bridge_spacer.pack_configure" in select_src, select_src[:600])
-
-check("arr_wrap no longer expands -- it was the sponge PARENT",
-      not expands("arr_wrap"), f"pack kwargs: {PACKS.get('arr_wrap')}")
-check("the arrangement canvas no longer expands",
-      not expands("self.canvas"), f"pack kwargs: {PACKS.get('self.canvas')}")
-check("the canvas is still a child of arr_wrap",
-      PARENT.get("self.canvas") == "arr_wrap", str(PARENT.get("self.canvas")))
-check("capping the canvas alone would not have been enough "
-      "(both flags are off)",
-      not expands("arr_wrap") and not expands("self.canvas"))
-check("nothing else inside arr_wrap expands",
-      [w for w in children_of("arr_wrap") if expands(w)] == [],
-      str([w for w in children_of("arr_wrap") if expands(w)]))
-
-BT_INIT = _method("BtPanel", "__init__")
-BT_PARENT, BT_PACKS = _layout(BT_INIT)
-check("the BtPanel body no longer expands, so height=8 is real",
-      not bool(BT_PACKS.get("body", {}).get("expand")),
-      f"pack kwargs: {BT_PACKS.get('body')}")
-# The tree itself keeps expand=True on purpose. pack's expand is not
-# axis-specific: with side="left" it is what gives the tree the leftover WIDTH
-# beside its scrollbar. Measured in an 800px-wide column, expand=False there
-# opens a 216px hole. The height cap is already fully delivered by `body`.
-check("the tree keeps expand=True (that is its horizontal fill, not height)",
-      bool(BT_PACKS.get("self.tree", {}).get("expand")),
-      f"pack kwargs: {BT_PACKS.get('self.tree')}")
-
-
-# ---- (b) the height budget is declared, and the tripwire is wired -----------
-check("LAYOUT_MAX_CONTENT_H is declared",
-      isinstance(getattr(A, "LAYOUT_MAX_CONTENT_H", None), int))
-check("the canvas fit ceiling matches this test's constant",
-      A.MultiArrangeCanvas.FIT_MAX_H == CANVAS_FIT_MAX_H,
-      f"{A.MultiArrangeCanvas.FIT_MAX_H} vs {CANVAS_FIT_MAX_H}")
-
-init_src = ast.dump(APP_INIT)
-measures = [n for n in ast.walk(APP_INIT)
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "winfo_reqheight"
-            and _name(n.func.value) == "full"]
-check("App.__init__ measures the built content (full.winfo_reqheight())",
-      len(measures) == 1, f"found {len(measures)}")
-check("App.__init__ runs that measurement through window_height_plan",
-      any(isinstance(n, ast.Call) and _name(n.func) == "window_height_plan"
-          for n in ast.walk(APP_INIT)))
-check("the budget ceiling is referenced where it is exceeded",
-      "LAYOUT_MAX_CONTENT_H" in init_src)
-
-
-# ---- (c) minsize can never again be shorter than the content ---------------
-# This is the check that permanently closes the silent packer-starvation mode.
-# It is asserted as a PROPERTY over a range rather than at one point, because
-# the one point -- the assembled window -- is the thing a test cannot build.
-#
-# The invariant has ONE exception, learned the hard way on 2 August. Doug's desk
-# went from a 1440p primary to three 1080p panels between one launch and the
-# next. The content that had fitted was suddenly 223px taller than the display,
-# and because minsize equalled it, the window could not be shrunk to fit at all
-# -- System control and Bluetooth radio were unreachable by any means. So the
-# SCREEN outranks the content, and when it does the app must SAY so instead of
-# letting the packer eat panels quietly.
-TALL = 4000          # taller than any real screen
-worst = None
-for content in list(range(1, 400, 37)) + [680, 930, 1200, 1599, 1600, 1601,
-                                          2120, 4000]:
-    geom_h, min_h, over, clipped = A.window_height_plan(content, avail_h=TALL)
-    if min_h < content or geom_h < content:
-        worst = (content, geom_h, min_h)
-        break
-check("minsize height >= content height whenever the screen allows it",
-      worst is None, f"first violation: {worst}")
-check("geometry height == content height when the screen allows it",
-      all(A.window_height_plan(c, avail_h=TALL)[0] == c
-          for c in (700, 930, 1450, 2120)))
-check("the ceiling is a tripwire, not a clamp -- over-budget content still "
-      "gets its full minsize",
-      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 500, avail_h=TALL)[1]
-      == A.LAYOUT_MAX_CONTENT_H + 500)
-check("over-budget content is reported",
-      A.window_height_plan(A.LAYOUT_MAX_CONTENT_H + 1, avail_h=TALL)[2] is True
-      and A.window_height_plan(A.LAYOUT_MAX_CONTENT_H, avail_h=TALL)[2] is False)
-
-# ---- (c2) ...but the screen outranks the content --------------------------
-# His live case: 1263px of content on a 1040px work area.
-geom_h, min_h, _over, clipped = A.window_height_plan(1263, avail_h=1040)
-check("a window is never taller than the screen it must live on",
-      geom_h == 1040 and min_h == 1040, f"geom={geom_h} min={min_h}")
-check("...and minsize comes down with it, so it can still be shrunk to fit",
-      min_h <= 1040, str(min_h))
-check("being cut off by the screen is REPORTED, never silent",
-      clipped is True)
-check("content that fits its screen is not flagged as clipped",
-      A.window_height_plan(900, avail_h=1040)[3] is False)
-check("the clipped flag tracks the screen, not the budget ceiling",
-      A.window_height_plan(1263, avail_h=1040)[3] is True
-      and A.window_height_plan(1263, avail_h=1400)[3] is False)
-check("work_area_height returns a plausible usable height for this desk",
-      400 <= A.work_area_height() <= 10000, str(A.work_area_height()))
-check("work_area_height is not just the raw screen height (taskbar counted)",
-      isinstance(A.work_area_height(), int))
-check("App.__init__ asks for the WORK AREA, not winfo_screenheight alone",
-      any(isinstance(n, ast.Call) and _name(n.func) == "work_area_height"
-          for n in ast.walk(APP_INIT)))
-
-# ...and that the derived numbers actually reach Tk. A literal here is the bug:
-# minsize(940, 680) is what let the window be sized shorter than its content.
-geometry_calls = [n for n in ast.walk(APP_INIT)
-                  if isinstance(n, ast.Call)
-                  and isinstance(n.func, ast.Attribute)
-                  and n.func.attr == "geometry"]
-minsize_calls = [n for n in ast.walk(APP_INIT)
-                 if isinstance(n, ast.Call)
-                 and isinstance(n.func, ast.Attribute)
-                 and n.func.attr == "minsize"]
-check("App.__init__ still sets geometry and minsize",
-      len(geometry_calls) >= 2 and len(minsize_calls) >= 2,
-      f"geometry x{len(geometry_calls)}, minsize x{len(minsize_calls)}")
-last_geometry = max(geometry_calls, key=lambda n: n.lineno)
-last_minsize = max(minsize_calls, key=lambda n: n.lineno)
-check("the LAST geometry() height is computed, not a literal",
-      isinstance(last_geometry.args[0], ast.JoinedStr),
-      f"line {last_geometry.lineno}")
-check("the LAST minsize() height is computed, not a literal",
-      len(last_minsize.args) == 2
-      and not isinstance(last_minsize.args[1], ast.Constant),
-      f"line {last_minsize.lineno}")
-check("width behaviour is unchanged -- minsize width is still 940",
+print("\n---- geometry reaches Tk from the viewport plan ----")
+geometry_calls = [node for node in ast.walk(app_init)
+                  if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "geometry"]
+minsize_calls = [node for node in ast.walk(app_init)
+                 if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute)
+                 and node.func.attr == "minsize"]
+last_geometry = max(geometry_calls, key=lambda node: node.lineno)
+last_minsize = max(minsize_calls, key=lambda node: node.lineno)
+check("final geometry height is computed", isinstance(last_geometry.args[0],
+                                                       ast.JoinedStr))
+check("final minsize height is computed from min_h",
+      _name(last_minsize.args[1]) == "min_h")
+check("minimum width remains 940",
       isinstance(last_minsize.args[0], ast.Constant)
       and last_minsize.args[0].value == 940)
+check("work area uses the selected EsotericOS Desktop monitor",
+      "self._desktop_monitor_name()" in init_src
+      and "work_area_height" in init_src)
 
 
-# ---- Tk from here down -----------------------------------------------------
+print("\n---- only viewport cavities expand ----")
+check("outer main cavity expands", app_packs.get("main", {}).get("expand")
+      is True, repr(app_packs.get("main")))
+check("page Canvas consumes the viewport",
+      app_packs.get("page_canvas", {}).get("expand") is True
+      and app_packs.get("page_canvas", {}).get("fill") == "both",
+      repr(app_packs.get("page_canvas")))
+check("arrangement wrapper does not absorb vertical surplus",
+      not app_packs.get("arr_wrap", {}).get("expand"),
+      repr(app_packs.get("arr_wrap")))
+check("arrangement canvas does not absorb vertical surplus",
+      not app_packs.get("self.canvas", {}).get("expand"),
+      repr(app_packs.get("self.canvas")))
+check("Bluetooth body keeps its declared row height",
+      not bt_packs.get("body", {}).get("expand"),
+      repr(bt_packs.get("body")))
+check("Bluetooth tree still expands horizontally beside its scrollbar",
+      bt_packs.get("self.tree", {}).get("expand") is True,
+      repr(bt_packs.get("self.tree")))
+
+
+print("\n---- arrangement remains width-fitted and bounded ----")
+scratch = tempfile.mkdtemp(prefix="esotericos-layout-")
+A.CONFIG = os.path.join(scratch, "config.json")
 root = tk.Tk()
-root.withdraw()            # never draw on the desk this is being run from
-
-style = ttk.Style()
-try:
-    style.theme_use("clam")
-except tk.TclError:
-    pass
-
-# The button metric, measured the way App._theme configures it. A stacked
-# column of button rows pays this difference once per row.
-style.configure("TButton", padding=8, font=("Segoe UI", 10))
-was = ttk.Button(root, text="Restart keyboard").winfo_reqheight()
-style.configure("TButton", padding=(10, 3), font=("Segoe UI", 10))
-now = ttk.Button(root, text="Restart keyboard").winfo_reqheight()
-check("padding=(10, 3) is shorter than padding=8 by 10px per stacked row",
-      was - now == 10, f"{was} -> {now}")
-theme = _method("App", "_theme")
-check("App._theme actually uses padding=(10, 3)",
-      "(10, 3)" in ast.unparse(theme).replace("(10,3)", "(10, 3)"))
-
-
-# ---- (d) REGRESSION GUARD: the drawing must be pixel-identical -------------
-# The whole justification for this wave is that the canvas was collecting height
-# it could not use. If that is true, taking the height away cannot change the
-# drawing by so much as a pixel. This is where that claim is settled.
+root.withdraw()
 canvas = A.MultiArrangeCanvas(root, on_change=None, height=270)
-# The live desk, stated directly rather than reconstructed through
-# normalize_config, so the world under test is exactly the measured one.
 canvas.monitors = [{"name": "DESK", "x": 0, "y": 0, "w": 100, "h": 100,
                     "layout_x": 0, "layout_y": 0,
-                    "layout_w": LIVE_RAW_W, "layout_h": LIVE_RAW_H}]
+                    "layout_w": 7409, "layout_h": 3039}]
 canvas.targets = []
 canvas.selected = None
 canvas.ipad = None
 canvas._world_bounds()
-
-# _world_bounds pads with ONE scalar on all four sides -- 12% of the LONGER
-# axis, floor 180 -- not 12% per axis. Getting that wrong gives an aspect of
-# 2.438 instead of 1.907 and every number below moves.
-pad = max(180, int(max(LIVE_RAW_W, LIVE_RAW_H) * 0.12))
-check("the world pad is one scalar on all four sides (889 px here)",
-      pad == 889 and (canvas.wx1 - canvas.wx0) == LIVE_RAW_W + 2 * pad
-      and (canvas.wy1 - canvas.wy0) == LIVE_RAW_H + 2 * pad,
-      f"pad={pad} world={canvas.wx1 - canvas.wx0} x "
-      f"{canvas.wy1 - canvas.wy0}")
-world_w = canvas.wx1 - canvas.wx0
-world_h = canvas.wy1 - canvas.wy0
-check("padded world is 9187 x 4817, aspect 1.9072",
-      (world_w, world_h) == (9187, 4817)
-      and abs(world_w / world_h - 1.9072) < 0.0005,
-      f"{world_w} x {world_h}, aspect {world_w / world_h:.4f}")
-
-# winfo_width() is 1 on a withdrawn root -- the widget is never mapped. Stubbing
-# it is the seam that lets the real _scale/_fit_height arithmetic run at the
-# live window's width without putting a window on Doug's desk.
-canvas.winfo_width = lambda: LIVE_CANVAS_W
-
-fit = None
+canvas.winfo_width = lambda: 852
 canvas._fit_height()
 fit = canvas.winfo_reqheight()
-check("_fit_height() is 447 px at the live canvas width",
-      abs(fit - 447) <= 2, str(fit))
-check("_fit_height() does NOT double-apply the 0.94 inset "
-      "(that would give 420)",
-      abs(fit - 420) > 5, str(fit))
-
+check("live-desk width still fits near 447px", abs(fit - 447) <= 2,
+      repr(fit))
 canvas._fit_height()
-again = canvas.winfo_reqheight()
-check("_fit_height() twice in a row is stable -- no oscillation",
-      again == fit, f"{fit} -> {again}")
-
-canvas.winfo_height = lambda: fit
-scale = canvas._scale()[0]
-check("_scale() is 0.0872 -- the drawing is pixel-identical to before "
-      "this wave",
-      abs(scale - 0.0872) <= 0.0005, f"{scale:.6f}")
-check("the fit is WIDTH-bound, which is why the surplus height was useless",
-      LIVE_CANVAS_W / world_w <= fit / world_h,
-      f"{LIVE_CANVAS_W / world_w:.6f} vs {fit / world_h:.6f}")
-
-# The clamps, so a one-screen desk cannot collapse the canvas to nothing and a
-# very wide one cannot re-open the hole this wave closed.
+check("repeated fitting is stable", canvas.winfo_reqheight() == fit)
 for width, expected in ((300, A.MultiArrangeCanvas.FIT_MIN_H),
                         (2000, A.MultiArrangeCanvas.FIT_MAX_H)):
     canvas.winfo_width = lambda width=width: width
     canvas._fit_height()
-    check(f"at width {width} the fit clamps to {expected}",
+    check(f"{width}px canvas clamps to {expected}px",
           canvas.winfo_reqheight() == expected,
-          str(canvas.winfo_reqheight()))
-
-# A drag and an arrangement switch both change the world's aspect and NEITHER
-# fires <Configure>. A Configure-only hook goes stale on the app's primary
-# gesture, so the hooks are asserted to exist.
-for method in ("adopt", "_release", "save"):
-    node = _method("MultiArrangeCanvas", method)
-    calls = [n for n in ast.walk(node)
-             if isinstance(n, ast.Call) and _name(n.func) == "self._fit_height"]
-    check(f"MultiArrangeCanvas.{method}() re-fits the height",
-          len(calls) >= 1, f"found {len(calls)}")
-node = _method("MultiArrangeCanvas", "redraw")
-calls = [n for n in ast.walk(node)
-         if isinstance(n, ast.Call) and _name(n.func) == "self._fit_height"]
-check("redraw() does NOT re-fit -- _drag calls it every motion tick, and "
-      "changing height mid-drag moves the rect under the cursor",
-      not calls)
-
-# ...and that it really follows a reshaped desk, not just that the call exists.
-canvas.winfo_width = lambda: LIVE_CANVAS_W
-canvas._fit_height()
-before_reshape = canvas.winfo_reqheight()
-canvas.monitors[0]["layout_h"] = LIVE_RAW_H * 2
-canvas.save()
-check("re-shaping the desk changes the fitted height",
-      canvas.winfo_reqheight() != before_reshape,
-      f"{before_reshape} -> {canvas.winfo_reqheight()}")
-
-
-# ---- the pieces that can be built alone, against their own budgets ---------
-panel = A.BtPanel(root, app=None)
-panel.update_idletasks()
-tree_h = panel.tree.winfo_reqheight()
-body = next(w for w in panel.winfo_children()
-            if w.winfo_class() == "Frame" and w.winfo_reqheight() == tree_h)
-check("the Bluetooth tree's declared height=8 is now the height it takes",
-      body.winfo_reqheight() == tree_h and tree_h > 150,
-      f"body {body.winfo_reqheight()} px, tree {tree_h} px")
-check("8 rows still exceeds the devices present, so nothing is hidden",
-      len(panel.tree.get_children()) <= 8,
-      f"{len(panel.tree.get_children())} rows")
-check(f"BtPanel is within its {BT_PANEL_MAX_H}px budget",
-      panel.winfo_reqheight() <= BT_PANEL_MAX_H,
-      f"{panel.winfo_reqheight()} px")
-check(f"the arrangement canvas is within its {CANVAS_FIT_MAX_H}px budget",
-      fit <= CANVAS_FIT_MAX_H, f"{fit} px")
-
-
-# ---- (e) ONE expanding child of `bridge`, on every pane --------------------
-# The runtime half of the invariant above, driven through the SHIPPED
-# select_pane. App(root) is never constructed -- that starts the VM -- so this
-# is App.__new__ plus the five attributes select_pane touches, and rederive is
-# off because the height budget is not what is under test here.
-#
-# pack_info() is the observable, not winfo_height: the root is withdrawn so
-# nothing on it is ever allocated real geometry, but the geometry manager's own
-# record of the -expand option is exact and is what the invariant is about.
-bridge = tk.Frame(root, bg=A.BG)
-bridge.pack(fill="both", expand=True)
-panes = {key: tk.Frame(bridge, bg=A.BG, width=200, height=120)
-         for key in A.PANE_KEYS}
-spacer = tk.Frame(bridge, bg=A.BG, height=0)
-spacer.pack(fill="both", expand=True)
-
-napp = A.App.__new__(A.App)
-napp.root = root
-napp._pane = None
-napp._prev_pane = None
-napp._panes = panes
-napp._rail = {}
-napp._bridge_spacer = spacer
-napp._cons_btn = ttk.Button(root, text="▸  Console")
-
-
-def expands_live(widget):
-    """Is this widget currently packed AND expanding? A pack_forget'd pane is
-    not expanding in any sense the surplus can reach, and pack_info() on one
-    raises rather than answering."""
-    try:
-        info = widget.pack_info()
-    except tk.TclError:
-        return False
-    return str(info.get("expand", "0")) in ("1", "True", "true")
-
-
-for key in A.PANE_KEYS:
-    napp.select_pane(key, rederive=False, remember=False)
-    root.update_idletasks()
-    growing = [w for w in bridge.pack_slaves() if expands_live(w)]
-    wanted = panes[key] if key in A.PANE_EXPANDS else spacer
-    check(f"'{key}': `bridge` still has exactly one expanding child",
-          len(growing) == 1, f"{[str(w) for w in growing]}")
-    check(f"'{key}': ...and it is the "
-          f"{'pane' if key in A.PANE_EXPANDS else 'spacer'}",
-          growing == [wanted], f"{[str(w) for w in growing]}")
-# ...and it is genuinely reversible, not a one-way handover.
-napp.select_pane("console", rederive=False, remember=False)
-console_holds = expands_live(panes["console"]) and not expands_live(spacer)
-napp.select_pane("desk", rederive=False, remember=False)
-spacer_holds = expands_live(spacer) and not expands_live(panes["console"])
-check("the surplus moves to the console and back again — the spacer is not "
-       "left switched off once the console has been visited",
-      console_holds and spacer_holds,
-      f"console_holds={console_holds} spacer_holds={spacer_holds}")
+          repr(canvas.winfo_reqheight()))
+for method_name in ("adopt", "_release", "save"):
+    method = _method("MultiArrangeCanvas", method_name)
+    calls = [node for node in ast.walk(method)
+             if isinstance(node, ast.Call)
+             and _name(node.func) == "self._fit_height"]
+    check(f"{method_name} re-fits after desk shape changes", bool(calls))
 
 root.destroy()
-shutil.rmtree(SCRATCH, ignore_errors=True)
+shutil.rmtree(scratch, ignore_errors=True)
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

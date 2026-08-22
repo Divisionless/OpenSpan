@@ -1,5 +1,31 @@
 # OpenSpan — Devlog
 
+## 2026-08-22 — One control page
+
+The five-pane navigation rail is gone. Desk, Devices, Bluetooth, System, and
+Console now form one ordered vertical document inside one Canvas viewport and
+one scrollbar. Every section is built and mapped for the whole process, so
+scrolling changes only what is visible and cannot suspend the Bluetooth panel,
+arrangement model, portal controls, polling, or any other service owner.
+
+The readiness banner and compact status row remain fixed above the document.
+The header's Console control is now an anchor that scrolls to the persistent
+log instead of hiding or rebuilding anything. Ordinary wheel input scrolls the
+page, while nested Text, Listbox, and Treeview controls retain ownership of
+their own wheel input. The footer is the final document row, proving that the
+same scroll path reaches the complete page; its stale MIT label is corrected to
+AGPL-3.0-or-later.
+
+Window height is now a viewport policy against the selected EsotericOS Desktop
+monitor's work area. The document's measured height feeds only the scrollregion,
+never geometry or minsize, so a long page neither clips its bottom nor forces a
+window beyond the physical display. Deterministic Tk and source-contract tests
+cover ordering, persistent mapping, dynamic scrollregion growth, viewport
+width, Console anchoring, nested scrolling, the pinned safety header, duplicate
+portal controls, and the wider Desk arrangement.
+
+---
+
 ## 2026-08-21 — Shared radio, separate Bluetooth lifecycles
 
 Doug reproduced headphone audio disconnecting when the iPad connection was

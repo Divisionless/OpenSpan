@@ -224,11 +224,12 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
 
 ## 6. The control app UI
 
-- One window (1500x860), three columns side by side — **iPad Bridge** |
-  **Bluetooth & Headphones** | a **persistent Console** that logs every
-  command the app runs (color-coded, routine polls silenced) and carries a big
-  **READY** banner (stopped → booting ~90 s → READY = VM up + daemon
-  reachable). No tabs; everything is visible at once.
+- One window, one vertical document: **Desk → Devices → Bluetooth → System →
+  Console**. A Canvas-backed viewport owns one scrollbar and keeps every
+  section built and mapped; scrolling changes visibility, never service
+  lifetime. The readiness banner and status tokens remain pinned above the
+  document. **Console** in the header is an anchor jump to the persistent,
+  color-coded log, not a pane toggle.
 - **The X asks before killing everything**: a dialog (reentry-guarded — a
   second X focuses it instead of stacking another) offers *Send to system
   tray* (window hides, VM/audio/portal/watchdog all keep running; click the
@@ -264,16 +265,16 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   defers. Refreshes never get swallowed mid-loop — a busy refresh queues a
   trailing rerun so a fresh CONNECTED can't be painted over by a pre-link
   snapshot.
-- **One window: Audio panel + collapsible console (2026-07-13):** there is no
-  separate "compact" mode. The command console (right panel) collapses by
-  default so the window opens lean; the header's **Console** toggle packs/
-  unpacks it and grows/shrinks the window width to match (a width change
-  requested while maximized is deferred and re-applied on un-maximize, so it
-  can't restore wrong-sized). The header's **Send to Tray** hides the window
-  while the bridge — VM, audio, portal — keeps running; the tray icon restores
-  it. An always-visible **Audio & status** panel (in the Bluetooth column,
-  shown in both the console-open and tray-restored states) carries the
-  readiness line, VM/iPad/Audio/Portal dots, the connected headphones, a
+- **One scrolling page (2026-08-22):** the old columns, collapsible Console and
+  five-pane navigation rail are removed. Desk, Devices, Bluetooth, System and
+  Console are packed once in reading order into one embedded document whose
+  requested height drives only the scrollregion. Window geometry depends on
+  the selected EsotericOS Desktop monitor's work area, never on document
+  height, so the bottom cannot be clipped or force the window across screens.
+  The header's **Console** button scrolls to the log. Mouse-wheel events over
+  ordinary controls move the page; the Console Text and Bluetooth Treeview
+  keep ownership of their own nested scrolling. The Bluetooth section carries
+  the connected headphones and a
   **Volume** slider (sets the Windows master volume — the exact dial the
   sender's GAIN mirror follows), and an **L↔R Balance** slider. Balance CANNOT
   use Windows channel volumes (the sender's loopback capture is pre-volume —

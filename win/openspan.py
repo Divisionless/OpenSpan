@@ -373,7 +373,7 @@ IPAD_OFF_LINE = "#3E3A4A"
 IPAD_IDLE_FILL = "#413615"  # connected but portal OFF -> amber (idle/paused)
 IPAD_IDLE_LINE = "#f5c451"
 PORTAL = "#B28DFF"       # crossing edges -- violet, so they read as routes
-# The build stamp, bottom-left of every pane. Blue because nothing else in
+# The build stamp, at the bottom of the scrolling page. Blue because nothing else in
 # this palette is blue: it must never be mistaken for a state colour, and a
 # version string that reads as "state" is worse than no version string.
 BUILD_BLUE = "#5AA9FF"
@@ -398,26 +398,6 @@ PRESS = "#2A203B"         # TButton        : CARD -> #2d3444 hover -> this
 PRESS_ACCENT = "#8A5CFF"  # Accent.TButton : arcane700 -> #764BE2 hover -> this
 PRESS_DANGER = "#8A3566"  # Danger.TButton : #53292a -> #6e3335 hover -> this
 PRESS_WARN = "#fbe09b"    # Warn.TButton   : #f5c451 -> #f8d276 hover -> this
-
-# ---- the navigation rail's four values --------------------------------------
-# The rail items are raw tk.Button, not ttk, so NONE of the style maps above
-# reach them and their values have to be spelled out here.
-#
-# They shipped with activebackground=CARD -- and CARD is also the background of
-# the SELECTED item. So hovering an inactive pane painted it exactly the colour
-# of the pane you are on, and the only thing left distinguishing "you are here"
-# from "your mouse is here" was a 3px accent bar. Hover needs a value of its
-# own, distinct from BOTH resting and selected.
-#
-# Same ordering as every ttk button in this file -- resting, selected, hover,
-# pressed, each one step lighter -- so a press reads as more of what hover
-# started. Hover being lighter than selected is deliberate and is what the ttk
-# ramp already does: selection is stated by the accent bar and the FG label,
-# not by being the brightest thing in the column.
-RAIL_REST = PANEL         # #1d212b -- an inactive item
-RAIL_LIVE = CARD          # #232936 -- the pane you are on
-RAIL_HOVER = "#221F2A"    # the same hover step TButton's "active" uses
-RAIL_PRESS = PRESS        # #3d4860 -- one further along, as everywhere else
 
 # ---- suppressed register: a global CAUSE vs a local STATE -------------------
 # "portal off" and "paired but not connected" were rendered in the SAME amber,
@@ -587,7 +567,7 @@ def broadcast_names(names):
 
     Two names still read as names. Beyond that the count IS the honest summary:
     the row's job is "is anything beaconing", and which machines is a question
-    the Devices pane answers per device, one rail click away.
+    the Devices section answers per device farther down the same page.
     """
     names = list(names)
     if len(names) <= 2:
@@ -626,15 +606,15 @@ def broadcast_names(names):
 #   ipad    the first device's own lane. The only token here that speaks for a
 #           single machine, and it has no second home anywhere in the header.
 #   portal  the process the user starts and stops.
-#   mac     `devices N/M` -- an aggregate whose per-device detail is one rail
-#           click away in the Devices pane.
+#   mac     `devices N/M` -- an aggregate whose per-device detail is in the
+#           Devices section on the same page.
 #   audio   a convenience readout; losing it costs nothing that is not audible.
 #   bcast   LAST, deliberately. Widest token in the row and the most transient
 #           (a broadcast is seconds long), so it is the one that should yield.
 #           broadcast_names above shortens it as well, which is what takes the
 #           full three-device row from 925px to 799px -- inside the cavity.
 #
-# The invariant, asserted by MEASURING in test_panes.py rather than by reading
+# The invariant, asserted by MEASURING in test_single_page.py rather than reading
 # the order back: at the app's minimum width every token in
 # INDICATOR_MUST_SURVIVE is still allocated its full width, whatever the rest
 # of the row does.
@@ -1202,19 +1182,13 @@ def bind_wraplength(label, inset=LABEL_CHROME_W, floor=240):
                add="+")
     return label
 
-# Height budget for the whole window's content.
-#
-# NOTHING in this file used to set a window height. geometry() declared one at
-# import and minsize() permitted a window far SHORTER than the left column
-# actually needs -- so at the app's own default size "System control" and
-# "Bluetooth radio" packed silently off the bottom. There is no scrolling
-# anywhere by design, so there was no scrollbar, no clipping indicator and no
-# way to learn those panels existed. App.__init__ now measures the built content
-# and derives both the opening height and the minimum from it.
-#
-# This ceiling is a TRIPWIRE, not a clamp: content above it is reported, never
-# trimmed. Clamping would re-create the exact starvation described above.
-LAYOUT_MAX_CONTENT_H = 1600
+# A single-page window has a viewport budget, not a content-height budget.
+# Content may be as tall as it needs to be because the page itself scrolls;
+# only the viewport must fit the physical work area. The minimum stays large
+# enough for in-frame dialogs and the pinned readiness header, while the
+# monitor still wins on a shorter display.
+PAGE_PREFERRED_WINDOW_H = 930
+PAGE_MIN_WINDOW_H = 680
 
 
 def work_area_height(default=1080, device_name=None):
@@ -1333,140 +1307,34 @@ def effective_desktop_monitor(monitors, requested=None, identities=None):
     return str(fallback.get("name", "")) if fallback else ""
 
 
-def window_height_plan(content_h, avail_h=None, ceiling=LAYOUT_MAX_CONTENT_H):
-    """Turn a MEASURED content height into the window's geometry and minsize.
+def page_window_plan(avail_h=None, preferred=PAGE_PREFERRED_WINDOW_H,
+                     minimum=PAGE_MIN_WINDOW_H):
+    """Return opening and minimum height for the scrolling page viewport.
 
-    Returns (geometry_h, minsize_h, over_budget, clipped).
-
-    minsize_h follows the content, NOT a guessed constant: a minsize shorter
-    than the content is exactly the silent packer-starvation this exists to
-    close -- Tk drops the last-packed panels without a word, and with no
-    scrolling anywhere there is no scrollbar to hint they went.
-
-    But the content is not allowed to outrank the physical screen. Doug's desk
-    changed from a 1440p primary to three 1080p panels between one launch and
-    the next; the same content that fitted comfortably became 223px taller than
-    the display, and a minsize equal to it meant the window could not be shrunk
-    to fit AT ALL -- the bottom panels were unreachable by any means. A window
-    you cannot fit on your screen is worse than one whose overflow is reported.
-
-    So the screen wins, and when it does we say so out loud rather than let the
-    packer eat panels quietly. `clipped` is that signal, and it is the app's cue
-    that the CONTENT has to get shorter -- not that the warning should be muted.
+    Document height is deliberately absent. Content longer than a monitor is
+    ordinary scrollable content, not clipping and not a reason to make the
+    window taller than its work area.
     """
-    content_h = max(1, int(content_h))
     if avail_h is None:
         avail_h = work_area_height()
     avail_h = max(400, int(avail_h))
-    fitted = min(content_h, avail_h)
-    return fitted, fitted, content_h > ceiling, content_h > avail_h
+    low = min(max(1, int(minimum)), avail_h)
+    return max(low, min(max(1, int(preferred)), avail_h)), low
 
 
-# ---- one pane at a time -----------------------------------------------------
-# Doug, 2 August: *"the app is still showing too much information at once i
-# think -- how can we get this thing to be a reasonable size on 1080p? it
-# demands too much -- consider InputDirector interface for ideas"*
-#
-# Input Director's shape, and the reason it fits on a laptop: a narrow labelled
-# rail down the left edge, ONE pane visible beside it, and a small persistent
-# header. The window's height is then the TALLEST PANE rather than the SUM of
-# every section -- which is exactly what this window had become. Two columns,
-# every panel packed at once, 1136 x 1054 measured, on a 1080p work area of
-# 1040.
-#
-# THE PANES ARE BUILT ONCE, ALL OF THEM, and hidden with pack_forget. None is
-# built lazily and none is ever destroyed or reparented -- Tk has no reparent
-# operation, and two of these are SERVICE OBJECTS as much as they are panels:
-#
-#   * BtPanel._radios gates the radio-missing check on every device card,
-#     BtPanel._connected_names feeds the headphones line, and _poll calls
-#     bt_panel.refresh(quiet=True) on every fifth tick whether or not the
-#     Bluetooth pane is the one showing.
-#   * MultiArrangeCanvas owns the desk config. devices() alone is read six
-#     times a tick, and portal_signature, every device lookup, the hover card,
-#     the right-click menus and _fit_height all go through the same object.
-#
-# A pane that existed only while you were looking at it would take those with
-# it. pack_forget leaves the widget alive and configurable; that is the whole
-# mechanism here.
-PANE_SPEC = (
-    ("desk",      "▦  Desk"),
-    ("devices",   "▣  Devices"),
-    ("bluetooth", "🎧  Bluetooth"),
-    ("system",    "⏻  System"),
-    ("console",   "▸  Console"),
+# ---- one scrolling page ----------------------------------------------------
+# These are document sections, not selectable panes. All five are built once,
+# packed in this order, and remain live. BtPanel and MultiArrangeCanvas are
+# service objects as much as widgets: the background poll reads both whether
+# or not their section is currently inside the viewport.
+PAGE_SPEC = (
+    ("desk", "Desk"),
+    ("devices", "Devices"),
+    ("bluetooth", "Bluetooth"),
+    ("system", "System"),
+    ("console", "Console"),
 )
-PANE_KEYS = tuple(key for key, _label in PANE_SPEC)
-DEFAULT_PANE = "desk"
-
-# The panes whose CONTENT is meant to grow when the window is dragged taller.
-#
-# Four of the five are a fixed stack of controls, and surplus height under a
-# stack of buttons is dead space -- which is the entire reason `bridge` carries
-# a designated spacer. The console is not a stack of controls, it is a LOG:
-# vertical room is the only thing you go there for, and it was the one pane in
-# the app that could not take any. cwrap packed expand=True inside it, but the
-# pane itself was packed expand=False, so every pixel of a dragged-taller window
-# went to the spacer while the log stayed the height it opened at.
-#
-# W1's invariant is NOT "the spacer expands". It is "exactly ONE child of
-# `bridge` expands", so the surplus has a single named destination and cannot be
-# split between two panels that each distort a little to absorb it. select_pane
-# keeps that count at one and moves WHICH child it is: while a pane in this
-# tuple is showing, that pane is the designated expanding child and the spacer
-# stands down; otherwise the spacer is the sponge exactly as before.
-PANE_EXPANDS = ("console",)
-
-# The shortest this window may be made, whatever the visible pane asks for.
-#
-# Not taste, and not a re-introduction of the guessed minsize this file spent a
-# wave deleting: FrameModal._fit clamps its card to host.winfo_height() - 40,
-# and the tallest dialog in the file -- MacDisplayEditor -- asks for 900x420.
-# The Devices pane is the SHORTEST pane in the app (~180px of content) and its
-# own card menu is what opens that dialog. Without a floor, selecting the
-# smallest pane would silently cut the buttons off the biggest modal it can
-# raise.
-PANE_MIN_WINDOW_H = 520
-
-
-def pane_height_floor(avail_h):
-    """PANE_MIN_WINDOW_H, never taller than the screen it has to live on."""
-    return max(1, min(PANE_MIN_WINDOW_H, int(avail_h)))
-
-
-def pane_window_plan(content_h, avail_h=None, floor=None):
-    """window_height_plan for ONE visible pane: the same policy, plus the floor.
-
-    Returns (geometry_h, minsize_h, over_budget, clipped).
-
-    minsize has to come DOWN when a shorter pane is selected, or the window
-    cannot be shrunk to it: a minsize left at the Bluetooth pane's height would
-    pin the Devices pane inside a window with 700px of nothing under it, which
-    is the same "cannot be resized to fit" failure window_height_plan exists to
-    close, moved one level up.
-    """
-    if avail_h is None:
-        avail_h = work_area_height()
-    avail_h = max(400, int(avail_h))
-    geom_h, min_h, over, clipped = window_height_plan(content_h, avail_h)
-    low = (pane_height_floor(avail_h) if floor is None
-           else max(1, min(int(floor), avail_h)))
-    return max(geom_h, low), max(min_h, low), over, clipped
-
-
-def load_last_pane(default=DEFAULT_PANE):
-    """The pane the app opens on, persisted across restarts.
-
-    An unknown, missing or corrupt value falls back to the default rather than
-    raising. This runs inside App.__init__, before there is any surface to
-    report a fault on, and a settings file edited by hand must never be able to
-    stop the app starting.
-    """
-    try:
-        value = load_setting("last_pane", None)
-    except Exception:  # noqa: BLE001
-        return default
-    return value if value in PANE_KEYS else default
+PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 
 
 # ---- themed dialogs ---------------------------------------------------------
@@ -7291,23 +7159,18 @@ class App:
         self._vm_reachable = False   # the VM answers ssh (readiness truth)
         self._ui_faults = 0     # how many queued closures have raised; see
         #                         _drain_ui -- capped so reporting cannot loop
-        self._rederive_faults = 0   # ...and the same, for _rederive_height
         root.after(50, self._drain_ui)
         self._theme()
 
-        # The whole UI lives inside self._full: a pinned header, then ONE pane
-        # at a time beside a labelled rail. See PANE_SPEC for why every pane is
-        # built here and merely hidden rather than created on demand.
-        self._pane = None            # which pane is showing right now
-        self._prev_pane = None       # where the Console button returns to
-        self._panes = {}             # pane key -> its frame; ALL are built
-        self._rail = {}              # pane key -> (accent bar, rail button)
+        # The whole UI lives inside self._full: a pinned safety header followed
+        # by one vertical document. Every section is built and mapped once;
+        # scrolling changes only the viewport, never service lifetime.
+        self._page_sections = {}
         # Every portal control in the window, in build order. There is more than
         # one of them now -- see _portal_button -- and this list is the ONLY
         # thing _render_portal_button and _busy_portal iterate, so a surface
         # cannot exist that the single writer does not reach.
         self._portal_btns = []
-        self._clip_warned = set()    # panes already reported as screen-clipped
         self._ready_state = None
         self._ipad_conn = None
         self._vol_ok = True
@@ -7366,7 +7229,7 @@ class App:
             _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
             ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
                 side="right", padx=(0, 12))
-        self._cons_btn = ttk.Button(head, text="▸  Console",
+        self._cons_btn = ttk.Button(head, text="↓  Console",
                                     command=self._toggle_console)
         self._cons_btn.pack(side="right", padx=(0, 8))
         # DRAG the window by the header. Native HTCAPTION doesn't fire here (Tk's
@@ -7386,7 +7249,7 @@ class App:
         # INDICATOR_ORDER, not a literal tuple: this row overflows its cavity at
         # the app's minimum width, and with no scrolling the packer drops the
         # tail. The order IS the priority, and the constant is where the reason
-        # for it is written down and what the measurement in test_panes.py
+        # for it is written down and what the measurement in test_single_page.py
         # reads. Do not reorder this loop; reorder the constant.
         for _k in INDICATOR_ORDER:
             _lb = tk.Label(indrow, text="", bg=BG, fg=MUTED,
@@ -7404,17 +7267,9 @@ class App:
         # THE READINESS BANNER, and there is exactly one of it, HERE, in the
         # pinned header. One writer: _apply_poll, on a state change.
         #
-        # It used to live in the Audio & status panel, which under a rail
-        # becomes the Bluetooth pane -- so it would have vanished the moment any
-        # other pane was showing. That is the W4 fatal verbatim: the banner was
-        # then inside the console frame, which `_console_open = False` meant was
-        # CONSTRUCTED and never MAPPED, and the default window had no readiness
-        # surface at all. It cost a wave to find and it is one commit old.
-        #
-        # The header is the only place in a one-pane window where "is the bridge
-        # up?" can be answered without first choosing where to look, so that is
-        # where it goes, and the ~26px it costs is paid once rather than by the
-        # pane that happens to be tallest.
+        # It used to live inside a conditionally visible content surface. The
+        # header is the one place that answers "is the bridge up?" while any
+        # part of the long page is in view, so it remains fixed above scrolling.
         self.ready_lbl = tk.Label(full, text="◌  Starting…", bg=BG, fg=MUTED,
                                   font=(FONT_UI_SEMI, 11), anchor="w")
         self.ready_lbl.pack(fill="x", padx=16, pady=(0, PAD_XS))
@@ -7424,74 +7279,50 @@ class App:
                  font=("Consolas", 10), anchor="w").pack(
             fill="x", padx=16, pady=(0, PAD_MD))
 
-        # ---- the rail, and the ONE pane it shows ---------------------------
-        # The two-column split is gone. Everything below the header is a narrow
-        # labelled rail plus exactly one pane; the window's height follows the
-        # pane on show and is re-derived on every switch (_rederive_height).
+        # ---- the single scrolling document --------------------------------
+        # Canvas is the viewport, `bridge` is its one embedded document, and a
+        # single scrollbar owns all page-level overflow. The inner frame's
+        # requested height becomes scrollregion; the viewport's width is pushed
+        # back into the embedded window so every section stays one column wide.
         main = tk.Frame(full, bg=BG)
         main.pack(fill="both", expand=True, padx=10, pady=PAD_SM)
-        # main / bridge_col / bridge keep expand=True. They are the cavity, not
-        # the sponge: the surplus has to reach the designated spacer at the
-        # bottom of `bridge`, and taking expand off any of them would strand it
-        # in `full` instead.
-        #
-        # The rail deliberately does NOT expand and its height is NOT propagated
-        # away: it is measured alongside the panes, so the window can never be
-        # sized shorter than the control that navigates it.
-        rail = tk.Frame(main, bg=PANEL)
-        rail.pack(side="left", fill="y", padx=(0, PAD_LG))
-        for _key, _label in PANE_SPEC:
-            # WORDS, not a glyph alone. This app is opened rarely enough that a
-            # bare icon is a memory test every single time.
-            _row = tk.Frame(rail, bg=RAIL_REST)
-            _row.pack(fill="x")
-            _bar = tk.Frame(_row, bg=RAIL_REST, width=3)
-            _bar.pack(side="left", fill="y")
-            # activebackground=RAIL_HOVER, not CARD. For a tk.Button the ACTIVE
-            # state is the pointer being over it, so activebackground IS the
-            # hover colour -- and CARD is what select_pane paints the SELECTED
-            # item, so hovering an inactive pane used to make it look exactly
-            # like the pane you were already on.
-            _btn = tk.Button(_row, text=_label, bg=RAIL_REST, fg=MUTED, bd=0,
-                             relief="flat", anchor="w", width=13, padx=10,
-                             pady=6, cursor="hand2", font=(FONT_UI, 10),
-                             highlightthickness=0, activebackground=RAIL_HOVER,
-                             activeforeground=FG,
-                             command=lambda k=_key: self.select_pane(k))
-            # PRESSED feedback, which these had none of. ttk buttons got theirs
-            # from a style map (see PRESS); a tk.Button has no map, and its own
-            # press handling only sets relief -- which is "flat" here, so a
-            # click moved nothing at all. Tk does put the widget in the ACTIVE
-            # state while the button is held, so swapping activebackground for
-            # the duration of the press is what actually gets drawn. Navigation
-            # needs this as much as any action does: these five are the only
-            # controls that are guaranteed to be on screen.
-            _btn.bind("<ButtonPress-1>",
-                      lambda _e, b=_btn: b.config(activebackground=RAIL_PRESS))
-            _btn.bind("<ButtonRelease-1>",
-                      lambda _e, b=_btn: b.config(activebackground=RAIL_HOVER))
-            _btn.pack(side="left", fill="x", expand=True)
-            self._rail[_key] = (_bar, _btn)
-        bridge_col = tk.Frame(main, bg=BG)
-        bridge_col.pack(side="left", fill="both", expand=True)
-        bridge = tk.Frame(bridge_col, bg=BG)
-        bridge.pack(fill="both", expand=True)
-        # No pane heading label. The rail already names the pane in words, in
-        # the one place that is always visible, and a second copy of the same
-        # word inside the pane is precisely the "too much at once" this wave
-        # exists to remove.
+        page_scroll = ttk.Scrollbar(main, orient="vertical")
+        page_scroll.pack(side="right", fill="y")
+        page_canvas = tk.Canvas(main, bg=BG, bd=0, highlightthickness=0,
+                                yscrollcommand=page_scroll.set)
+        page_canvas.pack(side="left", fill="both", expand=True)
+        page_scroll.config(command=page_canvas.yview)
+        bridge = tk.Frame(page_canvas, bg=BG)
+        self._page_canvas = page_canvas
+        self._page_body = bridge
+        self._page_window = page_canvas.create_window(
+            (0, 0), window=bridge, anchor="nw")
+        bridge.bind("<Configure>", self._on_page_content_configure, add="+")
+        page_canvas.bind("<Configure>", self._on_page_viewport_configure,
+                         add="+")
+        root.bind_all("<MouseWheel>", self._on_page_mousewheel, add="+")
+        root.bind_all("<Button-4>", self._on_page_mousewheel, add="+")
+        root.bind_all("<Button-5>", self._on_page_mousewheel, add="+")
+
         pane_desk = tk.Frame(bridge, bg=BG)
         pane_devices = tk.Frame(bridge, bg=BG)
         pane_bluetooth = tk.Frame(bridge, bg=BG)
         pane_system = tk.Frame(bridge, bg=BG)
-        pane_console = tk.Frame(bridge, bg=PANEL)
-        self._panes = {"desk": pane_desk, "devices": pane_devices,
-                       "bluetooth": pane_bluetooth, "system": pane_system,
-                       "console": pane_console}
+        pane_console = tk.Frame(bridge, bg=BG)
+        self._page_sections = {
+            "desk": pane_desk, "devices": pane_devices,
+            "bluetooth": pane_bluetooth, "system": pane_system,
+            "console": pane_console,
+        }
+        for _key, _label in PAGE_SPEC:
+            _heading = tk.Frame(self._page_sections[_key], bg=BG)
+            _heading.pack(fill="x", padx=16, pady=(PAD_LG, PAD_XS))
+            tk.Label(_heading, text=_label, bg=BG, fg=FG,
+                     font=(FONT_UI_SEMI, 16), anchor="w").pack(side="left")
 
-        # ---- console pane --------------------------------------------------
+        # ---- Console section -----------------------------------------------
         # Was a fixed 390px strip pinned to the right edge, toggled by widening
-        # the whole window from 1120 to 1520. It is an ordinary pane now: the
+        # the whole window from 1120 to 1520. It is an ordinary section now: the
         # width literals and _set_win_width are gone with it, and the console is
         # finally a thing you can look at rather than a thing you make room for.
         chead = tk.Frame(pane_console, bg=PANEL)
@@ -7520,18 +7351,17 @@ class App:
         set_log_sink(self._log_sink)
         self.log("event", f"{APP_LABEL} started.")
 
-        # ---- Bluetooth pane ------------------------------------------------
+        # ---- Bluetooth section ---------------------------------------------
         # Built BEFORE the canvas, exactly as it was: BtPanel.__init__ ends in
         # refresh(), whose worker can reach App._refresh_all_device_paired --
         # so its construction order relative to self.canvas is load-bearing and
-        # is left alone. It carries no heading label of its own any more; the
-        # rail says "Bluetooth".
+        # is left alone. The page heading immediately above names the section.
         self._bridge_notice(pane_bluetooth)
         self._build_audio_panel(pane_bluetooth)
         self.bt_panel = BtPanel(pane_bluetooth, app=self)
         self.bt_panel.pack(fill="both", expand=False)
 
-        # ---- Desk pane: the arrangement ------------------------------------
+        # ---- Desk section: the arrangement ---------------------------------
         #
         # arr_wrap and the canvas inside it were the ONLY expanding chain in the
         # left column, so 100% of the window's surplus height landed in a canvas
@@ -7616,7 +7446,7 @@ class App:
         #
         # The Desk is where he actually works -- dragging screens and
         # right-clicking them -- and W7 moved the ctl grid that owns the original
-        # button into the System pane. So both the control AND the full-strength
+        # button into the System section. So both the control AND the full-strength
         # amber that explains why nothing is bridging (see _render_portal_button)
         # went two clicks away from the work.
         #
@@ -7629,16 +7459,16 @@ class App:
         # about anything: not its text, not its style, not the backend.
         #
         # place(), not pack(): the placer never propagates a size to its master,
-        # so this costs the Desk pane -- and therefore the W1 height budget --
-        # exactly zero pixels. It lands in the letterbox strip the aspect fit
+        # so this costs the Desk section -- and therefore the page -- exactly
+        # zero pixels. It lands in the letterbox strip the aspect fit
         # leaves below the drawing: _fit_height asks for the height the picture
         # occupies, _scale then insets the drawing a further 6%, and _world_bounds
         # carries a >=180-unit pad on every side on top of that. MEASURED on
         # this desk at the default 1120px window: a 940x493 canvas whose lowest
         # screen rectangle ends at y=393, against a button occupying y=454..485.
-        # 61px of clearance, and no rectangle overlapped at all. test_panes.py
+        # 61px of clearance, and no rectangle overlapped at all. test_single_page.py
         # re-measures it against the live arrangement rather than trusting this
-        # paragraph, and asserts the pane's height is unchanged either way.
+        # paragraph, and asserts the section's height is unchanged either way.
         #
         # It is a CHILD of the canvas so it travels with it, and it is a widget
         # rather than a create_window item so redraw()'s delete("all") -- which
@@ -7678,9 +7508,9 @@ class App:
         # over a monitor makes that monitor unreachable by right-click, and the
         # all-surfaces table is the escape hatch.
 
-        # ---- System pane: bridge controls ----------------------------------
+        # ---- System section: bridge controls -------------------------------
         # The four connection verbs live ONLY on each device's own row in the
-        # Devices pane -- there is deliberately no second global copy of them
+        # Devices section -- there is deliberately no second global copy of them
         # here. A duplicate row kept its own separate paired-state, so unpairing
         # via one left the other still showing the device as paired.
         ctl = tk.Frame(pane_system, bg=BG)
@@ -7723,7 +7553,7 @@ class App:
         for c in range(3):
             ctl.columnconfigure(c, weight=1)
 
-        # ---- Devices pane: one row per device, built from the config --------
+        # ---- Devices section: one row per device, built from the config -----
         # Nothing here is per-device-type. Every device the user has added gets
         # the identical four verbs against its own radio, port and bonds.
         self._dev_frame = _section(pane_devices, "Devices",
@@ -7897,31 +7727,16 @@ class App:
         self.module_rows = {}
         self._module_host = None
 
-        # THE designated spacer, and the only expanding child of `bridge`.
-        # Nothing is drawn in it. It exists so the window can still be dragged
-        # taller without any panel distorting to absorb the extra height, and so
-        # `bridge` never has zero expanding children -- a packer cavity with no
-        # expanding slave hands its surplus back up the tree, which is how the
-        # sponge moved around the last time this was tuned.
-        #
-        # It is packed LAST and never unpacked, which is also what makes it the
-        # anchor for the panes: select_pane packs the visible pane with
-        # `before=self._bridge_spacer`, so a pane selected an hour into the
-        # session still lands ABOVE the spacer rather than under it. The five
-        # panes themselves never expand -- the surplus is the spacer's, whichever
-        # pane is showing.
-        self._bridge_spacer = tk.Frame(bridge, bg=BG, height=0)
-        self._bridge_spacer.pack(fill="both", expand=True)
-        # ...and now open on the pane he was last using.
-        self.select_pane(load_last_pane(), rederive=False, remember=False)
+        # Map every section in reading order. None is ever hidden, destroyed or
+        # rebuilt by scrolling; background work keeps the same widget owners.
+        for _key in PAGE_KEYS:
+            self._page_sections[_key].pack(fill="x")
 
         # ---- footer: which build am I looking at? --------------------------
-        # It lives in the window CHROME, not in a pane, so it is on every pane
-        # by construction rather than by five copies that drift apart. Blue is
-        # reserved for it: nothing else in this palette is blue, so a version
-        # string can never be misread as a state colour.
-        foot = tk.Frame(full, bg=BG)
-        foot.pack(side="bottom", fill="x", padx=16, pady=PAD_MD)
+        # The footer is the document's final row, not fixed chrome. Reaching it
+        # proves the same scrollbar can reach the end of the complete page.
+        foot = tk.Frame(bridge, bg=BG)
+        foot.pack(fill="x", padx=16, pady=(PAD_LG, PAD_MD))
         _stamp, _is_test = build_stamp()
         if _is_test:
             tk.Label(foot, text="TEST BUILD", bg=BG, fg=BUILD_TEST_YELLOW,
@@ -7929,7 +7744,7 @@ class App:
         self.build_lbl = tk.Label(foot, text=_stamp, bg=BG, fg=BUILD_BLUE,
                                   font=("Consolas", 8))
         self.build_lbl.pack(side="left")
-        tk.Label(foot, text="open source · MIT · nothing phones home",
+        tk.Label(foot, text="open source · AGPL-3.0-or-later · nothing phones home",
                  bg=BG, fg="#6E687A", font=(FONT_UI, 8)).pack(side="right")
 
         # clipboard relay for the iPad shortcuts (CLIPBOARD_DESIGN.md);
@@ -7980,57 +7795,24 @@ class App:
         # Runtime tray creation is deliberately disabled. Its pure-ctypes
         # WNDPROC also access-violated during a live soak despite passing short
         # self-tests. Native taskbar minimize needs no Python Windows callback.
-        # ---- layout budget: the window's height follows MEASURED content ----
-        # Nothing in this file used to set a height. The 1120x930 at the top was
-        # a number chosen once; the console toggle parsed the height back out of
-        # geometry() and put it straight back, so it never changed again. And
-        # minsize(940, 680) permitted a window far SHORTER than the content
-        # actually needs -- at which size "System control" and "Bluetooth radio"
-        # simply do not get packed. There is no scrolling anywhere by design, so
-        # there is no scrollbar, no clipped edge, and no way to find out they
-        # exist. Deriving both numbers from the built content is what closes
-        # that. Width behaviour is untouched.
-        #
-        # What this measures now is the HEADER plus ONE PANE, whichever pane was
-        # restored above -- not the sum of every panel in the app. The identical
-        # measurement runs again on every pane switch; see _rederive_height,
-        # which is the same three steps against the same two functions.
-        self.root.update_idletasks()      # let the packer place everything
-        self.canvas._fit_height()         # canvas now knows its real width
-        self.root.update_idletasks()      # ...and its height propagates upward
-        content_h = full.winfo_reqheight()
+        # ---- viewport budget ------------------------------------------------
+        # The document is intentionally taller than the window. Its measured
+        # height sets scrollregion only; it never becomes geometry or minsize.
+        self.root.update_idletasks()
+        self.canvas._fit_height()
+        self.root.update_idletasks()
+        content_h = bridge.winfo_reqheight()
         avail_h = work_area_height(
             self.root.winfo_screenheight(), self._desktop_monitor_name())
-        geom_h, min_h, over_budget, clipped = window_height_plan(
-            content_h, avail_h)
-        # ...and the floor no pane may go under, so the shortest pane in the app
-        # cannot clip the tallest modal its own menu opens. One policy, one
-        # function, both call sites (see pane_height_floor).
-        _floor = pane_height_floor(avail_h)
-        geom_h, min_h = max(geom_h, _floor), max(min_h, _floor)
+        geom_h, min_h = page_window_plan(avail_h)
         self._content_h = content_h
-        self._content_clipped = clipped
-        # minsize FIRST, for the same reason _rederive_height does it in that
-        # order: the provisional minsize(940, 680) at the top of __init__ is
-        # TALLER than a short pane's derived height, and Tk clamps geometry() to
-        # whatever minsize is in force when the call is made. The window is
-        # already on screen while it is being built, so the wrong order is a
-        # visible one-frame jump, not a theoretical one.
         self.root.minsize(940, min_h)
         self.root.geometry(f"1120x{geom_h}")
-        _emit("info", f"layout: pane '{self._pane}' content height "
-                      f"{content_h}px, canvas "
-                      f"{self.canvas.winfo_reqheight()}px" +
-                      (f" — OVER the {LAYOUT_MAX_CONTENT_H}px budget"
-                       if over_budget else ""))
-        if clipped:
-            # Loud on purpose. The alternative -- sizing to the content and
-            # letting the window hang off the screen -- left the bottom panels
-            # unreachable with no way to shrink to them.
-            self._clip_warned.add(self._pane)
-            _emit("err", f"This screen is {avail_h}px tall and the window needs "
-                         f"{content_h}px. The bottom {content_h - avail_h}px "
-                         "cannot be shown — panels below the fold are cut off.")
+        self._sync_page_scrollregion()
+        self.root.after_idle(lambda: self._page_canvas.yview_moveto(0.0))
+        _emit("info", f"layout: one scrolling page, {content_h}px of content "
+                      f"inside a {geom_h}px window; arrangement canvas "
+                      f"{self.canvas.winfo_reqheight()}px")
         self._tick()
         threading.Thread(target=self._module_worker,
                          name="esotericos-modules", daemon=True).start()
@@ -8066,7 +7848,7 @@ class App:
 
     # ---- window management (ported EsotericOS features) --------------------
     # The host is built lazily and started ONLY from the button below. Nothing
-    # here installs a hook at startup: see the section comment in the pane.
+    # here installs a hook at startup: see the Window management section.
 
     def _window_host(self):
         """The hotkey host, built on first use. None when unavailable."""
@@ -8272,7 +8054,7 @@ class App:
         return bool(load_setting("float_window", False))
 
     def _float_label(self):
-        """Tray/pane wording, always naming what the click WILL do."""
+        """Tray/section wording, always naming what the click WILL do."""
         return "Return to the desktop" if self._floating() \
             else "Float as a window"
 
@@ -8339,7 +8121,7 @@ class App:
             else "on the desktop — docked right, behind other windows")
 
     def _toggle_float_window(self):
-        """The ONE writer of the setting; the tray item and the System-pane
+        """The ONE writer of the setting; the tray item and the System-section
         switch are two surfaces onto this method, so they cannot disagree."""
         save_setting("float_window", not self._floating())
         self._apply_window_placement()
@@ -8475,172 +8257,74 @@ class App:
         except tk.TclError:
             pass          # the window went away mid-refresh; nothing to draw on
 
-    # ---- the rail: one pane at a time ------------------------------------
-    def select_pane(self, key, rederive=True, remember=True):
-        """Show exactly one pane, and re-derive the window's height for it.
+    # ---- the single-page viewport ----------------------------------------
+    def _sync_page_scrollregion(self):
+        """Make every requested document pixel reachable by the scrollbar."""
+        canvas = getattr(self, "_page_canvas", None)
+        if canvas is None:
+            return
+        bbox = canvas.bbox("all")
+        canvas.configure(scrollregion=bbox or (0, 0, 0, 0))
 
-        pack_forget, never destroy. Every pane -- and in particular BtPanel and
-        MultiArrangeCanvas, which the 3-second poll calls into whether or not
-        they are visible -- stays alive and configurable while hidden. See
-        PANE_SPEC.
-        """
-        if key not in self._panes:
-            key = DEFAULT_PANE
-        changed = (key != self._pane)
-        for other, frame in self._panes.items():
-            if other != key:
-                frame.pack_forget()
-        # `before` the spacer, always: the spacer is packed once and never
-        # unpacked, so without this a pane selected later in the session would
-        # pack UNDER it and be pushed off the bottom of the cavity.
-        #
-        # W1 restated for a rail, not broken: the invariant is that `bridge` has
-        # EXACTLY ONE expanding child, so the window's surplus height has a
-        # single named destination. Which child that is depends on the pane. The
-        # console is a log and vertical room is the whole point of it, so while
-        # it is showing it IS the designated expanding child and the spacer
-        # stands down; for the other four the spacer is the sponge as before.
-        # The count is one either way, and test_layout_budget.py counts it.
-        grows = key in PANE_EXPANDS
-        self._panes[key].pack(fill="both", expand=grows,
-                              before=self._bridge_spacer)
-        self._bridge_spacer.pack_configure(expand=not grows)
-        # Where "back" means, written on EVERY change rather than by the Console
-        # button alone. It used to be set only in _toggle_console, so reaching
-        # the console from the RAIL left it stale and the title-bar button then
-        # returned you to whichever pane you last pressed the BUTTON from --
-        # possibly an hour earlier -- or to the default. It is "the last pane
-        # that was not the console", which is the only thing "back" can mean
-        # from a button that lives in the title bar.
-        if changed and self._pane not in (None, "console"):
-            self._prev_pane = self._pane
-        self._pane = key
-        for other, (bar, btn) in self._rail.items():
-            live = (other == key)
-            bar.config(bg=ACCENT if live else RAIL_REST)
-            btn.config(bg=RAIL_LIVE if live else RAIL_REST,
-                       fg=FG if live else MUTED)
-        # ...and the title bar's Console button says which way it will go.
-        #
-        # It was frozen at "▸  Console" on every pane, so with two controls
-        # driving one pane only the rail said which was active. It is a genuine
-        # TOGGLE -- a second press returns you -- so it reflects state rather
-        # than being demoted to a plain navigation button. The caret alone
-        # carries it: ◂ and ▸ are the same width, so the label cannot reflow the
-        # title bar as panes change. Written HERE, from the one place that knows
-        # the current pane, so the button and the rail cannot disagree.
-        self._cons_btn.config(
-            text="◂  Console" if key == "console" else "▸  Console")
-        if remember and changed:
-            # One tiny JSON write, on a deliberate gesture, never on a tick.
-            save_setting("last_pane", key)
-        if rederive:
-            self._rederive_height()
+    def _on_page_content_configure(self, _event=None):
+        self._sync_page_scrollregion()
 
-    def _rederive_height(self):
-        """Re-run the W1 height budget against the pane that is showing NOW.
+    def _on_page_viewport_configure(self, event):
+        """Keep the embedded document exactly one viewport wide."""
+        self._page_canvas.itemconfigure(self._page_window,
+                                        width=max(1, int(event.width)))
+        self._sync_page_scrollregion()
 
-        The same three steps as the block at the end of __init__ -- settle the
-        packer, re-fit the canvas, measure `full` -- against the same two
-        functions. It has to run on EVERY switch, and minsize has to move in
-        both directions: left at the tallest pane's height, the window could
-        never be shrunk to a short one, which is the exact failure
-        window_height_plan exists to prevent, one level up.
+    @staticmethod
+    def _inside(widget, ancestor):
+        while widget is not None:
+            if widget is ancestor:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
 
-        Wrapped, because this is reached from a rail click: a fault here must
-        not leave the pane switched but the window the wrong size with a
-        traceback on stderr nobody reads. NOT silent, though -- see the handler.
-        """
-        try:
-            self.root.update_idletasks()
-            # The canvas measures ITSELF from its allocated width, and a
-            # pack_forget'd canvas has no useful one. Re-fit only once the desk
-            # pane is actually packed and the packer has run, or it fits to a
-            # width the canvas does not have.
-            if self._pane == "desk":
-                self.canvas._fit_height()
-                self.root.update_idletasks()
-            content_h = self._full.winfo_reqheight()
-            avail_h = work_area_height(self.root.winfo_screenheight())
-            geom_h, min_h, _over, clipped = pane_window_plan(content_h, avail_h)
-            self._content_h = content_h
-            self._content_clipped = clipped
-            # minsize FIRST, always. Tk clamps geometry() to the current
-            # minsize, so lowering the window without lowering the floor first
-            # is a no-op and the window stays stuck at the tall pane's height.
-            self.root.minsize(940, min_h)
-            if self.root.state() != "zoomed":
-                # Height only. Width is the user's -- a pane switch has never
-                # been a reason to undo a window he dragged wider. The 940 floor
-                # is the minsize width: geometry() is read back before the
-                # window is ever mapped as "1x1+0+0", and putting a 1px-wide
-                # window on screen for one frame is not a thing to ship.
-                match = re.match(r"(\d+)x(\d+)", self.root.geometry())
-                width = max(940, int(match.group(1)) if match else 1120)
-                self.root.geometry(f"{width}x{geom_h}")
-            if clipped and self._pane not in self._clip_warned:
-                # Once per pane per session. The warning is the point; repeating
-                # it on every visit to the same pane is not.
-                self._clip_warned.add(self._pane)
-                _emit("err", f"This screen is {avail_h}px tall and the "
-                             f"'{self._pane}' pane needs {content_h}px. The "
-                             f"bottom {content_h - avail_h}px cannot be shown.")
-        except Exception:  # noqa: BLE001
-            # NOT a bare pass. This is the exact shape _apply_poll had until it
-            # was deleted, on the stated grounds that the wrap made the fault
-            # invisible while everything below it kept running -- and the
-            # argument is the same here. If the re-derivation throws, the pane
-            # switches and the window silently keeps whatever height the
-            # PREVIOUS pane needed: too tall, or short enough that Tk drops the
-            # bottom panels with no scrollbar to say so. Nothing in the console,
-            # nothing on stderr.
-            #
-            # The swallow stays -- this is a Tk command handler on a rail click,
-            # and raising out of one abandons the switch half-done -- but it
-            # reports what it swallows, the same way _drain_ui does: full
-            # traceback to stderr, one line to the console, capped so a fault
-            # cannot loop through _emit, and re-armed below on a clean run.
-            self._rederive_faults = getattr(self, "_rederive_faults", 0) + 1
-            if getattr(self, "_closing", False) \
-                    or self._rederive_faults > self.UI_FAULT_REPORTS:
-                return
-            detail = traceback.format_exc()
-            try:
-                sys.stderr.write(detail)
-                _emit("err", f"the '{self._pane}' pane is showing but the "
-                             "window height could not be re-derived for it — "
-                             "the window is the wrong size and may be hiding "
-                             "the bottom of the pane:\n"
-                             + detail.strip().splitlines()[-1])
-            except Exception:  # noqa: BLE001
-                pass
+    def _on_page_mousewheel(self, event):
+        """Scroll the page unless a nested scrolling control owns the wheel."""
+        widget = getattr(event, "widget", None)
+        if not self._inside(widget, self._page_canvas):
+            return None
+        if isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview)):
+            return None
+        number = getattr(event, "num", None)
+        if number in (4, 5):
+            units = -1 if number == 4 else 1
         else:
-            # A clean re-derivation RE-ARMS the reporting, for the same reason
-            # _drain_ui re-arms on a clean drain: without this the cap is a
-            # LIFETIME one, and three faults in a session -- including three
-            # benign ones during shutdown -- would permanently re-silence the
-            # very thing this handler exists to stop being silent.
-            self._rederive_faults = 0
+            delta = int(getattr(event, "delta", 0) or 0)
+            if not delta:
+                return None
+            units = -1 if delta > 0 else 1
+        self._page_canvas.yview_scroll(units * 3, "units")
+        return "break"
 
-    # ---- Audio & status panel (the Bluetooth pane) -----------------------
+    def show_section(self, key):
+        """Scroll one already-live section to the top of the viewport."""
+        section = self._page_sections.get(key)
+        if section is None:
+            return False
+        self.root.update_idletasks()
+        self._sync_page_scrollregion()
+        total = max(1, self._page_body.winfo_reqheight())
+        viewport = max(1, self._page_canvas.winfo_height())
+        maximum = max(0, total - viewport)
+        target = max(0, min(section.winfo_y() - PAD_SM, maximum))
+        self._page_canvas.yview_moveto(target / total)
+        return True
+
+    # ---- Audio & status panel (the Bluetooth section) --------------------
     def _build_audio_panel(self, parent):
-        """Headphones, volume and balance: the head of the Bluetooth pane.
+        """Headphones, volume and balance in the Bluetooth section.
 
         THE READINESS BANNER IS NOT HERE ANY MORE, and that is the whole point
-        of the move. It was here because this was the RIGHT COLUMN of a
-        two-column window and the right column did not bind the window's height,
-        so a banner here was free. Under a rail there is no right column: this
-        panel is the top of ONE pane out of five, and a readiness banner inside
-        it would be invisible from the other four.
+        of the move. It belongs in the pinned header so readiness remains visible
+        while any part of the single long page is in the viewport. Exactly one
+        banner, exactly one writer (_apply_poll).
 
-        That is the W4 fatal verbatim -- the banner then lived in the console
-        frame, which was constructed and never mapped, so the default window
-        could not say whether the bridge was up. It now lives in the pinned
-        header in App.__init__, which is the only place in a one-pane window
-        that is always on screen. Exactly one banner, exactly one writer
-        (_apply_poll).
-
-        What stays here is what belongs to the pane the rail calls "Bluetooth":
+        What stays here is what belongs to Bluetooth:
         which headphones are connected (`c_buds` -- nothing else in the app
         carries that fact) and the two sliders that act on them.
 
@@ -8687,33 +8371,8 @@ class App:
             fill="x", pady=(2, 0))
 
     def _toggle_console(self):
-        """The title bar's Console button: jump to the console pane, or back.
-
-        WIDTH NO LONGER MOVES. The console used to be a fixed 390px strip
-        pinned to the right edge of the window, and opening it widened the whole
-        window from 1120 to 1520 -- with a <Configure> handler to re-apply that
-        width whenever the window came out of a maximized state, because Tk
-        ignores geometry() while zoomed. All of that machinery
-        (_set_win_width, App._on_configure, _was_zoomed, _console_open,
-        _cons_anchor, and the 1120/1520 literals) is gone: the console is one of
-        the five panes now, and a pane switch changes height, not width.
-
-        A second press comes back to where you were rather than stranding you in
-        the console, and the caret says which press you are about to make -- the
-        button's label is written by select_pane, from the pane that is actually
-        showing, so the rail and the button cannot disagree about it.
-
-        WHERE "BACK" MEANS IS NOT THIS METHOD'S ANY MORE. _prev_pane was written
-        here and nowhere else, so selecting Console from the RAIL left it stale
-        and this button then returned you to whichever pane you had last pressed
-        the BUTTON from -- possibly an hour earlier -- or to the default.
-        select_pane maintains it on every change now, so "back" is genuinely the
-        last pane that was not the console however you got here.
-        """
-        if self._pane == "console":
-            self.select_pane(self._prev_pane or DEFAULT_PANE)
-        else:
-            self.select_pane("console")
+        """The pinned shortcut scrolls the one page to its Console section."""
+        self.show_section("console")
 
     def _vol_changed(self, _=None):
         if self._vol_syncing:
@@ -9923,7 +9582,7 @@ class App:
         a second route to the backend: the command is bound once, in this
         method, to the same toggle_portal every other copy calls.
 
-        There are two of them today -- the ctl grid's, in the System pane, and
+        There are two of them today -- the ctl grid's, in the System section, and
         the floating one over the Desk arrangement. The list is what
         _render_portal_button and _busy_portal iterate; with a single element
         their behaviour is identical to what shipped before the second button
@@ -10001,7 +9660,7 @@ class App:
         forms a second opinion about whether the portal is up.
 
         It writes the WHOLE registry, every time, from one text and one style --
-        so the copy floating on the Desk pane and the copy in the System pane's
+        so the copy floating on the Desk section and the copy in the System section's
         ctl grid cannot drift apart. They are not a hardcoded pair: whatever
         _portal_button has built is what this drives.
 
@@ -10013,9 +9672,8 @@ class App:
         parks the wait on all of them together, and a half-painted pair is the
         exact bug a second surface exists to avoid.
 
-        Writing to a button whose pane is pack_forget'd is harmless -- a hidden
-        Tk widget still accepts config -- which is what lets the tick keep both
-        copies correct while only one of them is on screen.
+        Both widgets stay mapped in the same document; scrolling changes only
+        which rectangle is inside the viewport.
         """
         if any(button_is_busy(button) for button in self._portal_btns):
             return   # a wait is showing; the tick must not paint over it
@@ -12322,7 +11980,7 @@ class App:
                        f"monitor(s): {names}. They are laid out exactly as "
                        "Windows has them.")
         _emit("event", "No devices configured yet — nothing is assumed. Add a "
-                       "Bluetooth device on the Devices pane, or pair another "
+                       "Bluetooth device in the Devices section, or pair another "
                        "EsotericOS machine under “Nodes on this network”.")
         _emit("event", bridge_absence_reason()
               or f"Bluetooth bridge present: VBoxManage at {VBOX}, guest VM "

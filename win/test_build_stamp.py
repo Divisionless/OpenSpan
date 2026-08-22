@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The build stamp: which build is this, and is it a test build?
 
-Doug, 2026-08-10: version number in blue at the bottom left of every
-panel; a test build says so in yellow. The point is answering "am I
-looking at the change I just made?" without leaving the window."""
+Doug, 2026-08-10: version number in blue at the bottom left; a test build says
+so in yellow. In the single-page GUI it is the document footer, reachable at
+the end of the same scrollbar as every control."""
 
 import ast
 import os
@@ -73,16 +74,17 @@ check("blue is reserved for the build stamp",
 check("a test build is called out in yellow",
       "BUILD_TEST_YELLOW" in source
       and 'text="TEST BUILD"' in source)
-check("the stamp is bottom-left",
-      'foot.pack(side="bottom"' in source
+check("the stamp is left-aligned in the page footer",
+      'foot = tk.Frame(bridge, bg=BG)' in source
+      and 'foot.pack(fill="x"' in source
       and 'self.build_lbl.pack(side="left")' in source)
 
-# In the window chrome, not in a pane: five copies would drift apart.
+# One document footer, not one copy per section.
 app = next(n for n in tree.body
            if isinstance(n, ast.ClassDef) and n.name == "App")
 init = next(n for n in app.body
             if isinstance(n, ast.FunctionDef) and n.name == "__init__")
 body = ast.get_source_segment(source, init)
-check("the footer is built once, in the window chrome",
-      body.count("tk.Frame(full, bg=BG)") >= 1
+check("the footer is built once, in the scrolling document",
+      body.count("foot = tk.Frame(bridge, bg=BG)") == 1
       and body.count("build_stamp()") == 1)

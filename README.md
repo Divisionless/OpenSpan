@@ -157,9 +157,9 @@ filter. The helper does not restart Windows or power off the VM.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync
   (via Apple Shortcuts + a tiny token-guarded LAN relay). See
   `CLIPBOARD_SETUP.md`.
-- **Lean window + tray** — the command console tucks away by default for a
-  compact window; **Send to Tray** keeps the bridge (VM, audio, portal) running
-  in the background.
+- **Single scrolling control page** — Desk, Devices, Bluetooth, System and
+  Console are one ordered vertical document with one scrollbar. The readiness
+  header stays pinned; **Console** jumps to the log without hiding any section.
 - **Fast pairing + auto-reconnect** — one click frees the whole radio for a
   full-power broadcast so the iPad finds the keyboard quickly, auto-starts the
   bridge the moment it bonds, then brings the earbuds back on their own.
@@ -290,7 +290,7 @@ Keyboard` appears once bonded — a handy check.)
 
 - **Working & tested:** BLE keyboard + mouse, edge crossing, keymap remaps,
   Bluetooth audio routing (volume + balance), two-way clipboard, fast pairing,
-  collapsible console + tray, auto-reconnect, single-file exe.
+  single-page controls, persistent Console, auto-reconnect, single-file exe.
 - **Reproducible VM:** `create-vm.ps1` builds the VM, `guest/provision.sh`
   turns a fresh Debian into the working bridge, and `cold-test.ps1` provisions
   + verifies it — the software path is verified on a fresh clone.

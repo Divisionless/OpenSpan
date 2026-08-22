@@ -421,7 +421,7 @@ tray_fn = next(node for node in ast.walk(tree)
                and node.name == "_post_tray_menu")
 tray_uses = [n for n in ast.walk(tray_fn) if isinstance(n, ast.Attribute)
              and n.attr == "_toggle_float_window"]
-check("the tray item and the System-pane switch are the only two surfaces "
+check("the tray item and the System-section switch are the only two surfaces "
       "onto it, and they share the one method",
       len(surfaces) == 2 and len(tray_uses) == 1)
 

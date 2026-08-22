@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-21",
-  "nextSid": 148,
+  "nextSid": 149,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2661,6 +2661,26 @@
       "actualTime": "~25m diagnosis, correction, verification, packaging and arming",
       "extra": {
         "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-21; live same-radio acceptance pending. ROOT CAUSE: guest/openspan_bt.py Bluez.prepare_hid explicitly read the pinned audio device and called Device1.Disconnect when audio shared the selected HID controller. The new same-radio regression failed before commit 436d133 and passes after removing that teardown. HID prepare and reset no longer consult audio; daemon disconnect filters audio Device1 objects, with a dynamic same-controller proof that only the HID host is disconnected. Bluetooth manager, daemon state, pair flow, panes, status, module-dependency and admin-startup suites pass; the unrelated timing-sensitive three-button dialog check failed once and passed immediate rerun. Combined build: D:\\_EsotericOS\\app\\EsotericOS-desktop-role-admin-bt-isolation.exe, 73,473,804 bytes, SHA-256 76f3c5c6d7565f05435705f5f8df27f76a319708db29087289f1ffce3f6e6239. External guest/openspan_bt.py SHA-256 1f441759f4e9f47cad8f507c646a04ae1d3f73ba06fee8f001885b17da7e3bfd is atomically synchronized on app startup without daemon/controller restart. ARMED: the Ready, Highest, PT30S logon task points to the exact combined build; HKCU Run\\EsotericOS remains absent. Prior task XML and Run snapshot: D:\\_EsotericOS\\backups\\bt-isolation-20260821-221714. Candidate has no process; current app, shell pointers, VM, portal, audio and radios were untouched. Files work remains paused."
+      }
+    },
+    {
+      "sid": "v3.148",
+      "hcidx": 148,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.147"
+      ],
+      "title": "Single scrolling control page -- replace the five-pane rail with one ordered vertical document while keeping readiness pinned and service widgets live  [single-scroll-page]",
+      "why": "Doug: change the EsotericOS GUI to be a single scrolling page",
+      "estTokens": "25k-50k",
+      "costDrivers": "Tk canvas viewport; dynamic scrollregion; nested scroll ownership; section navigation; pane-test replacement; packaged acceptance build",
+      "estTime": "45-90m",
+      "model": "Overseer implementation and deterministic verification",
+      "status": "doing",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "note": "Implementation started 2026-08-22. Running app, VM and radios remain untouched; Files implementation remains paused."
       }
     }
   ],

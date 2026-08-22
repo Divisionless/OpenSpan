@@ -915,7 +915,7 @@ check("the portal button switches to Warn.TButton when the portal is down",
 #
 # The button is REGISTERED rather than assigned: _render_portal_button drives
 # the registry now, because there is a second portal control floating on the
-# Desk pane. One writer, one builder, one list -- test_panes.py drives the pair
+# Desk section. One writer, one builder, one list -- test_single_page.py drives the pair
 # and proves they cannot disagree; this file keeps exercising the guard.
 app.portal_btn = ttk.Button(root, text="Start portal")
 app._portal_btns = [app.portal_btn]
