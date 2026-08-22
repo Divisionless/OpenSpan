@@ -290,6 +290,17 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   raced the sender's 150 ms poll into audible one-tick recenters mid-drag —
   and both readers treat non-finite values ('nan'/'inf', which PARSE fine) as
   centered rather than letting the clamp hard-pan them.
+- **One EsotericOS Desktop role across processes (2026-08-22):** the durable
+  physical-monitor choice remains app-owned in `openspan_settings.json`. At
+  startup, selection, and display reconciliation, the app atomically publishes
+  only its currently effective attached GDI name to
+  `%LOCALAPPDATA%\EsotericOS\desktop-monitor.txt`. The shell validates and
+  watches that per-user signal. Its single-monitor top bar and desktop icon
+  field resolve the exact attached screen, fall back to Windows primary while
+  it is absent, and return when the physical choice is effective again. The
+  icon field uses that screen's AppBar work area after the top bar moves. A
+  multi-monitor top-bar setting still creates one bar per screen, and the
+  bottom taskbar keeps its independent placement policy.
 - **Auto-reconnect (2026-07-10, hardened by adversarial review):** the buds
   page the adapter during the ~90 s VM boot, give up before the stack is
   READY, and never retry — so the app retries for them.

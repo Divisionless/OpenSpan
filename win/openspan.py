@@ -83,6 +83,10 @@ else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     ROOT = os.path.abspath(os.path.join(HERE, ".."))
 SETTINGS = os.path.join(ROOT, "openspan_settings.json")
+DESKTOP_ROLE_FILE = os.environ.get(
+    "ESOTERICOS_DESKTOP_ROLE_FILE",
+    os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                 "EsotericOS", "desktop-monitor.txt"))
 
 
 def find_vboxmanage():
@@ -1305,6 +1309,37 @@ def effective_desktop_monitor(monitors, requested=None, identities=None):
     primary = next((row for row in rows if row.get("primary")), None)
     fallback = primary or (rows[0] if rows else None)
     return str(fallback.get("name", "")) if fallback else ""
+
+
+def publish_desktop_monitor(device_name, path=None):
+    """Atomically publish the effective Desktop monitor to the shell.
+
+    The durable physical-monitor request remains in ``openspan_settings``.
+    This deliberately tiny cross-process contract carries only the attached
+    GDI name that is effective *now*. The shell resolves that name against its
+    own attached-screen list and falls back to Windows primary if it is absent.
+    """
+    if path is None:
+        path = DESKTOP_ROLE_FILE
+    name = str(device_name or "").strip()
+    if not name:
+        raise ValueError("Desktop monitor name is empty")
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    tmp = path + ".new"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(name + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+    return path
 
 
 def page_window_plan(avail_h=None, preferred=PAGE_PREFERRED_WINDOW_H,
@@ -8067,25 +8102,37 @@ class App:
             enum_monitors(), load_setting("desktop_monitor", ""))
 
     def _sync_desktop_monitor(self):
-        """Re-resolve a saved Desktop after the attached display set changes."""
+        """Re-resolve and publish Desktop after the display set changes."""
         canvas = getattr(self, "canvas", None)
         if canvas is None:
             return ""
         name = canvas.set_desktop_monitor(
             load_setting("desktop_monitor", ""), redraw=False)
+        self._publish_desktop_role(name)
         if self._desktop is not None:
             self._desktop.set_monitor(name)
         return name
+
+    def _publish_desktop_role(self, name):
+        """Tell shell-owned surfaces which attached screen follows the GUI."""
+        try:
+            publish_desktop_monitor(name)
+            return True
+        except (OSError, ValueError) as exc:
+            _emit("err", f"Desktop role publish failed: {exc}")
+            return False
 
     def _desktop_controller(self):
         """The on-desktop controller, built on first use. None if unavailable."""
         if self._desktop is None:
             try:
                 import on_desktop
+                monitor_name = self._desktop_monitor_name()
+                self._publish_desktop_role(monitor_name)
                 self._desktop = on_desktop.OnDesktop(
                     lambda: on_desktop.toplevel_hwnd(self.root),
                     self._desktop_geometry,
-                    monitor_name=self._desktop_monitor_name())
+                    monitor_name=monitor_name)
             except Exception as exc:  # noqa: BLE001
                 _emit("err", f"desktop placement unavailable: {exc}")
                 return None

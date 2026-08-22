@@ -86,6 +86,7 @@ A.CONFIG = os.path.join(SCRATCH, "live.json")
 A.PROFILE_DIR = os.path.join(SCRATCH, "profiles")
 A.BT_PREFS = os.path.join(SCRATCH, "bt_prefs.json")
 A.SETTINGS = os.path.join(SCRATCH, "settings.json")
+A.DESKTOP_ROLE_FILE = os.path.join(SCRATCH, "desktop-monitor.txt")
 
 
 # ---- (b) the golden round-trip, against the real desk ----------------------
@@ -465,7 +466,7 @@ for _name_ in ("_deferred", "_canvas_menu", "_fill_surface_menu",
                "_menu_set_refresh", "_menu_diagonal", "_menu_device_editor",
                "_menu_refresh_monitors", "_menu_display_settings",
                "_menu_set_desktop", "_sync_desktop_monitor",
-               "_desktop_monitor_name",
+               "_desktop_monitor_name", "_publish_desktop_role",
                "_screen_sizes_dialog", "_dev_state", "_device_verb_facts",
                "_device_verb_entries", "_verb_menu_label",
                "_fill_device_verb_entries", "device_record"):

@@ -315,7 +315,9 @@ check("a local screen menu can assign Desktop without claiming to set primary",
       in src)
 check("Desktop placement resolves the selected monitor's work area",
       "work_area(\n            self._desktop_monitor_name())" in src
-      and "monitor_name=self._desktop_monitor_name()" in src)
+      and "monitor_name = self._desktop_monitor_name()" in src
+      and "monitor_name=monitor_name" in src
+      and "self._publish_desktop_role(monitor_name)" in src)
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
