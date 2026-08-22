@@ -1,5 +1,37 @@
 # OpenSpan — Devlog
 
+## 2026-08-22 — Every control scrollbar stays in the dark register
+
+The single-page GUI still had three platform-default `ttk.Scrollbar` widgets:
+the page, Bluetooth device list, and Console. Selecting the `clam` theme made
+the rest of the ttk controls themeable but did not give those bars any product
+colors, so Windows supplied bright tracks through the dark page.
+
+Commit `71afe2b` gives all three one explicit
+`EsotericOS.Vertical.TScrollbar` identity. Its trough is `BG`, thumb is `CARD`,
+arrows are `MUTED`, hover is `PRESS`, held feedback is `ACCENT_DIM`, and the
+disabled thumb is `PANEL`; borders and bevel colors remain dark as well. The
+single-page harness now inspects every Scrollbar constructor and asks a real Tk
+style table for those resolved colors. Single-page plus five neighboring
+theme/control/layout suites pass. The complete 62-file suite remains 58 pass
+with exactly the same four unrelated failures.
+
+The combined candidate is
+`D:\_EsotericOS\app\EsotericOS-unified-desktop-dark-scrollbars-admin-bt-isolation.exe`
+(73,471,675 bytes, SHA-256
+`8dfeec62bbf4c7a4ffc5cae7e2a0d0ef10caceda54c28515502023287ee178cd`).
+Its recursive archive contains the GUI, launcher, portal, audio, desktop, and
+monitor-identity modules. Before arming, the task, Run key, firewall policy,
+and process inventory were backed up at
+`D:\_EsotericOS\backups\dark-scrollbars-arm-20260822-140739`. The Highest
+interactive logon task and exact Private/LocalSubnet firewall contract now
+name this candidate; Run is absent and obsolete product rules are zero. The
+six old-app processes and old shell remain live, both new candidates remain at
+zero processes, and the already armed dock-shell pointer remains exact. The
+VM, portal, audio, and radios were untouched.
+
+---
+
 ## 2026-08-22 — Firewall permission is installation, not a recurring prompt
 
 The post-restart Windows Security Alert was not the clipboard's fixed TCP/9966

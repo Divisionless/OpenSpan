@@ -166,6 +166,8 @@ filter. The helper does not restart Windows or power off the VM.
 - **Single scrolling control page** — Desk, Devices, Bluetooth, System and
   Console are one ordered vertical document with one scrollbar. The readiness
   header stays pinned; **Console** jumps to the log without hiding any section.
+  Page, device-list, and Console scrollbars share the dark EsotericOS style;
+  none falls back to Windows' light native track.
 - **Fast pairing + auto-reconnect** — one click frees the whole radio for a
   full-power broadcast so the iPad finds the keyboard quickly, auto-starts the
   bridge the moment it bonds, then brings the earbuds back on their own.
