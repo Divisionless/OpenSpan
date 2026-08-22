@@ -11,11 +11,23 @@ wrong, however, because its startup dialog offered an **Ignore** path.
 That choice is gone. A non-elevated control-app bootstrap now releases the
 single-instance mutex, requests the same command through `runas`, and exits
 before key setup or any VM/audio work. Failure exits inert. Automatic sign-in
-is moving from HKCU Run to the per-user `EsotericOS App (elevated)` scheduled
-task: interactive logon, RunLevel Highest, exact executable action, 30-second
-delay. The installer verifies the task before removing the old Run value and
-never launches or stops the current app. `bake-in.ps1` delegates to this single
-owner rather than recreating the old route.
+is now owned by the per-user `EsotericOS App (elevated)` scheduled task:
+interactive logon, RunLevel Highest, exact executable action, 30-second delay.
+The installer verifies the task before removing the old Run value and never
+launches or stops the current app. Windows normalizes its owner display from
+`MSI\Douglas Knoll` to `Douglas Knoll`, so identity verification resolves both
+to their SID rather than comparing display strings. The first strict-string
+attempt left the old Run route intact exactly as designed; the SID-verified
+rerun removed it. `bake-in.ps1` delegates to this single owner rather than
+recreating the old route.
+
+The armed acceptance package is
+`D:\_EsotericOS\app\EsotericOS-desktop-role-admin.exe` (73,473,841 bytes,
+SHA-256 `37f0e211698a22adcde9700c852dfcbfa4ef2b8a6e8d7f942ea3d14198e0b603`),
+built from app commit `3eafa70`. The prior Run state is exported under
+`D:\_EsotericOS\backups\admin-app-20260821-220337`. The task is Ready and has
+never run; the current Desktop-role process remains High/elevated and the new
+package has no process. Shell pointers, VM, portal, and radios were untouched.
 
 ---
 

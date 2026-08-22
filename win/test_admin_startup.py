@@ -34,6 +34,9 @@ check("autostart uses a Highest interactive logon task",
       and "-LogonType Interactive -RunLevel Highest" in INSTALLER)
 check("autostart executes the selected app directly",
       "New-ScheduledTaskAction -Execute $ExePath" in INSTALLER)
+check("task ownership is verified by SID, not normalized display name",
+      "$taskSid -ne $currentSid" in INSTALLER
+      and "$Task.Principal.UserId -ne $UserId" not in INSTALLER)
 check("legacy Run removal follows exact task verification",
       INSTALLER.index("Assert-TaskContract -Task $installed")
       < INSTALLER.index("Remove-ItemProperty -LiteralPath $RunKey"))

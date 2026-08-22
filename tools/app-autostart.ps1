@@ -54,11 +54,20 @@ function Assert-TaskContract {
     param([Parameter(Mandatory)]$Task)
     $actions = @($Task.Actions)
     $triggers = @($Task.Triggers)
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    try {
+        $taskAccount = [Security.Principal.NTAccount]::new(
+            [string]$Task.Principal.UserId)
+        $taskSid = $taskAccount.Translate(
+            [Security.Principal.SecurityIdentifier]).Value
+    } catch {
+        throw "Task '$TaskName' has an unresolvable user '$($Task.Principal.UserId)'."
+    }
     if ($Task.Principal.RunLevel -ne 'Highest') {
         throw "Task '$TaskName' is not RunLevel Highest."
     }
-    if ($Task.Principal.UserId -ne $UserId) {
-        throw "Task '$TaskName' belongs to '$($Task.Principal.UserId)', not '$UserId'."
+    if ($taskSid -ne $currentSid) {
+        throw "Task '$TaskName' belongs to SID '$taskSid', not '$currentSid'."
     }
     if ($actions.Count -ne 1 -or
             [IO.Path]::GetFullPath([string]$actions[0].Execute) -ne $ExePath) {
