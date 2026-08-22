@@ -1,5 +1,56 @@
 # OpenSpan — Devlog
 
+## 2026-08-22 — GUI, top bar, and icons share one Desktop role
+
+The EsotericOS Desktop choice now governs all three surfaces Doug named: the
+control GUI, the shell's single top bar, and the desktop icon field. Windows
+primary remains a separate read-only fact, and the bottom taskbar retains its
+own placement policy. The app remains the owner of durable physical-monitor
+identity. It atomically publishes only the currently effective attached GDI
+name to `%LOCALAPPDATA%\EsotericOS\desktop-monitor.txt`; the shell validates and
+watches that per-user signal.
+
+The shell's single-screen AppBar boundary is now overridable. MenuBar resolves
+the shared role, reuses its existing window when the role changes, and falls
+back to Windows primary if the chosen display detaches. Multi-monitor MenuBar
+mode still means one bar per screen. DynamicDesktop puts its icon grid in that
+same screen's AppBar work area one dispatcher priority after the top bar moves,
+so the two cannot overlap. Review also closed two startup/detach races: icons
+resolve the attached WinForms screen list before WindowManager's first setup,
+and a single-screen AppBar can recreate itself immediately if its target
+disappears before the app republishes a fallback.
+
+App source is commit `0fce7d3`; shell source is commit `4d31b62`. Both complete
+shell builds pass: net6 x64 has only the five existing SDK/WebClient/DPI
+warnings, and net480 x64 has zero warnings. The deterministic shell harnesses
+pass 4,722 application-boundary assertions and 16 Desktop-role assertions on
+each framework. The app run is 58/62 files; its only four reds are the unchanged
+brand-font cardinality, live arrangement fixture, portal-model invariants, and
+`assert-control.ps1` hygiene checks.
+
+The armed app is
+`D:\_EsotericOS\app\EsotericOS-unified-desktop-single-page-admin-bt-isolation.exe`
+(73,471,665 bytes, SHA-256
+`58bfdde8982f45aab787f7a56b1c1a67558b3e98c7e977a21fbd5e4ea2203220`). Its
+recursive archive contains `openspan`, `openspan_launcher`, `on_desktop`, and
+`monitor_identity`. The frozen shell is
+`D:\_EsotericOS\shell\stable-20260822-004409` (614 files, 175,605,633 bytes);
+all 614 files hash-match the verified build, and its byte-identical canonical
+and compatibility apphosts have SHA-256
+`1d48f7353254b118a3febbc1d42bee77b4a6d8b20dbf1700d1ea76e9966c3cff`.
+
+Before arming, the task, both Winlogon hives, Run key, role signal, and running
+process inventory were backed up under
+`D:\_EsotericOS\backups\unified-desktop-20260822-004622`. The app task is still
+Highest/current-user/interactive with one 30-second logon trigger and no Run
+fallback; HKCU Winlogon now names the frozen shell while HKLM remains
+`explorer.exe`. `\\.\DISPLAY5` is the effective Desktop signal. All seven live
+EsotericOS processes remained exactly unchanged and neither candidate was
+launched. The VM, portal, audio, radios, and running shell were untouched;
+Files implementation remains paused. Live restart acceptance is pending.
+
+---
+
 ## 2026-08-22 — One control page
 
 The five-pane navigation rail is gone. Desk, Devices, Bluetooth, System, and
