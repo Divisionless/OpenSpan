@@ -33,9 +33,14 @@ The isolated package is
 (73,470,107 bytes, SHA-256
 `76bf45fe3c55ef638e8408aee1201f403d0b93e0393c405b531a5efa44416f64`).
 Its recursive archive contains `openspan`, `openspan_launcher`, `on_desktop`,
-and `monitor_identity`. It has not been launched or armed: the existing Highest
-task still points to the accepted Bluetooth-isolation build, and the running
-app, VM, portal, audio, radios, and shell remain untouched.
+and `monitor_identity`. On Doug's explicit order it was armed in the existing
+Highest, interactive-logon task with the same 30-second delay. The outgoing
+task and Run-key state are backed up under
+`D:\_EsotericOS\backups\single-page-20260822-002137`. Post-change verification
+proved the exact action and working directory, Highest run level, current-user
+ownership, sole logon trigger, absent legacy Run value, and zero candidate
+processes. The complete running app process set was byte-for-byte unchanged;
+the VM, portal, audio, radios, and shell remain untouched.
 
 ---
 
