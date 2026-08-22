@@ -96,8 +96,12 @@ fallback; HKCU Winlogon now names the frozen shell while HKLM remains
 `explorer.exe`. `\\.\DISPLAY5` is the effective Desktop signal. All seven live
 EsotericOS processes remained exactly unchanged and neither candidate was
 launched. The VM, portal, audio, radios, and running shell were untouched;
-Files implementation remains paused. Arming and live restart acceptance are
-pending Doug's ruling.
+Files implementation remains paused. Doug ruled `arm`; immediately before the
+pointer change, both Winlogon keys and the user Run key were exported to
+`D:\_EsotericOS\backups\dock-role-arm-20260822-134609`. HKCU Winlogon now names
+the new dock candidate, while HKLM remains `explorer.exe`. The old shell remains
+the sole running shell, the new candidate has not launched, and all six app
+processes remain unchanged. Restart acceptance is pending.
 
 ---
 
