@@ -79,7 +79,10 @@ A LAN node binds port `0` and reads back whatever Windows hands it, then
 advertises that number. Nothing connects to a port the source code knows, so
 there is no number to collide with on somebody else's machine — and this is
 why the firewall rule allows the **program** and never a port: a port rule
-would be stale by the next restart.
+would be stale by the next restart. `tools\app-firewall.ps1` owns that exact
+program identity for the install path. Re-running installation after an update
+refreshes a renamed executable and removes the broad per-build rules Windows'
+first-listen prompt would otherwise accumulate.
 
 Discovery is the OS's own DNS-SD (`dnsapi.dll`, Windows 10 1809+), registering
 `_esotericos._tcp.local`. That is the protocol Bonjour speaks, so a Mac or iPad
@@ -92,8 +95,9 @@ names which path is live at startup.
 Bluetooth exists here for machines that **resist installation** — a managed
 Mac, an iPad. A Windows PC you own gets a better lane: TCP over the LAN.
 
-Drop the portable folder (`install\make-portable.ps1 -Zip`) on the other PC and
-run it. Under **Devices ▸ Nodes on this network** each machine sees the other;
+Drop the portable folder (`install\make-portable.ps1 -Zip`) on the other PC,
+run `bake-in.ps1` as administrator once, then launch it. Under **Devices ▸
+Nodes on this network** each machine sees the other;
 press **Pair**, compare the six-digit code shown on both screens, and press
 **Same code** on **both** — one side alone pairs nothing. From then on every
 message between them is HMAC-signed with a secret neither machine transmitted.

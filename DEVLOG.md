@@ -1,5 +1,42 @@
 # OpenSpan — Devlog
 
+## 2026-08-22 — Firewall permission is installation, not a recurring prompt
+
+The post-restart Windows Security Alert was not the clipboard's fixed TCP/9966
+listener. The running app also owns the LAN node's TCP listener on port `0`:
+Windows assigned `49753` this launch, and it will assign a different port next
+time. That design is intentional and requires a program rule. The recurring
+prompt came from the other half of the identity: each acceptance package has a
+unique executable filename, while the old bake-in treated any rule named
+`EsotericOS` as current without checking which path it allowed. Clicking the
+dialog created another broad TCP/UDP pair for one filename, including Public
+networks, so the next build was new to Windows again.
+
+Commit `b9d57bf` adds `tools/app-firewall.ps1` as the one install/check/undo
+owner. It verifies the exact executable and manages only two Protocol Any rules:
+Private inbound from `LocalSubnet`, and Private outbound. A renamed build
+replaces stale managed rules, verifies both new rules, and only then removes
+legacy OpenSpan/EsotericOS and Windows prompt rules. Partial creation rolls
+back. `app-autostart.ps1` now provisions that contract for the same path as the
+Highest logon task before removing a legacy Run route; portable bake-in
+delegates to it, the portable allowlist ships both required tools, and its
+instructions provision before first launch. Commit `9a066eb` bounds cleanup by
+product rule name before asking Windows for application filters; commit
+`61cf1a4` makes normal script success explicit to callers.
+
+PowerShell parsing and the focused LAN-node, admin-startup, and portable
+assembly suites pass. The complete app run remains the expected 58/62 with the
+same four unrelated reds. Before live application the entire firewall policy,
+relevant rules, and process inventory were backed up under
+`D:\_EsotericOS\backups\firewall-20260822-040753`. The verified rule was applied
+to the running unified-Desktop candidate, then all 13 obsolete product rules
+were removed. A second install removed zero rules and produced a byte-for-byte
+identical managed contract. All seven EsotericOS processes stayed unchanged;
+the live app still owns TCP/9966 and its OS-assigned TCP/49753 listener. The
+integrated autostart check now proves the task and firewall identities together.
+
+---
+
 ## 2026-08-22 — GUI, top bar, and icons share one Desktop role
 
 The EsotericOS Desktop choice now governs all three surfaces Doug named: the
