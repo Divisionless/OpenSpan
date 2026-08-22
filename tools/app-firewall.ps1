@@ -163,3 +163,4 @@ if (-not (Test-InstalledContract)) {
 $removed = Remove-ObsoleteRules
 "installed EsotericOS LAN program rules for $ExePath (Private/LocalSubnet; removed $removed obsolete rule(s))"
 Show-State
+exit 0

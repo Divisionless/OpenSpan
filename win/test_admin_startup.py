@@ -64,6 +64,8 @@ check("a renamed build replaces stale rules before cleaning prompt debris",
 check("cleanup filters by product name before requesting application filters",
       FIREWALL_CLEANUP.index("$display -match")
       < FIREWALL_CLEANUP.index("Get-NetFirewallApplicationFilter"))
+check("normal installation returns an explicit success code to its caller",
+      FIREWALL.rstrip().endswith("exit 0"))
 check("check mode rejects dual automatic launch ownership",
       "Legacy Run value '$RunName' is still present" in INSTALLER)
 check("bake-in delegates startup ownership to the elevated task installer",
