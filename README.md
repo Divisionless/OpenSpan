@@ -154,10 +154,10 @@ filter. The helper does not restart Windows or power off the VM.
   and the EsotericOS **DESKTOP** are independent marks on each PC screen; use a
   screen's right-click menu to move the built-in EsotericOS surface without
   changing Windows' primary monitor. The Desktop choice follows the physical
-  panel if Windows renumbers it. The EsotericOS GUI, shell top bar, and desktop
-  icon field travel together as that one Desktop role; the Windows primary and
-  bottom taskbar remain independent. Screens snap edge to edge and are never
-  allowed to overlap.
+  panel if Windows renumbers it. The EsotericOS GUI, shell top bar, desktop icon
+  field, and single dock travel together as that one Desktop role; the Windows
+  primary remains independent. Optional multi-monitor dock mode still places a
+  dock on every screen. Screens snap edge to edge and are never allowed to overlap.
 - **Bluetooth audio routing** — send Windows audio to BT earbuds through the
   same radio, with the normal Windows volume slider and an in-app L/R balance.
 - **Two-way clipboard** — plain **Ctrl+C / Ctrl+V** keep both machines in sync

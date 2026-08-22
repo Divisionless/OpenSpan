@@ -295,12 +295,11 @@ Windows input portal (openspan_portal.py, captures at the screen edge)
   startup, selection, and display reconciliation, the app atomically publishes
   only its currently effective attached GDI name to
   `%LOCALAPPDATA%\EsotericOS\desktop-monitor.txt`. The shell validates and
-  watches that per-user signal. Its single-monitor top bar and desktop icon
-  field resolve the exact attached screen, fall back to Windows primary while
-  it is absent, and return when the physical choice is effective again. The
-  icon field uses that screen's AppBar work area after the top bar moves. A
-  multi-monitor top-bar setting still creates one bar per screen, and the
-  bottom taskbar keeps its independent placement policy.
+  watches that per-user signal. Its single-monitor top bar, single dock, and
+  desktop icon field resolve the exact attached screen, fall back to Windows
+  primary while it is absent, and return when the physical choice is effective
+  again. The icon field uses that screen's AppBar work area after both bars
+  move. Multi-monitor top-bar and dock settings still create one bar per screen.
 - **Auto-reconnect (2026-07-10, hardened by adversarial review):** the buds
   page the adapter during the ~90 s VM boot, give up before the stack is
   READY, and never retry — so the app retries for them.
