@@ -17,6 +17,20 @@ while skipping the connected audio device on that controller. Separate radios
 remain useful for airtime and hardware-fault isolation, not as a prerequisite
 for connection-lifecycle isolation.
 
+The combined Desktop/admin/Bluetooth-isolation acceptance build is
+`D:\_EsotericOS\app\EsotericOS-desktop-role-admin-bt-isolation.exe`
+(73,473,804 bytes, SHA-256
+`76f3c5c6d7565f05435705f5f8df27f76a319708db29087289f1ffce3f6e6239`),
+built from commit `436d133`. At next app startup, the existing atomic guest
+script synchronizer installs `guest\openspan_bt.py` without restarting any
+daemon or controller; that source file's SHA-256 is
+`1f441759f4e9f47cad8f507c646a04ae1d3f73ba06fee8f001885b17da7e3bfd`.
+The verified Highest logon task now points at this build. Its prior task XML
+and absent-Run snapshot are backed up under
+`D:\_EsotericOS\backups\bt-isolation-20260821-221714`. The candidate has not
+been launched; the current app, VM, portal, audio link, and radios were not
+touched.
+
 ---
 
 ## 2026-08-21 — Administrator is a launch invariant
