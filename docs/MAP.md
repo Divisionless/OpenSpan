@@ -119,15 +119,6 @@ HMAC-signed transport, ephemeral OS-assigned ports (`guest/lan_nodes.py`). Desk 
 AGPL-3.0-or-later since 2026-08-16; dependency-licence audit on the board
 `[licence-audit]`. Publishing is gated on Doug's explicit word.
 
-### Governance — seat, board, Forge
-The board (`docs/plan/plan.json`, served at `127.0.0.1:7350/plan.html`) is the plan. The
-seat's standing handoff record is `forge-architect/HANDOFF.md` — updated at every
-checkpoint, named as `handoffRecord` at every `prepare()`. Forge incorporation is a standing
-consultation: `docs/forge/KEEPER-INTRODUCTION.md`. MAP.md linkage: **ruled A, 2026-08-23** —
-per-project convention only; this file is found via the Forge's `projects/esotericos.json`,
-no shared index. Reopen-to-B evidence is the Operations Manager's watch (Research crystal:
-cross-project map/index rediscovery), not this seat's.
-
 ---
 
 *Maintenance: update the subject line when a board item changes state; this file names

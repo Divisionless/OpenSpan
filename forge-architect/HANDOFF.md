@@ -40,15 +40,31 @@ No source, build, startup contract, or running process has changed.
 
 ## Open work
 
-1. Control Center Phase 1 (catalog service) — row v3.153 exists; implementation start is a
-   separate go from Doug.
-2. Commit ruling pending on `HANDOFF.md` + the two sibling vendor charters; Keeper
-   consultation (prepare() should refuse/default when HANDOFF.md exists unnamed) pending;
-   stale prepared transaction `d7642def` cancel pending.
-3. Two open subject questions in `docs/MAP.md` are Doug's to name: the files-grid unblock
+1. Control Center **Phase 1 in flight** (Doug: "start phase 1", 2026-08-24) — catalog
+   service, discovery adapters, dedup, availability resolver; gate is deterministic
+   inventory tests. Spec `docs/CONTROL-CENTER.md`; row v3.153.
+2. Architect consultation drafted at `docs/forge/ARCHITECT-CONSULTATION-leapfrog.md`
+   (prepare() record default/refusal; role-aware cancel + void `d7642def`; prove `7760a2c2`
+   then archive `7ba2619a` — until that sequence runs, no future handoff of this seat can be
+   prepared). Doug carries it to the Architect.
+3. `GEMINI.md` disposition — violates COUNCIL.md vendor rule ("no GEMINI.md exists
+   anywhere"); untracked, held uncommitted, Doug to rule delete vs keep-as-orphan.
+4. Two open subject questions in `docs/MAP.md` are Doug's to name: the files-grid unblock
    condition (v3.132) and the custody wedge verdict (v3.131).
 
 `maplink` is **closed** — see rulings.
+
+## Structural notes on record
+
+- **Naming law applied 2026-08-24** (COUNCIL.md § The naming law, ruled 2026-08-23): this
+  seat is the **Overseer**; "Architect" is exclusively the forge-domain seat. `CLAUDE.md`
+  and `AGENTS.md` recharted — envelope injector attribution is the Forge Architect's, seat
+  work is Overseer work, Forge internals are the Forge Architect's. The cwd name
+  `forge-architect/` is a flagged stale echo; renaming is Forge plumbing, the Architect's.
+- **Fork rule (Doug, via the Architect):** this single-seat project currently holds both
+  halves of the split — Keeper (EsotericOS's life inside the Forge) and Developer (the OS
+  itself) — un-split. The moment the project grows custom tooling, it needs a Keeper AND a
+  Builder; raise it with Doug then rather than absorbing the tooling into this seat.
 
 ## Doug rulings on record
 
