@@ -4,8 +4,8 @@
   "version": 3,
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
-  "updated": "2026-08-22",
-  "nextSid": 153,
+  "updated": "2026-08-23",
+  "nextSid": 154,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2761,6 +2761,29 @@
       "actualTime": "~20m diagnosis, implementation, verification, packaging and arming",
       "extra": {
         "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; restart acceptance pending. Root cause: the replacement retained the typed RunAsAdministrator command and Programs XAML item, but persisted desktop entries were rehydrated with AllowRunAsAdministrator=false. Newly discovered Start-menu objects recovered eligibility during refresh; retained Quick Launch/category objects that were not rediscovered kept the false value, so the shared context-menu handler collapsed the command. Shell commit f66de14 derives elevation eligibility from desktop kind while persisted AppX entries remain ineligible. Exact owned objects can execute; copied/stale identities remain rejected. The shared Programs template covers All, migrated categories and search. Harness: 4,727 deterministic assertions PASS, including migration, service restart, typed identity rejection and XAML binding/visibility contracts. Full net6 x64 build PASS with the same five existing warnings; full net480 x64 build PASS with zero warnings/errors; git diff check clean. Candidate: D:\\_EsotericOS\\shell\\stable-20260822-141435, 614 files / 175,605,725 bytes, every file SHA-256-equal to the verified net6 output. Canonical and compatibility apphosts are byte-identical; SHA-256 856f14fe22a84c8512d94005b45c1b305cd5b75a9152c298cc0c3cfeb7d9148b. Applications assembly SHA-256 c229844666c8d798ea0e90beea897aea2f4a271a071d7e93062054c860fb918f. Pointer backup: D:\\_EsotericOS\\backups\\programs-admin-arm-20260822-141702. HKCU Winlogon names the candidate; HKLM remains explorer.exe. The old stable-20260822-004409 shell remains the sole live shell and candidate process count is zero. Elevated app task is unchanged. No app, shell, VM, portal, audio or radio process was touched; Files remains paused. NEXT: Doug restart, then right-click a retained desktop program in Programs and confirm Run as administrator is visible and launches it elevated."
+      }
+    },
+    {
+      "sid": "v3.153",
+      "hcidx": 153,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.146",
+        "v3.148",
+        "v3.151"
+      ],
+      "title": "Windows Control Center -- catalog service over four discovery sources, Medium-integrity Shell broker (no explorer.exe route), searchable single-page GUI block; spec frozen at docs/CONTROL-CENTER.md  [control-center-v2]",
+      "why": "one searchable surface for every user-addressable Windows management destination; today the elevated GUI cannot launch Settings at all (0x87B20C15)",
+      "estTokens": "600k-1.2M",
+      "costDrivers": "6 gated phases; broker crosses app+shell repos; hostile-request tests; catalog dedup over 1131 setting records",
+      "estTime": "10h",
+      "model": "Opus code + main-session review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "spec": "docs/CONTROL-CENTER.md",
+        "phase": "0 done - spec frozen, row added; Doug released documentation 2026-08-23"
       }
     }
   ],
@@ -6373,8 +6396,16 @@
     {
       "date": "2026-08-16",
       "entry": "Boot takeover: v3.110 DONE (per-user shell swap, next sign-in), v3.114 de-blocked to post-hoc check, v3.133 strip-cairo DONE, v3.134 licence-audit added. App relicensed MIT->AGPL-3.0-or-later (eb4d162). Strict copyleft is now law."
+    },
+    {
+      "date": "2026-08-23",
+      "entry": "v3.153 control-center-v2 added (Doug: begin, 2026-08-23). Spec frozen at docs/CONTROL-CENTER.md; Phase 0 complete. Drafted by eos-domain codex gen 1, seated claude gen 2 via guarded leapfrog."
+    },
+    {
+      "date": "2026-08-23",
+      "entry": "Doug ruling: MAP.md linkage scope A -- per-project convention only. Each project keeps docs/MAP.md in its own root; Forge projects/<id>.json is the resolver; D2 map untouched; no Keeper consultation; maplink closed as already-satisfied. Reopen condition for scope B is delegated to the Operations Manager: Research adds a cross-project map/index rediscovery watch thread to its next crystal; eos-domain carries no standing watch."
     }
   ],
   "extraCols": [],
-  "rev": 26
+  "rev": 28
 }
