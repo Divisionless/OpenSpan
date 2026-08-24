@@ -62,11 +62,15 @@ No source, build, startup contract, or running process has changed.
 - No running process or boot contract changes before a separately approved arm (spec
   §Acceptance criteria, final clause).
 
-## Known repo state
+## Committed state
 
-- `D:\_EsotericOS\app` at `87cd8012`, branch `multidevice`. Dirty: two untracked files only —
-  `forge-architect\AGENTS.md`, `forge-architect\GEMINI.md` (sibling vendor charters), plus
-  this file once written. Benign; commit/ignore ruling pending.
+- **Checkpoint 2026-08-23: epoch commit `0ac927655622c70e3361deca0fd33c4ca1185c4b`** on
+  `multidevice` — "control-center spec + domain map v1 + mapscope-A (board rev 28)". Carries
+  `docs/CONTROL-CENTER.md`, `docs/MAP.md`, `docs/plan/plan.json` (rev 28), and this record.
+  Everything produced under both packet objectives is inside it; a successor rebuilds from
+  this commit plus this file, nothing else.
+- Remaining untracked, deliberately: `forge-architect\AGENTS.md`, `forge-architect\GEMINI.md`
+  (sibling vendor charters — not this seat's work product; no ruling yet).
 
 ## Handoff-mechanism note for the successor
 
