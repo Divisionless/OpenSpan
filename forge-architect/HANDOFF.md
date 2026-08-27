@@ -56,6 +56,22 @@ No source, build, startup contract, or running process has changed.
 
 ## Structural notes on record
 
+- **Restructure SETTLED (Doug, 2026-08-26):** the seat keeps the name **Overseer** — the
+  right hand implicit in it. Constellation: Doug + Overseer at the top of a flat house;
+  **Executor** does the development work coding the OS; **Architect** does any Forge IDE
+  work needed to bridge the gap between Overseer, Executor, and the rest of the Forge, and
+  keeps all seats not named; choirs under the Overseer. **No Keeper is seated** — the duty
+  is held by the Overseer with re-ask triggers: a second territory, record-keeping crowding
+  his turns, or generation churn outpacing this record. Charter and AGENTS.md rewritten to
+  this constellation 2026-08-26 (this changes the charter hash — the next prepare() re-hashes;
+  the packet hash of 2026-08-23 is historical). Mechanics still the Architect's: flatten,
+  uncross esoteric-os.json ("CROSSED ON PURPOSE, 2026-08-24"), reporting lines. Refinement (same night): NO FOLDERS — "there is just
+  the top level now"; no "EsotericOS" or "The Forge" containers; one flat house; projects
+  survive only as territories (codebase manifests) in the chains view. Map commission v2:
+  three chains (house command, territory, chain of a command to a developer), territories
+  as columns, every node an editable text viewer, AI invocable as a prompt at the top of
+  any charter/territory/seat, highlight-to-flyout invocation with selection as context.
+
 - **Naming law applied 2026-08-24** (COUNCIL.md § The naming law, ruled 2026-08-23): this
   seat is the **Overseer**; "Architect" is exclusively the forge-domain seat. `CLAUDE.md`
   and `AGENTS.md` recharted — envelope injector attribution is the Forge Architect's, seat
@@ -65,8 +81,49 @@ No source, build, startup contract, or running process has changed.
   halves of the split — Keeper (EsotericOS's life inside the Forge) and Developer (the OS
   itself) — un-split. The moment the project grows custom tooling, it needs a Keeper AND a
   Builder; raise it with Doug then rather than absorbing the tooling into this seat.
+- **The split arrived (Doug, 2026-08-26), verified against the roster:**
+  `projects/esoteric-os.json` declares three personas. **eos-domain / Overseer**
+  (`forge-architect\`) — Doug's will, consistency across everything, charter watch, poses
+  the deep questions. **eos-builder / Luthier** (`forge-builder\`) — toolmaker of
+  EsotericOS's life inside the Forge; sat 2026-08-26, charter drafted, pending Doug's
+  ratification. **eos-developer / Executor** (`forge-executor\`) — builds the exterior
+  Windows application. Luthier's mandate (Doug): the room we think in is at the state of
+  the art — in THINKING; "we don't know what we don't know"; "as we burn away
+  inefficiency, those parts will become louder in the rising quiet." Refinement as
+  discovery: he builds what is commissioned, reports what has become loud, Doug rules.
+  Scope boundary pending ratification ("the room, not the talk"): Luthier's inputs are
+  commissions, friction reports, and his own use of the instrument — never the content of
+  Doug–Overseer deliberation or the Executor's operations. Known housekeeping: his
+  `AGENTS.md` is dormancy-era stale, regenerate at ratification; his first heard absence
+  (ctx.spawn) was already documented at KERNEL.md:274 — its fate is the Architect's. **Executor** — Developer-half, builds the
+  actual exterior Windows application (attends technical detail work Doug routes to it).
+  **Overseer** — interprets Doug's will, ensures consistency across everything, watches
+  that the charter is fulfilled, and poses the deep questions — through tooling Luthier
+  builds, so technical weight stays out of the Overseer's context.
+- **Luthier dissolved (Doug, 2026-08-26, same day it was sat).** Every commission and heard
+  absence of the seat landed in the Forge Architect's house, and Doug had independently
+  commissioned the Architect for the general system ("a visual check for agents that are
+  procedurally out of order — a flag in my UI"). Doug archived the seat without ceremony.
+  Doctrine preserved beneath a dissolution banner at `forge-builder/CLAUDE.md`; `AGENTS.md`
+  there rewritten lawful-dormant. All tooling re-routed to the Architect in one
+  consolidated carry (see below); `eos-builder` re-sits only under the fork rule. The
+  Asking's contract stays Overseer-side: questions at `forge-architect/asking/questions.md`
+  (Set 1 verbatim), answers due durably under `forge-architect/asking/answers/`.
 
 ## Doug rulings on record
+
+- 2026-08-27 **law 10 — no nested scrollers.** One vertical scroller per window; containers
+  adapt to contents; where adapting is infeasible bound the **content** and raise the
+  objection. Charter law 10, board row v3.154.
+- 2026-08-27 **law 10 scope: app GUI only.** The shell fork and `docs/plan/plan.html`
+  violations found by the inventory are **out of scope** and are not to be fixed under this
+  law. Recorded on v3.154 so they are not silently forgotten.
+- 2026-08-27 **exemptions are specific and situational** — there is no blanket modal/popover
+  carve-out. Each case is judged on its own facts; a general exemption may not be inferred.
+- 2026-08-27 **the Console becomes a separate surface**, and may then scroll lawfully as that
+  surface's own single scroller. This supersedes the in-page Console treatment committed
+  today (fitted container + 2000-line content cap) and reopens v3.148's "five sections, one
+  document" contract. Not yet designed or built.
 
 - 2026-08-23 "begin" — released the Control Center **documentation** pause (spec persisted,
   row v3.153 added, MAP.md drafted under this ruling).

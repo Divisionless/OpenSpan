@@ -145,7 +145,7 @@ check("arrangement canvas does not absorb vertical surplus",
 check("Bluetooth body keeps its declared row height",
       not bt_packs.get("body", {}).get("expand"),
       repr(bt_packs.get("body")))
-check("Bluetooth tree still expands horizontally beside its scrollbar",
+check("Bluetooth tree still expands to fill its row (law 10: no scrollbar beside it)",
       bt_packs.get("self.tree", {}).get("expand") is True,
       repr(bt_packs.get("self.tree")))
 

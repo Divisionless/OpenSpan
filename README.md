@@ -164,10 +164,13 @@ filter. The helper does not restart Windows or power off the VM.
   (via Apple Shortcuts + a tiny token-guarded LAN relay). See
   `CLIPBOARD_SETUP.md`.
 - **Single scrolling control page** — Desk, Devices, Bluetooth, System and
-  Console are one ordered vertical document with one scrollbar. The readiness
+  Console are one ordered vertical document with **one scrollbar, and only one**.
+  Every container grows to fit its contents, so the wheel always scrolls the page:
+  no device list, log or panel inside it ever captures your scroll. The readiness
   header stays pinned; **Console** jumps to the log without hiding any section.
-  Page, device-list, and Console scrollbars share the dark EsotericOS style;
-  none falls back to Windows' light native track.
+  That single page scrollbar carries the dark EsotericOS style and never falls
+  back to Windows' light native track. Where a container cannot grow forever the
+  *content* is bounded instead — the Console keeps its most recent lines.
 - **Fast pairing + auto-reconnect** — one click frees the whole radio for a
   full-power broadcast so the iPad finds the keyboard quickly, auto-starts the
   bridge the moment it bonds, then brings the earbuds back on their own.

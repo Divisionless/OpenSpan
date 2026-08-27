@@ -113,14 +113,104 @@ check("mouse wheel and legacy wheel buttons use the same page handler",
 scrollbars = [node for node in ast.walk(MODULE)
               if isinstance(node, ast.Call)
               and _name(node.func) == "ttk.Scrollbar"]
-check("all three GUI scrollbars use the dark named style",
-      len(scrollbars) == 3 and all(
-          any(keyword.arg == "style"
+# LAW 10: one vertical scroller per window, and it is the page's. This used to
+# assert 3 -- the page, the Bluetooth device tree and the console. The other
+# two were nested scrollers; the correct number is 1.
+check("law 10: the page's is the only scrollbar in the module",
+      len(scrollbars) == 1, f"{len(scrollbars)} Scrollbar calls")
+check("the one scrollbar uses the dark named style",
+      all(any(keyword.arg == "style"
               and isinstance(keyword.value, ast.Name)
               and keyword.value.id == "SCROLLBAR_STYLE"
               for keyword in node.keywords)
-          for node in scrollbars),
-      f"{len(scrollbars)} Scrollbar calls")
+          for node in scrollbars))
+
+
+print("\n---- law 10: one scroller, every container adapts ----")
+
+
+def _body_src(function):
+    """Unparsed source of a function WITHOUT its docstring.
+
+    Prose must never be able to pass or fail a contract check: a comment
+    naming the exemption reads exactly like the exemption to a substring test.
+    """
+    clone = ast.parse(ast.unparse(function)).body[0]
+    if (clone.body and isinstance(clone.body[0], ast.Expr)
+            and isinstance(clone.body[0].value, ast.Constant)
+            and isinstance(clone.body[0].value.value, str)):
+        clone.body = clone.body[1:] or [ast.Pass()]
+    return ast.unparse(clone)
+
+
+def _mutators(receiver, verbs=("insert", "delete")):
+    """Every method that adds or removes content from receiver.
+
+    Source-level on purpose: naming the mutation points is the whole contract,
+    and a container that grows to fit cannot be tested without a real window.
+    """
+    found = []
+    for node in ast.walk(MODULE):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for item in node.body:
+            if not isinstance(item, ast.FunctionDef):
+                continue
+            body = _body_src(item)
+            if any(f"{receiver}.{verb}(" in body for verb in verbs):
+                found.append((node.name + "." + item.name, body))
+    return found
+
+
+wheel_src = _body_src(wheel)
+check("the wheel handler carries no widget-type exemption",
+      "isinstance" not in wheel_src
+      and not any(token in wheel_src for token in
+                  ("tk.Text", "tk.Listbox", "ttk.Treeview")),
+      wheel_src)
+check("the wheel handler is still scoped to the page canvas",
+      "self._inside(widget, self._page_canvas)" in wheel_src)
+check("adapting helpers are declared once, at module level",
+      all(callable(getattr(A, name, None)) for name in
+          ("fit_text_height", "fit_tree_height", "trim_text_to_lines",
+           "bind_fit_text_height")))
+
+bt_init = _body_src(_method("BtPanel", "__init__"))
+tree_mutators = _mutators("self.tree")
+check("the device tree has mutation points to check", bool(tree_mutators))
+for where, body in tree_mutators:
+    check(f"{where} restates the tree height after changing rows",
+          "fit_tree_height(self.tree)" in body, where)
+check("the device tree declares no fixed row count",
+      "height=8" not in bt_init and "height=TREE_MIN_ROWS" in bt_init)
+
+for receiver in ("self.out", "self.console"):
+    mutators = _mutators(receiver)
+    check(f"{receiver} has mutation points to check", bool(mutators))
+    for where, body in mutators:
+        check(f"{where} refits {receiver} to its content",
+              f"fit_text_height({receiver}" in body
+              or "fit_text_height(c)" in body, where)
+    check(f"{receiver} never scrolls itself to the tail",
+          f"{receiver}.see(" not in SOURCE)
+check("neither Text declares a fixed line count",
+      "height=5" not in bt_init
+      and "height=TEXT_MIN_LINES" in bt_init
+      and "height=TEXT_MIN_LINES" in init_src)
+
+check("the console cap is one module-level number",
+      isinstance(A.CONSOLE_RETAINED_LINES, int)
+      and A.CONSOLE_RETAINED_LINES > 0, repr(A.CONSOLE_RETAINED_LINES))
+log_src = _body_src(_method("App", "log"))
+check("the console bounds its CONTENT by that number, then fits what remains",
+      "trim_text_to_lines(c, CONSOLE_RETAINED_LINES)" in log_src
+      and "fit_text_height(c)" in log_src, log_src)
+check("trimming deletes from the TOP, so the newest output survives",
+      'widget.delete("1.0", f"{lines - retained + 1}.0")' in SOURCE)
+check("no output yanks the page by chasing its own tail",
+      not any(token in SOURCE for token in
+              ('self.out.see("end")', 'self.console.see("end")',
+               'c.see("end")')))
 
 
 section_locals = ("pane_desk", "pane_devices", "pane_bluetooth",
@@ -261,13 +351,17 @@ check("dark scrollbar exposes pressed, hover and disabled feedback",
       and scroll_map.get("active", "").lower() == A.PRESS.lower()
       and scroll_map.get("disabled", "").lower() == A.PANEL.lower(),
       repr(scroll_map))
+# LAW 10, inverted from what this file used to assert. A real tk.Text inside
+# the page no longer keeps the wheel: it is sized to its own content, so there
+# is nothing for it to scroll and the page takes the turn.
 nested = tk.Text(root)
 nested.master = app._page_canvas
 before = list(app._page_canvas.scrolls)
-check("nested Text keeps ownership of its own wheel",
+check("a nested Text hands the wheel to the page",
       app._on_page_mousewheel(SimpleNamespace(
-          widget=nested, delta=-120, num=None)) is None
-      and app._page_canvas.scrolls == before)
+          widget=nested, delta=-120, num=None)) == "break"
+      and app._page_canvas.scrolls == before + [(3, "units")],
+      repr(app._page_canvas.scrolls))
 nested.master = root
 nested.destroy()
 

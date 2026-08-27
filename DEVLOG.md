@@ -1,5 +1,51 @@
 # OpenSpan — Devlog
 
+## 2026-08-27 — Law 10: no nested scrollers, and the carve-out that defended them
+
+Doug ruled it law: *"There should be nothing that, as I am scrolling vertically with my
+mouse wheel, prevents the vertical scroll because it goes to a smaller unit. There are NO
+nesting scrollers in our environment — all containers should adapt to their contents, where
+this is infeasible raise the objection."* Recorded as charter law 10 in all three vendor
+charters.
+
+The violation was not drift. `App._on_page_mousewheel` carried an explicit exemption —
+`if isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview)): return None` — under a docstring
+that said *"Scroll the page unless a nested scrolling control owns the wheel."* Over the
+Bluetooth device list, the radio mini-log or the Console, the page handler declined and let
+the widget's own Tk class binding take the wheel. `test_single_page.py` asserted the module
+contained **exactly three** `ttk.Scrollbar` calls, so the suite required the two illegal
+scrollbars to keep existing, and the README advertised all three as a feature.
+
+The exemption is deleted; the `_inside(widget, self._page_canvas)` guard is kept.
+`ttk.Scrollbar(` now appears exactly once — the page's own. Three containers were made to
+adapt: the Bluetooth `Treeview` (scrollbar removed, `height=8` → row count via
+`fit_tree_height`, refit at `_apply_rows`, the one place rows change), `BtPanel.out`
+(`height=5` → line count), and the Console (`csb` removed, height tracks content).
+
+Two details are load-bearing. Height is `max(logical_lines, displaylines)` because Tk's two
+line counts differ by the mandatory trailing newline, and a widget one row short of its
+content leaves exactly the slack the `Text` class binding needs to eat part of the page's
+wheel travel. And with `wrap="word"` the row count is a function of width, so a resize can
+rewrap content out of view with nothing written — hence a debounced `<Configure>` refit,
+width-guarded so our own height change cannot feed back into itself.
+
+**The objection, raised rather than worked around.** An unbounded log cannot adapt, so the
+Console bounds its *content*: `CONSOLE_RETAINED_LINES = 2000`, trimmed from the top so the
+newest output survives. This replaced an unnamed `> 800 → delete("1.0", "200.0")`. The
+console does **not** persist to disk — `portal.log` and `audio_send.log` are other processes'
+stdout — so the cap discards history rather than hiding it, and 2000 lines is also a
+page-length decision (~26,000 px when full). `see("end")` is gone: with the container fitted
+there is nothing to scroll internally, and new output must not yank the page.
+
+**A deliberate reversal, recorded.** The removed comment defended the fixed `height=8`:
+*"a tree that resizes while a scan lands moves the row under the cursor."* That cost is real
+and is now paid, because the law overrides it.
+
+Static verification is green (33/33) under a harness that replaces `tkinter.Tk` with a raiser
+before exec, so no window can reach Doug's desk. The eleven suites that build a real root are
+queued as **TEST-WINDOW entry 10**, appended to his next restart on his word.
+
+
 ## 2026-08-22 — Programs retains administrator launch across restarts
 
 The EsotericOS Programs replacement still owned a typed **Run as

@@ -1,15 +1,14 @@
-# The canonical charter for this seat, as Codex loads it
+# The canonical charter for this seat, as Gemini loads it
 
-You are seated through **Codex**. The codex CLI discovers this file in the working directory
-and nothing else: there is no charter injection on the Codex path and no pointer is followed,
-so what is below is the whole of what binds you. It is the same text `CLAUDE.md` carries.
+You are seated through **Gemini**. The Forge reads this file and injects it as your binding
+charter (`kernel/antigravity.js`), so what is below is the whole of what binds you. It is the
+same text `CLAUDE.md` carries.
 
-Two differences that are Codex's alone:
+Two differences that are Gemini's alone:
 
 - A consultation turn is enforced with a **read-only sandbox**, not plan mode.
-- **There is no mid-turn injection on this vendor.** A message Doug steers into a running turn
-  cannot reach you until the turn ends; it lands as the next turn instead. If he refers to
-  something you have not seen, that is why.
+- Headless mode **cannot prompt for a permission**, so anything outside your granted reach is
+  auto-denied rather than asked about. A refusal is a reach problem, not a decision.
 
 <!-- generated from CLAUDE.md by forge/tools/sync_charters.js — edit CLAUDE.md -->
 

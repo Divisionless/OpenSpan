@@ -4,8 +4,8 @@
   "version": 3,
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
-  "updated": "2026-08-24",
-  "nextSid": 154,
+  "updated": "2026-08-27",
+  "nextSid": 155,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2680,7 +2680,8 @@
       "actualTokens": "not surfaced",
       "actualTime": "~65m implementation, review, verification, packaging and arming",
       "extra": {
-        "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; live restart acceptance pending. Commit e4dbcde removes the five-pane rail and packs Desk, Devices, Bluetooth, System and Console once into one Canvas-backed vertical document. Readiness and compact status stay pinned; Console is an anchor; ordinary wheel input scrolls the page while nested Text/Listbox/Treeview controls retain ownership. Document height drives only scrollregion; window height follows the selected EsotericOS Desktop work area. Footer is the final row and now states AGPL-3.0-or-later. New deterministic single-page and control-surface harnesses cover order, mapping, dynamic content, width, anchors, nested scrolling, fixed header, duplicate portal controls and wider Desk geometry. Full suite: 61 files, 57 pass; the four unchanged failures are test_brand.py font-call cardinality, live arrangement exactness in test_pc_block.py, existing live portal model checks, and assert-control.ps1 hygiene. Candidate: D:\\_EsotericOS\\app\\EsotericOS-single-page-admin-bt-isolation.exe, 73,470,107 bytes, SHA-256 76bf45fe3c55ef638e8408aee1201f403d0b93e0393c405b531a5efa44416f64. Recursive archive audit contains openspan, openspan_launcher, on_desktop and monitor_identity; external guest Bluetooth source remains SHA-256 1f441759f4e9f47cad8f507c646a04ae1d3f73ba06fee8f001885b17da7e3bfd. On Doug explicit arm order, the outgoing task and Run state were backed up to D:\\_EsotericOS\\backups\\single-page-20260822-002137. The existing EsotericOS App (elevated) task now has the exact candidate action and app working directory, current-user Interactive principal, RunLevel Highest, one logon trigger with PT30S delay, and no legacy Run value. Candidate process count is zero; the six-process running app set and paths were identical before and after registration. VM, portal, audio, radios and shell were untouched. Files implementation remains paused. NEXT: Doug system restart, then verify page order, page wheel/scrollbar, pinned readiness, Console anchor, nested Console/Bluetooth scrolling, elevated state and same-radio audio continuity."
+        "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; live restart acceptance pending. Commit e4dbcde removes the five-pane rail and packs Desk, Devices, Bluetooth, System and Console once into one Canvas-backed vertical document. Readiness and compact status stay pinned; Console is an anchor; ordinary wheel input scrolls the page while nested Text/Listbox/Treeview controls retain ownership. Document height drives only scrollregion; window height follows the selected EsotericOS Desktop work area. Footer is the final row and now states AGPL-3.0-or-later. New deterministic single-page and control-surface harnesses cover order, mapping, dynamic content, width, anchors, nested scrolling, fixed header, duplicate portal controls and wider Desk geometry. Full suite: 61 files, 57 pass; the four unchanged failures are test_brand.py font-call cardinality, live arrangement exactness in test_pc_block.py, existing live portal model checks, and assert-control.ps1 hygiene. Candidate: D:\\_EsotericOS\\app\\EsotericOS-single-page-admin-bt-isolation.exe, 73,470,107 bytes, SHA-256 76bf45fe3c55ef638e8408aee1201f403d0b93e0393c405b531a5efa44416f64. Recursive archive audit contains openspan, openspan_launcher, on_desktop and monitor_identity; external guest Bluetooth source remains SHA-256 1f441759f4e9f47cad8f507c646a04ae1d3f73ba06fee8f001885b17da7e3bfd. On Doug explicit arm order, the outgoing task and Run state were backed up to D:\\_EsotericOS\\backups\\single-page-20260822-002137. The existing EsotericOS App (elevated) task now has the exact candidate action and app working directory, current-user Interactive principal, RunLevel Highest, one logon trigger with PT30S delay, and no legacy Run value. Candidate process count is zero; the six-process running app set and paths were identical before and after registration. VM, portal, audio, radios and shell were untouched. Files implementation remains paused. NEXT: Doug system restart, then verify page order, page wheel/scrollbar, pinned readiness, Console anchor, nested Console/Bluetooth scrolling, elevated state and same-radio audio continuity.",
+        "law10": "Law 10 is this row's completion condition: one document, one scroller, every container fitted to its contents."
       }
     },
     {
@@ -2740,7 +2741,8 @@
       "actualTokens": "~18k Codex",
       "actualTime": "~25m implementation, verification, packaging and arming",
       "extra": {
-        "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; combined restart acceptance pending. Commit 71afe2b gives all three main GUI scrollbars -- page, Bluetooth device list and Console -- one named EsotericOS vertical style with BG trough, CARD thumb, MUTED arrow, PRESS hover, ACCENT_DIM pressed and PANEL disabled states; borders and bevel colors remain dark. The single-page harness measures the actual Tk style and structurally proves every Scrollbar call opts in. Single-page plus five neighboring theme/control/layout suites pass. Full suite: 62 files, 58 pass, with exactly the same four unrelated failures. Candidate: D:\\_EsotericOS\\app\\EsotericOS-unified-desktop-dark-scrollbars-admin-bt-isolation.exe, 73,471,675 bytes, SHA-256 8dfeec62bbf4c7a4ffc5cae7e2a0d0ef10caceda54c28515502023287ee178cd. Recursive archive verification finds openspan, launcher, portal, audio, on_desktop and monitor_identity. Backup: D:\\_EsotericOS\\backups\\dark-scrollbars-arm-20260822-140739. The Highest interactive PT30S task and exact Private/LocalSubnet firewall rules now name the candidate; Run is absent and obsolete product rules are zero. HKCU Winlogon still names the separately armed dock-shell candidate and HKLM remains explorer.exe. Six old-app processes and the old shell remain unchanged; both new candidate counts are zero. VM, portal, audio and radios were untouched. NEXT: Doug restart, then confirm all scrollbars are dark and the dock joins the GUI, top bar and icons on Display 5."
+        "note": "SOURCE+BUILD COMPLETE+ARMED 2026-08-22; combined restart acceptance pending. Commit 71afe2b gives all three main GUI scrollbars -- page, Bluetooth device list and Console -- one named EsotericOS vertical style with BG trough, CARD thumb, MUTED arrow, PRESS hover, ACCENT_DIM pressed and PANEL disabled states; borders and bevel colors remain dark. The single-page harness measures the actual Tk style and structurally proves every Scrollbar call opts in. Single-page plus five neighboring theme/control/layout suites pass. Full suite: 62 files, 58 pass, with exactly the same four unrelated failures. Candidate: D:\\_EsotericOS\\app\\EsotericOS-unified-desktop-dark-scrollbars-admin-bt-isolation.exe, 73,471,675 bytes, SHA-256 8dfeec62bbf4c7a4ffc5cae7e2a0d0ef10caceda54c28515502023287ee178cd. Recursive archive verification finds openspan, launcher, portal, audio, on_desktop and monitor_identity. Backup: D:\\_EsotericOS\\backups\\dark-scrollbars-arm-20260822-140739. The Highest interactive PT30S task and exact Private/LocalSubnet firewall rules now name the candidate; Run is absent and obsolete product rules are zero. HKCU Winlogon still names the separately armed dock-shell candidate and HKLM remains explorer.exe. Six old-app processes and the old shell remain unchanged; both new candidate counts are zero. VM, portal, audio and radios were untouched. NEXT: Doug restart, then confirm all scrollbars are dark and the dock joins the GUI, top bar and icons on Display 5.",
+        "law10": "Law 10 narrows this row: only the page scrollbar remains to style. The device-list and Console scrollbars it also covered no longer exist."
       }
     },
     {
@@ -2779,11 +2781,34 @@
       "estTime": "10h",
       "model": "Opus code + main-session review",
       "status": "doing",
-      "actualTokens": null,
-      "actualTime": null,
+      "actualTokens": "P1: 214k (Opus agent)",
+      "actualTime": "P1: 26m agent + review",
       "extra": {
         "spec": "docs/CONTROL-CENTER.md",
-        "phase": "1 started 2026-08-24 (Doug: start phase 1) - catalog, adapters, dedup, availability; gate: deterministic inventory tests"
+        "phase": "1 DELIVERED 2026-08-24, gate met: 128 deterministic tests, byte-identical double run, verified in main session. 175 records / 4 sources; capture matched spec baseline (1131/18/20 exact; 44 CLSIDs vs 41, measured not forced). Uncommitted pending Doug. Next: Phase 2 broker."
+      }
+    },
+    {
+      "sid": "v3.154",
+      "hcidx": 154,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.148"
+      ],
+      "title": "No nested scrollers -- one vertical scroller per window; every container adapts to its contents, content is bounded where adapting is infeasible  [law10-no-nested-scroll]",
+      "why": "Doug's law 2026-08-27: the wheel must never be captured by a smaller unit. The page wheel handler carried a coded-in exemption for Text/Listbox/Treeview and the suite required the illegal scrollbars to exist",
+      "estTokens": "110k actual",
+      "costDrivers": "inventory across app/shell/plan.html; inverted a tested contract; Tk height fitting is width-dependent",
+      "estTime": "2.5h",
+      "model": "Sonnet inventory + Opus code + main-session review",
+      "status": "doing",
+      "actualTokens": "230k (inventory 118k + fix 113k)",
+      "actualTime": null,
+      "extra": {
+        "app": "DONE in tree, uncommitted: exemption deleted, 3 scrollbars -> 1, Treeview/out/console fitted, CONSOLE_RETAINED_LINES=2000, static 33/33 green",
+        "verify": "TEST-WINDOW entry 10 -- eleven real-Tk suites appended to Doug's next restart",
+        "pending": "Doug rulings: scope (shell fork, plan.html), modal/popover exemption, cap value",
+        "violations_open": "shell EsotericOS.Files column-view ListBox vertical scroll; Cairo Explorer sidebar (likely dead scaffold); plan.html .logbody max-height:340px overflow:auto"
       }
     }
   ],
@@ -6408,8 +6433,16 @@
     {
       "date": "2026-08-24",
       "entry": "Doug rulings batch: phase 1 of v3.153 started (Opus writes, main session reviews). Naming law applied (COUNCIL.md 2026-08-23): seat is Overseer; charters CLAUDE.md/AGENTS.md recharted; GEMINI.md held for disposition (violates vendor rule). Architect consultation drafted (docs/forge/ARCHITECT-CONSULTATION-leapfrog.md): prepare() record gap, role-aware cancel for stale d7642def, prove+archive to unwedge the lane. Structural note on record: single seat holds Keeper+Developer un-split; fork rule triggers when the project grows custom tooling."
+    },
+    {
+      "date": "2026-08-24",
+      "entry": "v3.153 Phase 1 delivered: win/control_catalog.py + data + fixtures + test_control_catalog.py (Opus wrote, main session reviewed and re-ran the gate: 128 PASS twice, byte-identical, launch surface clean, fixtures scrubbed). Capture: 1131 settings records, 18 cpl, 20 MMC exact vs spec; 44 namespace CLSIDs measured vs spec's 41 (Get-ControlPanelItem undercount explanation recorded). Catalog: 175 records, 12 groups, availability always state+reason."
+    },
+    {
+      "date": "2026-08-27",
+      "entry": "LAW 10 (Doug): no nested scrollers -- one vertical scroller per window, containers adapt to contents, bound the content where adapting is infeasible and raise the objection. Charter law 10 in all three vendor charters. v3.154 added. App side done in tree: the _on_page_mousewheel isinstance exemption for Text/Listbox/Treeview deleted, ttk.Scrollbar 3 -> 1, Bluetooth tree + BtPanel.out + Console fitted to content, console content capped at 2000 lines trimmed from the top (it does NOT persist to disk), see('end') removed. Objection recorded: an unbounded log cannot adapt, and the fitted tree now shifts rows under the cursor as a scan lands. Control Center spec amended (results list loses its scrollbar). Open: shell fork and plan.html violations pending Doug's scope ruling."
     }
   ],
   "extraCols": [],
-  "rev": 29
+  "rev": 31
 }

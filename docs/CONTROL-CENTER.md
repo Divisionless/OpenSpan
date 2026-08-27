@@ -173,6 +173,34 @@ The feature is complete when:
   contracts remain intact.
 - No running process or boot contract changes before a separately approved arm.
 
+---
+
+## Amendment 2026-08-24 — the no-nested-scrollers law
+
+*Added under the file's own revision convention (a new dated section, never a rewrite of the
+frozen text). Doug ruled: "There are NO nesting scrollers in our environment. it is law — all
+containers should adapt to their contents, where this is infeasible raise the objection."
+Charter law 10.*
+
+**§GUI design, "Hierarchical results list with a dark scrollbar" is superseded.** The results
+list gets **no scrollbar of its own**. It renders as part of the single scrolling document and
+grows to its content height; the page's one scroller is the only scroller. A wheel event over
+the results list scrolls the page, exactly as it does everywhere else.
+
+The catalog makes this affordable rather than merely required: Phase 1 measured **175 records
+total** on this machine, and the block is filtered and category-limited before it renders, so
+the realistic rendered height is a fraction of that. No virtualisation is needed and none is
+permitted to justify a nested scroller.
+
+Consequently:
+- **Result-count discipline replaces scrolling.** Where a filter would render an unhelpfully
+  long list, the answer is a better filter, a collapsed category, or a stated cap with a
+  visible reason — never an inner scroll region.
+- **§Acceptance criteria gains one clause:** no Control Center element captures the mouse wheel;
+  the page scrolls uninterrupted from the block's first pixel to its last.
+- **The "dark-scrollbar contract" clause** in §Acceptance criteria continues to refer to the
+  page's own scrollbar, which remains dark-styled.
+
 ### Longer horizon
 
 After the launch surface is proven:

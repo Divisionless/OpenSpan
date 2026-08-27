@@ -1373,6 +1373,139 @@ PAGE_SPEC = (
 PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 
 
+# ---- law 10: one vertical scroller per window -------------------------------
+# The page Canvas is that scroller and there is no second one. Every other
+# container adapts to its own contents, so while the wheel is turning nothing
+# smaller can capture it: a widget with nothing hidden has nothing to scroll.
+# That is why the wheel handler carries no widget-type exemption any more, and
+# why the only ttk.Scrollbar left in this file is the page's own.
+#
+# Where a container genuinely cannot adapt forever, the CONTENT is bounded
+# instead of the container. Exactly one surface here has an unbounded
+# producer -- the console -- so exactly one thing is capped.
+#
+# The console retains this many lines; the excess is deleted from the TOP so
+# what remains is always the newest output. Doug may correct the number: this
+# line is the whole knob. NOTE: the console is not persisted anywhere, so this
+# cap does discard history rather than merely hide it. portal.log and
+# audio_send.log are the portal and audio SENDER's own stdout, not this
+# widget's contents.
+CONSOLE_RETAINED_LINES = 2000
+# Floors, in rows. An empty container is still a legible strip rather than a
+# hairline. Deliberately no ceilings anywhere: a ceiling is a nested scroller.
+TEXT_MIN_LINES = 1
+TREE_MIN_ROWS = 1
+
+
+def text_content_lines(widget, minimum=TEXT_MIN_LINES):
+    """How many rows a Text widget's content actually occupies on screen.
+
+    Wrapping counts. With wrap="word" one logical line can occupy several
+    display rows, and a height counting only logical lines would leave the
+    remainder unreachable without an internal scroller -- which is the thing
+    law 10 forbids. Tk can only answer the display question once the widget
+    has a real width, so before the first geometry pass only the logical count
+    is available and the next fit corrects it.
+
+    The two counts are combined with max() rather than one being trusted over
+    the other, because Tk's two ways of saying "how many lines" differ by the
+    mandatory trailing newline and the direction of that off-by-one matters:
+    a widget one row TALLER than its content cannot scroll, a widget one row
+    SHORTER has a line of slack, and one line of slack is all the Text class
+    binding needs to eat part of the wheel travel that belongs to the page.
+    """
+    try:
+        lines = int(widget.index("end-1c").split(".")[0])
+    except (tk.TclError, ValueError, AttributeError):
+        return minimum
+    try:
+        if widget.winfo_width() > 1:
+            shown = widget.count("1.0", "end", "displaylines")
+            if isinstance(shown, (tuple, list)):
+                shown = shown[0] if shown else 0
+            lines = max(lines, int(shown or 0))
+    except (tk.TclError, ValueError, TypeError):
+        pass
+    return max(minimum, lines)
+
+
+def fit_text_height(widget, minimum=TEXT_MIN_LINES):
+    """Size a Text widget to exactly its own content. Law 10.
+
+    Text height is in LINES, so the content's row count IS the height. Written
+    only when it changes: an idempotent config() still costs a relayout, and
+    this runs on every logged line.
+    """
+    lines = text_content_lines(widget, minimum)
+    try:
+        if int(widget.cget("height")) != lines:
+            widget.config(height=lines)
+    except (tk.TclError, ValueError):
+        return None
+    return lines
+
+
+def fit_tree_height(tree, minimum=TREE_MIN_ROWS):
+    """Size a Treeview to exactly its row count. Law 10.
+
+    Treeview height is in ROWS, so this must be called from every place rows
+    are inserted, removed or cleared -- otherwise the tree keeps a stale
+    height and the surplus rows go back behind an internal scroller.
+    """
+    try:
+        rows = max(minimum, len(tree.get_children("")))
+        if int(tree.cget("height")) != rows:
+            tree.config(height=rows)
+    except (tk.TclError, ValueError):
+        return None
+    return rows
+
+
+def bind_fit_text_height(widget, minimum=TEXT_MIN_LINES, delay=120):
+    """Re-fit a Text whenever its WIDTH changes.
+
+    Row count is a function of width once wrap is on, so a window resize can
+    rewrap content out of view even though nothing was written. Debounced,
+    because a drag-resize fires <Configure> continuously and counting display
+    lines is O(content). The width guard is also what stops the obvious
+    feedback loop: our own height change re-fires <Configure> at the same
+    width and is dropped here.
+    """
+    state = {"job": None, "width": None}
+
+    def run():
+        state["job"] = None
+        fit_text_height(widget, minimum)
+
+    def on_configure(event):
+        if event.width == state["width"]:
+            return
+        state["width"] = event.width
+        if state["job"] is not None:
+            try:
+                widget.after_cancel(state["job"])
+            except tk.TclError:
+                pass
+        state["job"] = widget.after(delay, run)
+
+    widget.bind("<Configure>", on_configure, add="+")
+
+
+def trim_text_to_lines(widget, retained=CONSOLE_RETAINED_LINES):
+    """Bound the CONTENT of an unbounded log, from the top.
+
+    The newest output is what survives. Returns the resulting line count.
+    """
+    try:
+        lines = int(widget.index("end-1c").split(".")[0])
+        if lines > retained:
+            widget.delete("1.0", f"{lines - retained + 1}.0")
+            lines = int(widget.index("end-1c").split(".")[0])
+        return lines
+    except (tk.TclError, ValueError):
+        return None
+
+
 # ---- themed dialogs ---------------------------------------------------------
 # The native tk messagebox renders in the OS (light) theme, which clashes badly
 # with the dark app. These are drop-in dark replacements that live INSIDE the
@@ -5910,17 +6043,23 @@ class BtPanel(tk.Frame):
                                                         pady=(4, 0))
 
         body = tk.Frame(self, bg=BG)
-        # expand=False on BOTH the body and the tree, so the height=8 declared
-        # just below is the height actually taken (189px measured). Expanding
-        # made that number decorative and let the tree eat the right column's
-        # whole surplus. 8 rows is more than the devices present, so nothing is
-        # hidden by capping it. Deliberately NOT dynamic per refresh -- a tree
-        # that resizes while a scan lands moves the row under the cursor.
+        # expand=False, so body is exactly the tree's requested height and the
+        # tree's height option is the height actually taken.
+        #
+        # LAW 10: that height is no longer a fixed 8. It tracks the row count
+        # (fit_tree_height, called from _apply_rows, the one place rows
+        # change), so the list shows every device it has and never hides one
+        # behind an internal scroller. The previous comment here argued the
+        # opposite -- "deliberately NOT dynamic per refresh, a tree that
+        # resizes while a scan lands moves the row under the cursor" -- and
+        # that cost is real and is now accepted: a scan that finds a new
+        # device does grow this tree and shift what is below it. Law 10 rules
+        # that reachability of content beats stillness of layout.
         body.pack(fill="both", expand=False, padx=12, pady=PAD_MD)
         self.tree = ttk.Treeview(body, columns=("name", "status", "type",
                                                 "radio", "addr"),
                                  show="headings", selectmode="browse",
-                                 height=8)
+                                 height=TREE_MIN_ROWS)
         self.tree.heading("name", text="Device")
         self.tree.heading("status", text="Status")
         self.tree.heading("type", text="Type")
@@ -5935,17 +6074,12 @@ class BtPanel(tk.Frame):
         self.tree.tag_configure("paired", foreground=FG)
         self.tree.tag_configure("available", foreground=MUTED)
         self.tree.tag_configure("blacklisted", foreground=DANGER)
-        # expand stays TRUE here, and only here. pack's expand is not
-        # axis-specific: with side="left" it is what gives the tree the leftover
-        # WIDTH beside the scrollbar. Measured with a 800px-wide column,
-        # expand=False opens a 216px hole between the tree and the scrollbar.
-        # The height cap is already fully delivered by body above, which no
-        # longer expands -- so this parcel is exactly reqheight either way.
-        self.tree.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(body, orient="vertical", style=SCROLLBAR_STYLE,
-                           command=self.tree.yview)
-        sb.pack(side="right", fill="y")
-        self.tree.config(yscrollcommand=sb.set)
+        # side="left" and the vertical scrollbar it made room for are both
+        # gone (law 10). The tree is now the sole child of body and takes the
+        # full column width; body does not expand, so this parcel is exactly
+        # the tree's reqheight -- which fit_tree_height keeps equal to the
+        # rows it holds.
+        self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda e: self.connect())
         self.tree.bind("<Button-3>", self._popup)
 
@@ -5982,10 +6116,17 @@ class BtPanel(tk.Frame):
                                             command=self._restart_all)
         self.btn_restart_audio.pack(side="right")
 
-        self.out = tk.Text(self, bg="#06090E", fg="#B8B3C2", height=5, bd=0,
+        # LAW 10: no scrollbar was ever attached here, but a Text captures the
+        # wheel through its own class binding whether one is attached or not.
+        # The fixed height=5 is therefore gone: the height tracks the line
+        # count (fit_text_height, called from _log, the one place lines are
+        # added), so there is never anything hidden for the wheel to reach.
+        self.out = tk.Text(self, bg="#06090E", fg="#B8B3C2",
+                           height=TEXT_MIN_LINES, bd=0,
                            font=("Consolas", 9), wrap="word",
                            insertbackground=FG)
         self.out.pack(fill="both", expand=False, padx=12, pady=(4, 10))
+        bind_fit_text_height(self.out)
         self._log("Ready. Right-click a device for its actions.")
         self._set_radio_controls()
         self.refresh()
@@ -6205,7 +6346,11 @@ class BtPanel(tk.Frame):
         # thread via App.ui() (workers must never call into Tk, even after())
         def put():
             self.out.insert("end", msg.rstrip() + "\n")
-            self.out.see("end")
+            # Law 10: grow to fit instead of scrolling to the tail. see("end")
+            # is gone with the overflow it used to chase -- and it must not
+            # come back, because with nothing to scroll internally Tk would
+            # look outward for something that can, which is the page.
+            fit_text_height(self.out)
         if self.app:
             self.app.ui(put)
         else:
@@ -6873,6 +7018,9 @@ class BtPanel(tk.Frame):
             self.tree.insert("", "end", iid=mac,
                              values=(nm, status, typ, radio_name, mac),
                              tags=(tag,))
+        # Law 10: rows changed above (cleared, then re-inserted), so the tree's
+        # height is restated here -- the single point where that happens.
+        fit_tree_height(self.tree)
         for k in keep:
             if self.tree.exists(k):
                 self.tree.selection_set(k)
@@ -7372,14 +7520,18 @@ class App:
                    command=self._console_clear).pack(side="right")
         cwrap = tk.Frame(pane_console, bg=PANEL)
         cwrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        # LAW 10, and the one place in this window where the law's escape
+        # hatch applies. The console's producer is unbounded, so the container
+        # cannot adapt forever -- therefore the CONTENT is bounded, not the
+        # container: App.log keeps CONSOLE_RETAINED_LINES lines and deletes
+        # the excess from the TOP. What is on screen is the whole of what is
+        # kept, at its full height, with no scrollbar of its own.
         self.console = tk.Text(cwrap, bg="#05080D", fg="#B8B3C2", bd=0,
+                               height=TEXT_MIN_LINES,
                                font=("Consolas", 9), wrap="word",
                                state="disabled", insertbackground=FG)
-        csb = ttk.Scrollbar(cwrap, orient="vertical", style=SCROLLBAR_STYLE,
-                            command=self.console.yview)
-        csb.pack(side="right", fill="y")
-        self.console.config(yscrollcommand=csb.set)
-        self.console.pack(side="left", fill="both", expand=True)
+        self.console.pack(fill="both", expand=True)
+        bind_fit_text_height(self.console)
         self.console.tag_config("ts", foreground="#6E687A")
         self.console.tag_config("cmd", foreground="#B28DFF")
         self.console.tag_config("ok", foreground=ACCENT)
@@ -8335,11 +8487,20 @@ class App:
         return False
 
     def _on_page_mousewheel(self, event):
-        """Scroll the page unless a nested scrolling control owns the wheel."""
+        """Scroll the page. Law 10: no widget inside it may own the wheel.
+
+        There is deliberately NO widget-type exemption here. The exemption
+        that used to sit on this line handed the wheel to whichever Text,
+        Listbox or Treeview happened to be under the cursor, which is exactly
+        the nested-scroller behaviour law 10 forbids. Those containers now
+        size themselves to their contents (fit_text_height/fit_tree_height),
+        so there is nothing for them to scroll and nothing to hand them.
+
+        The _inside test stays: it scopes the wheel to the page canvas, so
+        fixed chrome and dialogs above the page are still untouched.
+        """
         widget = getattr(event, "widget", None)
         if not self._inside(widget, self._page_canvas):
-            return None
-        if isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview)):
             return None
         number = getattr(event, "num", None)
         if number in (4, 5):
@@ -9027,15 +9188,25 @@ class App:
         self.ui(lambda: self.log(kind, text))
 
     def log(self, kind, text):
-        """Append a timestamped, color-tagged line to the console (UI thread)."""
+        """Append a timestamped, color-tagged line to the console (UI thread).
+
+        Law 10, bounding the CONTENT: the console is trimmed from the top to
+        CONSOLE_RETAINED_LINES and then sized to exactly what survives, so it
+        never scrolls internally and never grows without limit either. The
+        widget is the only copy -- nothing here is written to disk -- so a
+        trimmed line is gone, and that is what the cap buys.
+
+        There is deliberately no see("end") and no page-level scroll: new
+        output extends the page downward and leaves the viewport exactly where
+        Doug put it. Output must never yank the page out from under a read.
+        """
         try:
             c = self.console
             c.config(state="normal")
             c.insert("end", time.strftime("%H:%M:%S "), "ts")
             c.insert("end", text.rstrip() + "\n", kind)
-            if int(c.index("end-1c").split(".")[0]) > 800:  # cap growth
-                c.delete("1.0", "200.0")
-            c.see("end")
+            trim_text_to_lines(c, CONSOLE_RETAINED_LINES)
+            fit_text_height(c)
             c.config(state="disabled")
         except Exception:  # noqa: BLE001
             pass
@@ -9044,6 +9215,7 @@ class App:
         try:
             self.console.config(state="normal")
             self.console.delete("1.0", "end")
+            fit_text_height(self.console)   # law 10: shrink back to nothing
             self.console.config(state="disabled")
         except Exception:  # noqa: BLE001
             pass
