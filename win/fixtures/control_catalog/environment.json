@@ -1,0 +1,15 @@
+{
+ "catalogRevision": "2026-08-24",
+ "data": {
+  "build": 19045,
+  "displayVersion": "22H2",
+  "editionId": "Core",
+  "installationType": "Client",
+  "major": 10,
+  "minor": 0,
+  "productName": "Windows 10 Home",
+  "ubr": 7663
+ },
+ "schema": 1,
+ "section": "environment"
+}

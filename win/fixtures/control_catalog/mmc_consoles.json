@@ -1,0 +1,27 @@
+{
+ "catalogRevision": "2026-08-24",
+ "data": [
+  "azman.msc",
+  "certlm.msc",
+  "certmgr.msc",
+  "comexp.msc",
+  "compmgmt.msc",
+  "devmgmt.msc",
+  "DevModeRunAsUserConfig.msc",
+  "diskmgmt.msc",
+  "eventvwr.msc",
+  "fsmgmt.msc",
+  "gpedit.msc",
+  "lusrmgr.msc",
+  "perfmon.msc",
+  "rsop.msc",
+  "secpol.msc",
+  "services.msc",
+  "taskschd.msc",
+  "tpm.msc",
+  "WF.msc",
+  "WmiMgmt.msc"
+ ],
+ "schema": 1,
+ "section": "mmcConsoles"
+}

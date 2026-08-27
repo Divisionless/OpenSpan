@@ -1,0 +1,476 @@
+{
+ "catalogRevision": "2026-08-24",
+ "data": [
+  {
+   "canonicalName": "Microsoft.PowerOptions",
+   "clsid": "{025A5937-A6BE-4686-A844-36FE4BEC8B6D}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\powercpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\powercpl.dll",
+   "registeredName": "Power Options",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Taskbar",
+   "clsid": "{0DF44EAA-FF21-4412-828E-260A8728E7F1}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\shell32.dll,-32517",
+   "module": "%SystemRoot%\\system32\\shell32.dll",
+   "registeredName": "Taskbar and Start Menu",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.CredentialManager",
+   "clsid": "{1206F5F1-0569-412C-8FEC-3204630DFB70}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\Vault.dll,-1#immutable1",
+   "module": "%SystemRoot%\\system32\\Vault.dll",
+   "registeredName": "Credential Manager",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.DefaultPrograms",
+   "clsid": "{17CD9488-1228-4B2F-88CE-4298E93E0966}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\sud.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\sud.dll",
+   "registeredName": "Set User Defaults",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.RemoteAppAndDesktopConnections",
+   "clsid": "{241D7C96-F8BF-4F85-B01F-E2B043341A4B}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\RADCUI.dll,-15300#immutable1",
+   "module": "%SystemRoot%\\System32\\RADCUI.dll",
+   "registeredName": "Workspaces Center",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "",
+   "clsid": "{38A98528-6CBF-4CA9-8DC0-B1E1D10F7B1B}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\van.dll,-2400",
+   "module": "%SystemRoot%\\system32\\van.dll",
+   "registeredName": "View Available Networks",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.WindowsFirewall",
+   "clsid": "{4026492F-2F69-46B8-B9BF-5654FC07E423}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\FirewallControlPanel.dll,-12122#immutable1",
+   "module": "%SystemRoot%\\System32\\FirewallControlPanel.dll",
+   "registeredName": "Windows Defender Firewall",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.PhoneAndModem",
+   "clsid": "{40419485-C444-4567-851A-2DD7BFA1684D}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\telephon.cpl,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\telephon.cpl",
+   "registeredName": "Phone and Modem",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.SpeechRecognition",
+   "clsid": "{58E3C745-D971-4081-9034-86E34B30836A}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\Speech\\SpeechUX\\speechuxcpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\Speech\\SpeechUX\\speechuxcpl.dll",
+   "registeredName": "Speech Recognition",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.MobilityCenter",
+   "clsid": "{5EA4F148-308C-46D7-98A9-49041B1DD468}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\mblctr.exe,-1002",
+   "module": "%SystemRoot%\\system32\\mblctr.exe",
+   "registeredName": "Mobility Center",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.UserAccounts",
+   "clsid": "{60632754-C523-4B62-B45C-4172DA012619}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\usercpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\usercpl.dll",
+   "registeredName": "User Accounts",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.RegionAndLanguage",
+   "clsid": "{62D8ED13-C9D0-4CE8-A914-47DD628FB1B0}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\intl.cpl,-3#immutable1",
+   "module": "%SystemRoot%\\System32\\intl.cpl",
+   "registeredName": "Region and Language",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Mouse",
+   "clsid": "{6C8EEC18-8D75-41B2-A177-8831D59D2D50}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\main.cpl,-100#immutable1",
+   "module": "%SystemRoot%\\System32\\main.cpl",
+   "registeredName": "Mouse",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.FolderOptions",
+   "clsid": "{6DFD7C5C-2451-11D3-A299-00C04F8EF6AF}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\shell32.dll,-22985",
+   "module": "%SystemRoot%\\system32\\shell32.dll",
+   "registeredName": "Folder Options",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Keyboard",
+   "clsid": "{725BE8F7-668E-4C7B-8F90-46BDB0936430}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\main.cpl,-102#immutable1",
+   "module": "%SystemRoot%\\System32\\main.cpl",
+   "registeredName": "Keyboard",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.DeviceManager",
+   "clsid": "{74246BFC-4C96-11D0-ABEF-0020AF6B0B7A}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\devmgr.dll,-4#immutable1",
+   "module": "%SystemRoot%\\System32\\devmgr.dll",
+   "registeredName": "Device Manager",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.ProgramsAndFeatures",
+   "clsid": "{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}",
+   "localizedStringRef": "@%systemroot%\\system32\\appwiz.cpl,-159#immutable1",
+   "module": "%systemroot%\\system32\\appwiz.cpl",
+   "registeredName": "Programs and Features",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.TabletPCSettings",
+   "clsid": "{80F3F1D5-FECA-45F3-BC32-752C152E456E}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\tabletpc.cpl,-10100",
+   "module": "%SystemRoot%\\System32\\tabletpc.cpl",
+   "registeredName": "Tablet PC Settings",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.IndexingOptions",
+   "clsid": "{87D66A43-7B11-4A28-9811-C86EE395ACF7}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\srchadmin.dll,-601#immutable1",
+   "module": "%SystemRoot%\\System32\\srchadmin.dll",
+   "registeredName": "Indexing Options",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.NetworkAndSharingCenter",
+   "clsid": "{8E908FC9-BECC-40F6-915B-F4CA0E70D03D}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\netcenter.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\netcenter.dll",
+   "registeredName": "Network and Sharing Center",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.AutoPlay",
+   "clsid": "{9C60DE1E-E5FC-40F4-A487-460851A8D915}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\autoplay.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\autoplay.dll",
+   "registeredName": "AutoPlay",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.SyncCenter",
+   "clsid": "{9C73F5E5-7AE7-4E32-A8E8-8D23B85255BF}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\SyncCenter.dll,-3000#immutable1",
+   "module": "%SystemRoot%\\System32\\SyncCenter.dll",
+   "registeredName": "Sync Center Folder",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Recovery",
+   "clsid": "{9FE63AFD-59CF-4419-9775-ABCC3849F861}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\recovery.dll,-101#immutable1",
+   "module": "%SystemRoot%\\System32\\recovery.dll",
+   "registeredName": "Recovery",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "",
+   "clsid": "{A0D4CD32-5D5D-4F72-BAAA-767A7AD6BAC5}",
+   "localizedStringRef": "Mail (Microsoft Outlook)",
+   "module": "",
+   "registeredName": "Mail",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.InternetOptions",
+   "clsid": "{A3DD4F92-658A-410F-84FD-6FBBBEF2FFFE}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\inetcpl.cpl,-4312#immutable1",
+   "module": "%SystemRoot%\\System32\\inetcpl.cpl",
+   "registeredName": "Internet Options",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.DevicesAndPrinters",
+   "clsid": "{A8A91A66-3A7D-4424-8D24-04E180695C7A}",
+   "localizedStringRef": "@%systemroot%\\system32\\DeviceCenter.dll,-1000#immutable1",
+   "module": "%systemroot%\\system32\\DeviceCenter.dll",
+   "registeredName": "Device Center",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.ColorManagement",
+   "clsid": "{B2C761C6-29BC-4F19-9251-E6195265BAF1}",
+   "localizedStringRef": "@%systemroot%\\system32\\colorcpl.exe,-6#immutable1",
+   "module": "%systemroot%\\system32\\colorcpl.exe",
+   "registeredName": "Color Management",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.BackupAndRestore",
+   "clsid": "{B98A2BEA-7D42-4558-8BD1-832F41BAC6FD}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\sdcpl.dll,-101#immutable1",
+   "module": "%SystemRoot%\\System32\\sdcpl.dll",
+   "registeredName": "Windows 7 File Recovery",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.System",
+   "clsid": "{BB06C0E4-D293-4F75-8A90-CB05B6477EEE}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\systemcpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\systemcpl.dll",
+   "registeredName": "System",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.ActionCenter",
+   "clsid": "{BB64F8A7-BEE7-4E1A-AB8D-7D8273F7FDB6}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\ActionCenterCPL.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\ActionCenterCPL.dll",
+   "registeredName": "Security and Maintenance CPL",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Fonts",
+   "clsid": "{BD84B380-8CA2-1069-AB1D-08000948F534}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\shell32.dll,-22981",
+   "module": "%SystemRoot%\\system32\\shell32.dll",
+   "registeredName": "Font Folder",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Troubleshooting",
+   "clsid": "{C58C4893-3BE0-4B45-ABB5-A63E4B8C8651}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\DiagCpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\DiagCpl.dll",
+   "registeredName": "Troubleshooting",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.TextToSpeech",
+   "clsid": "{D17D1D6D-CC3F-4815-8FE3-607E7D5D10B3}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\Speech\\SpeechUX\\sapi.cpl,-1",
+   "module": "%SystemRoot%\\System32\\Speech\\SpeechUX\\sapi.cpl",
+   "registeredName": "Text to Speech",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.AdministrativeTools",
+   "clsid": "{D20EA4E1-3957-11D2-A40B-0C5020524153}",
+   "localizedStringRef": "@%SystemRoot%\\system32\\shell32.dll,-22982",
+   "module": "%SystemRoot%\\system32\\shell32.dll",
+   "registeredName": "Administrative Tools",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.EaseOfAccessCenter",
+   "clsid": "{D555645E-D4F8-4C29-A827-D93C859C4F2A}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\accessibilitycpl.dll,-10#immutable1",
+   "module": "%SystemRoot%\\System32\\accessibilitycpl.dll",
+   "registeredName": "Ease of Access",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.BitLockerDriveEncryption",
+   "clsid": "{D9EF8727-CAC2-4E60-809E-86F80A666C91}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\fvecpl.dll,-47#immutable1",
+   "module": "%SystemRoot%\\System32\\fvecpl.dll",
+   "registeredName": "Secure Startup",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.DateAndTime",
+   "clsid": "{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\timedate.cpl,-51#immutable1",
+   "module": "%SystemRoot%\\System32\\timedate.cpl",
+   "registeredName": "Date and Time",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "RST",
+   "clsid": "{E342F0FE-FF1C-4C41-BE37-A0271FC90396}",
+   "localizedStringRef": "@%ProgramFiles%\\Intel\\Intel(R) Rapid Storage Technology\\Lang\\resource.dll,-20000",
+   "module": "%ProgramFiles%\\Intel\\Intel(R) Rapid Storage Technology\\Lang\\resource.dll",
+   "registeredName": "Intel(R) Rapid Storage Technology",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.WorkFolders",
+   "clsid": "{ECDB0924-4208-451E-8EE0-373C0956DE16}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\WorkfoldersControl.dll,-1",
+   "module": "%SystemRoot%\\System32\\WorkfoldersControl.dll",
+   "registeredName": "ECS",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Personalization",
+   "clsid": "{ED834ED6-4B5A-4BFE-8F11-A626DCB6A921}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\themecpl.dll,-1#immutable1",
+   "module": "%SystemRoot%\\System32\\themecpl.dll",
+   "registeredName": "Personalization",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.Sound",
+   "clsid": "{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\mmsys.cpl,-300#immutable1",
+   "module": "%SystemRoot%\\System32\\mmsys.cpl",
+   "registeredName": "Sound",
+   "views": [
+    "64",
+    "32"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.FileHistory",
+   "clsid": "{F6B6E965-E9B2-444B-9286-10C9152EDBC5}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\fhcpl.dll,-52#immutable1",
+   "module": "%SystemRoot%\\System32\\fhcpl.dll",
+   "registeredName": "History Vault",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.PenAndTouch",
+   "clsid": "{F82DF8F7-8B9F-442E-A48C-818EA735FF9B}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\tabletpc.cpl,-10103",
+   "module": "%SystemRoot%\\System32\\tabletpc.cpl",
+   "registeredName": "Pen and Touch",
+   "views": [
+    "64"
+   ]
+  },
+  {
+   "canonicalName": "Microsoft.StorageSpaces",
+   "clsid": "{F942C606-0914-47AB-BE56-1321B8035096}",
+   "localizedStringRef": "@%SystemRoot%\\System32\\SpaceControl.dll,-1",
+   "module": "%SystemRoot%\\System32\\SpaceControl.dll",
+   "registeredName": "Storage Spaces",
+   "views": [
+    "64"
+   ]
+  }
+ ],
+ "schema": 1,
+ "section": "controlPanelNamespace"
+}

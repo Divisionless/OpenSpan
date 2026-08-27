@@ -1,0 +1,25 @@
+{
+ "catalogRevision": "2026-08-24",
+ "data": [
+  "appwiz.cpl",
+  "bthprops.cpl",
+  "desk.cpl",
+  "Firewall.cpl",
+  "hdwwiz.cpl",
+  "inetcpl.cpl",
+  "intl.cpl",
+  "irprops.cpl",
+  "joy.cpl",
+  "main.cpl",
+  "mmsys.cpl",
+  "ncpa.cpl",
+  "powercfg.cpl",
+  "sysdm.cpl",
+  "TabletPC.cpl",
+  "telephon.cpl",
+  "timedate.cpl",
+  "wscui.cpl"
+ ],
+ "schema": 1,
+ "section": "cplModules"
+}
