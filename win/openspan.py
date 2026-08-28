@@ -1195,6 +1195,11 @@ def bind_wraplength(label, inset=LABEL_CHROME_W, floor=240):
 # monitor still wins on a shorter display.
 PAGE_PREFERRED_WINDOW_H = 930
 PAGE_MIN_WINDOW_H = 680
+# The width floor while a surface is showing. It is a WIDTH the same way the
+# height above is a viewport: wide enough for the Dashboard's two-column rows
+# and the in-frame dialogs, and it is restated whenever the dock expands.
+# Collapsed, the floor drops to the rail -- see App._render_dock.
+PAGE_MIN_WINDOW_W = 940
 
 
 def work_area_height(default=1080, device_name=None):
@@ -1359,19 +1364,16 @@ def page_window_plan(avail_h=None, preferred=PAGE_PREFERRED_WINDOW_H,
     return max(low, min(max(1, int(preferred)), avail_h)), low
 
 
-# ---- one scrolling page ----------------------------------------------------
+# ---- the Dashboard's one scrolling page ------------------------------------
 # These are document sections, not selectable panes. All four are built once,
 # packed in this order, and remain live. BtPanel and MultiArrangeCanvas are
 # service objects as much as widgets: the background poll reads both whether
 # or not their section is currently inside the viewport.
 #
-# THE CONSOLE IS NOT ONE OF THEM ANY MORE (2026-08-27). It is its own window --
-# see App._open_console_window -- and the Console control in the header opens
-# that window instead of scrolling to a section. Doug: *"make the console a
-# separate surface, then it can scroll lawfully."* Law 10 forbids a scrolling
-# surface INSIDE another scrolling surface, because the wheel gets hijacked
-# mid-gesture; a surface that scrolls as its own window contains nothing and is
-# contained by nothing, so there is no gesture to hijack.
+# Together they are ONE SURFACE -- the Dashboard -- and the Dashboard is one of
+# three the dock can invoke. The console is not a section here and never will
+# be again: see DOCK_SPEC below for why a sibling is lawful where a child was
+# not.
 PAGE_SPEC = (
     ("desk", "Desk"),
     ("devices", "Devices"),
@@ -1381,12 +1383,69 @@ PAGE_SPEC = (
 PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 
 
-# ---- law 10: one vertical scroller per window -------------------------------
-# The page Canvas is that scroller and there is no second one. Every other
-# container adapts to its own contents, so while the wheel is turning nothing
-# smaller can capture it: a widget with nothing hidden has nothing to scroll.
-# That is why the wheel handler carries no widget-type exemption any more, and
-# why the only ttk.Scrollbar left in this file is the page's own.
+# ---- the right-side dock, and the surfaces it invokes -----------------------
+# Doug, 2026-08-28: *"split this into Dashboard and Console -- invokable and
+# collapsible from the right side dock (that you create now) -- add Scripts as
+# a third surface here"*, and the distinction that governs the whole shape:
+# *"no pop out but we can replace surfaces and invoke entire new ones in the
+# side."*
+#
+# A DIALOG IS BANNED. A SURFACE IS NOT. The no-pop-out rule (28 July) is about
+# a window Windows places on a screen he was not looking at; a surface is a
+# region of THIS window that he asks for by name and that replaces whatever
+# was showing. So the console stopped being a Toplevel on 2026-08-28 and became
+# the second entry in this list. There is now no tk.Toplevel in the app outside
+# _identify_card.
+#
+# LAW 10 IS WHY THIS IS A LIST OF SIBLINGS AND NOT A TREE. Doug's definition:
+# *"nested scrolling is a scrolling surface inside another surface that
+# scrolls."* The test is same-axis containment -- the harm is scroll hijack,
+# his gesture is on one scroller and the pointer drifts over a second one
+# inside it, so the travel is taken away mid-gesture. Surfaces here are
+# siblings: exactly one is packed at a time, none contains another, and the
+# rail that switches them does not scroll at all. Each surface may therefore
+# own its own vertical scroller without owing anything to the others. The
+# Dashboard owns the page Canvas; the Console owns its Text's scrollbar; the
+# Scripts surface owns none, because it has nothing to hide yet.
+#
+# NAMING: `on_desktop.dock_rect` docks this WINDOW to the right edge of the
+# desktop. THIS dock is the rail INSIDE the window. They are unrelated, and
+# both are "the dock" in Doug's usage.
+DOCK_SPEC = (
+    ("dashboard", "Dashboard"),
+    ("console", "Console"),
+    ("scripts", "Scripts"),
+)
+DOCK_KEYS = tuple(key for key, _label in DOCK_SPEC)
+# The width floor while the dock is COLLAPSED: the rail alone, and nothing
+# else, so the window can be dragged down to a thin dock. The rail's own
+# requested width wins when it is larger; this is only the floor under it.
+DOCK_COLLAPSED_MIN_W = 96
+# The hover background for a rail entry. The literal is the TButton "active"
+# colour from App._theme, so a rail entry lights up exactly like every other
+# button in the app rather than inventing a second hover.
+DOCK_HOVER = "#221F2A"
+# The Scripts surface has no content and this is what it says instead. It is a
+# constant so the honesty of it is assertable: there is no script list, no
+# editor and no run button anywhere in the app, and a paragraph promising one
+# would be a drawing of a feature rather than the feature.
+SCRIPTS_EMPTY_STATE = (
+    "Nothing here yet, and nothing here runs anything.",
+    "This surface is reserved for a scoped scripting system: named scripts, "
+    "each carrying the scope it is allowed to act in, invoked from this dock "
+    "entry against a chosen target.",
+    "That system is a separate piece of work, and none of it is wired to this "
+    "surface yet, so there is no script list, no editor and no run button to "
+    "show you.",
+)
+
+
+# ---- law 10: one vertical scroller per surface ------------------------------
+# The Dashboard's page Canvas is that scroller for the Dashboard and there is
+# no second one inside it. Every other container on the page adapts to its own
+# contents, so while the wheel is turning nothing smaller can capture it: a
+# widget with nothing hidden has nothing to scroll. That is why the wheel
+# handler carries no widget-type exemption any more.
 #
 # Where a container genuinely cannot adapt forever, the CONTENT is bounded
 # instead of the container. The one surface here with an unbounded producer --
@@ -1395,11 +1454,12 @@ PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 # log grows a fitted container until the page is unusable, so the log had to be
 # cut short to keep the page a sane height. 2000 lines was that compromise.
 #
-# THE MEANING CHANGED on 2026-08-27, when the console became its own window.
-# A window scrolls; nothing about its height depends on how much is in it. The
-# only cost of a long log is now MEMORY, so the number is generous rather than
-# grudging, and it bounds the App's own line BUFFER (self._console_lines) --
-# which is the log, and outlives any open window -- rather than a widget.
+# THE MEANING CHANGED on 2026-08-27, when the console stopped being a section
+# of the page. It is a sibling surface now with a scrollbar of its own, and
+# nothing about its height depends on how much is in it. The only cost of a
+# long log is MEMORY, so the number is generous rather than grudging, and it
+# bounds the App's own line BUFFER (self._console_lines) -- which is the log,
+# and outlives any view of it -- rather than a widget.
 # Doug may correct the number: this line is the whole knob.
 #
 # NOTE, unchanged and still the important part: the console is not persisted
@@ -1513,11 +1573,11 @@ def trim_text_to_lines(widget, retained=CONSOLE_BUFFER_LINES):
 
     The newest output is what survives. Returns the resulting line count.
 
-    Still used by the console WINDOW, for a different reason than it was
-    written for: the window's Text must hold exactly what the App's line
+    Still used by the console SURFACE, for a different reason than it was
+    written for: the surface's Text must hold exactly what the App's line
     buffer holds, and the buffer drops its oldest line silently when it is
-    full. Trimming here is what keeps the two the same length, so a window
-    that has been open for a week shows the same history as one just opened.
+    full. Trimming here is what keeps the two the same length, so a console
+    left showing for a week holds the same history as one just invoked.
     """
     try:
         lines = int(widget.index("end-1c").split(".")[0])
@@ -7424,8 +7484,8 @@ class App:
         # Provisional, so the window does not flash at a silly size while it is
         # being built. BOTH heights are replaced at the end of __init__ with the
         # measured content height -- see the layout-budget block down there.
-        root.geometry("1120x930")   # multi-target canvas; console still collapsed
-        root.minsize(940, 680)
+        root.geometry("1120x930")   # multi-target canvas; dock rail on the right
+        root.minsize(PAGE_MIN_WINDOW_W, PAGE_MIN_WINDOW_H)
         root.configure(bg=BG)
         try:
             root.iconbitmap(ICON)
@@ -7442,17 +7502,16 @@ class App:
         # ui() queue + its UI-thread pump MUST exist before any worker thread
         # can be spawned (console sink, BtPanel refresh, boot thread, _tick)
         self._uiq = queue.Queue()
-        # THE LOG, and it is these four lines rather than a widget. The console
-        # is its own window now (law 10 -- see _open_console_window), the window
-        # is closable, and history that dies with a window is not a log. So the
-        # lines live in the App, bounded by CONSOLE_BUFFER_LINES, and a window
-        # is a VIEW of them: App.log appends here always and paints an open
-        # window as a side effect. This sits with _uiq for the same reason _uiq
-        # does -- log() must never be able to arrive before its own storage.
+        # THE LOG, and it is these two lines rather than a widget. The console
+        # is a dock surface (law 10 -- see DOCK_SPEC), the surface is built on
+        # first invoke and hidden whenever another surface is showing, and
+        # history that depends on being looked at is not a log. So the lines
+        # live in the App, bounded by CONSOLE_BUFFER_LINES, and the Text is a
+        # VIEW of them: App.log appends here always and paints the view as a
+        # side effect, if one has been built. This sits with _uiq for the same
+        # reason _uiq does -- log() must never arrive before its own storage.
         self._console_lines = collections.deque(maxlen=CONSOLE_BUFFER_LINES)
-        self._console_win = None     # the Toplevel, while one is open
-        self._console_text = None    # its Text, while one is open
-        self._console_geom = None    # where Doug last put it / how big
+        self._console_text = None    # the surface's Text, once it is built
         # Which thread IS the Tk thread. busy() and the row repaints are called
         # from both sides -- a click handler is already on it, a worker never is
         # -- and queueing a repaint that could just happen now costs up to a
@@ -7479,10 +7538,17 @@ class App:
         root.after(50, self._drain_ui)
         self._theme()
 
-        # The whole UI lives inside self._full: a pinned safety header followed
-        # by one vertical document. Every section is built and mapped once;
-        # scrolling changes only the viewport, never service lifetime.
+        # The whole UI lives inside self._full: a pinned safety header, then a
+        # body split into the surface region and the dock rail on its right.
+        # Every Dashboard section is built and mapped once; scrolling changes
+        # only the viewport, and switching surfaces changes only which one is
+        # packed -- never service lifetime.
         self._page_sections = {}
+        self._dock_surfaces = {}   # key -> the surface's own Frame
+        self._dock_entries = {}    # key -> (accent mark, rail button)
+        self._dock_rail = None
+        self._dock_active = DOCK_KEYS[0]
+        self._dock_collapsed = False
         # Every portal control in the window, in build order. There is more than
         # one of them now -- see _portal_button -- and this list is the ONLY
         # thing _render_portal_button and _busy_portal iterate, so a surface
@@ -7546,14 +7612,11 @@ class App:
             _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
             ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
                 side="right", padx=(0, 12))
-        # The Console control. It used to read "↓ Console" and scroll the page
-        # down to a Console section; the arrow was a promise about where the
-        # thing was. It is a window now, so the glyph says "opens away from
-        # here" and the command opens or raises it. This is the ONE control
-        # that behaves the same in window mode and on the surface.
-        self._cons_btn = ttk.Button(head, text="↗  Console",
-                                    command=self._open_console_window)
-        self._cons_btn.pack(side="right", padx=(0, 8))
+        # THERE IS NO CONSOLE CONTROL IN THE HEADER any more. It read "↓
+        # Console" while the console was a page section, then "↗ Console" while
+        # it was a window; it is a dock entry now, and a second control onto
+        # the same surface would be a second place for the two to disagree
+        # about what is showing. The rail is the only way in.
         # DRAG the window by the header. Native HTCAPTION doesn't fire here (Tk's
         # content window covers the subclassed frame), so we move it ourselves --
         # via a raw pure-move SetWindowPos (blit, no repaint) in _drag_move, which
@@ -7601,13 +7664,25 @@ class App:
                  font=("Consolas", 10), anchor="w").pack(
             fill="x", padx=16, pady=(0, PAD_MD))
 
-        # ---- the single scrolling document --------------------------------
+        # ---- the body: surfaces on the left, the dock rail on the right -----
+        # `body` is the whole cavity below the pinned header. The rail claims
+        # the right edge FIRST and keeps it: side="right" packs before any
+        # surface, so a surface arriving later takes only what is left. The
+        # rail is always visible and never scrolls; `_render_dock` is the one
+        # writer of what sits beside it.
+        body = tk.Frame(full, bg=BG)
+        body.pack(fill="both", expand=True)
+        self._dock_rail = self._build_dock_rail(body)
+
+        # ---- surface 1 of 3: the Dashboard, one scrolling document ---------
         # Canvas is the viewport, `bridge` is its one embedded document, and a
         # single scrollbar owns all page-level overflow. The inner frame's
         # requested height becomes scrollregion; the viewport's width is pushed
         # back into the embedded window so every section stays one column wide.
-        main = tk.Frame(full, bg=BG)
-        main.pack(fill="both", expand=True, padx=10, pady=PAD_SM)
+        #
+        # `main` is NOT packed here. Every surface is packed by _render_dock and
+        # nowhere else, so exactly one of them can be showing at a time.
+        main = tk.Frame(body, bg=BG)
         page_scroll = ttk.Scrollbar(main, orient="vertical",
                                     style=SCROLLBAR_STYLE)
         page_scroll.pack(side="right", fill="y")
@@ -7641,14 +7716,31 @@ class App:
             tk.Label(_heading, text=_label, bg=BG, fg=FG,
                      font=(FONT_UI_SEMI, 16), anchor="w").pack(side="left")
 
-        # ---- the console, which is NOT a section any more --------------------
-        # First it was a fixed 390px strip pinned to the right edge, toggled by
-        # widening the whole window. Then it was an ordinary page section, whose
-        # Text had to be fitted to its content and its content cut to 2000 lines
-        # so a fitted container could not grow the page without limit. Now it is
-        # its own window (_open_console_window) and neither compromise is left:
-        # nothing is built here at all, and the page has four sections.
+        # ---- surfaces 2 and 3, siblings of the Dashboard and of each other ---
+        # THE CONSOLE. First it was a fixed 390px strip pinned to the right
+        # edge, toggled by widening the whole window. Then it was an ordinary
+        # page section, whose Text had to be fitted to its content and its
+        # content cut to 2000 lines so a fitted container could not grow the
+        # page without limit. Then, for one day, it was a Toplevel. It is a
+        # dock surface now and none of those compromises is left: as a SIBLING
+        # of the page it contains nothing and is contained by nothing, so its
+        # own scrollbar hijacks no gesture, and it needs no window to say so.
         #
+        # Only the empty frame is built here. Its Text and scrollbar are built
+        # by _console_mount on the first invoke, so the buffer remains the log
+        # and rebuild-from-buffer remains the only way a console is populated.
+        cons = tk.Frame(body, bg=BG)
+        # SCRIPTS. New, and honestly empty -- see SCRIPTS_EMPTY_STATE.
+        scripts = tk.Frame(body, bg=BG)
+        self._build_scripts_surface(scripts)
+        self._dock_surfaces = {
+            "dashboard": main, "console": cons, "scripts": scripts,
+        }
+        # Show what the app has always shown while it is being measured; the
+        # persisted choice is restored at the end of __init__, once the
+        # Dashboard has been sized in the state it was sized in before.
+        self._render_dock()
+
         # The buffer these lines go into was created at the top of __init__,
         # with _uiq. This is only the moment the rest of the app is allowed to
         # start talking -- unchanged, so that what the log captures during
@@ -8111,13 +8203,19 @@ class App:
             self.root.winfo_screenheight(), self._desktop_monitor_name())
         geom_h, min_h = page_window_plan(avail_h)
         self._content_h = content_h
-        self.root.minsize(940, min_h)
+        self.root.minsize(PAGE_MIN_WINDOW_W, min_h)
         self.root.geometry(f"1120x{geom_h}")
         self._sync_page_scrollregion()
         self.root.after_idle(lambda: self._page_canvas.yview_moveto(0.0))
         _emit("info", f"layout: one scrolling page, {content_h}px of content "
                       f"inside a {geom_h}px window; arrangement canvas "
                       f"{self.canvas.winfo_reqheight()}px")
+        # ...and only NOW the surface Doug left showing. The measurement above
+        # is the Dashboard's, and it must be taken with the Dashboard packed
+        # exactly as it was before the dock existed, whatever he was last
+        # looking at. _restore_dock can therefore only ever change what is on
+        # screen, never what the page was measured to be.
+        self._restore_dock()
         self._tick()
         threading.Thread(target=self._module_worker,
                          name="esotericos-modules", daemon=True).start()
@@ -8574,6 +8672,184 @@ class App:
         except tk.TclError:
             pass          # the window went away mid-refresh; nothing to draw on
 
+    # ---- the right-side dock and the surfaces it invokes -------------------
+    # DIALOGS ARE BANNED; SURFACES ARE INVOKED FROM THE DOCK. That is the whole
+    # distinction, and it is the reason there is no tk.Toplevel below. A dialog
+    # is an OS window Windows places wherever it likes, on a screen Doug was not
+    # looking at (28 July). A surface is a region of THIS window that he asks
+    # for by name from the rail, that replaces whatever was showing, and that
+    # he can put away with a second click on the same entry. Doug, 28 August:
+    # *"no pop out but we can replace surfaces and invoke entire new ones in
+    # the side."*
+    #
+    # LAW 10 lives in this shape rather than in a rule anyone has to remember:
+    # the rail does not scroll, the surfaces are siblings, and exactly one of
+    # them is packed at a time, so no scroller in this app is ever inside
+    # another scroller on the same axis. See DOCK_SPEC.
+
+    def _build_dock_rail(self, parent):
+        """The rail itself: always visible, never scrolling, one entry each.
+
+        It claims the right edge before any surface exists, so the surface
+        region is whatever the rail does not want. Deliberately word-labelled
+        rather than iconified: every other control in this app says what it
+        does in words, and a rail of glyphs would be the one place a reader has
+        to guess.
+        """
+        rail = tk.Frame(parent, bg=PANEL)
+        rail.pack(side="right", fill="y")
+        for key, label in DOCK_SPEC:
+            row = tk.Frame(rail, bg=PANEL)
+            row.pack(fill="x", pady=(0, 1))
+            # The accent stripe, and it is the real "which one is showing"
+            # signal. Colour alone would have to differ from hover by a shade;
+            # a stripe is either there or it is not.
+            mark = tk.Frame(row, bg=PANEL, width=3)
+            mark.pack(side="left", fill="y")
+            btn = tk.Button(row, text=label, bg=PANEL, fg=MUTED, bd=0,
+                            relief="flat", cursor="hand2", anchor="w",
+                            font=(FONT_UI, 9), padx=10, pady=8,
+                            activebackground=CARD, activeforeground=FG,
+                            command=lambda k=key: self._dock_click(k))
+            btn.pack(side="left", fill="x", expand=True)
+            # The font never changes with state. A semibold active entry would
+            # widen the button, and the button's width IS the rail's width, so
+            # the rail would twitch every time a surface was invoked.
+            btn.bind("<Enter>", lambda _e, k=key: self._paint_dock_entry(
+                k, hover=True))
+            btn.bind("<Leave>", lambda _e, k=key: self._paint_dock_entry(k))
+            self._dock_entries[key] = (mark, btn)
+        return rail
+
+    def _paint_dock_entry(self, key, hover=False):
+        """One rail entry, in the state the dock is actually in."""
+        entry = self._dock_entries.get(key)
+        if entry is None:
+            return
+        mark, button = entry
+        live = key == self._dock_active and not self._dock_collapsed
+        try:
+            mark.config(bg=ACCENT if live else PANEL)
+            if live:
+                button.config(bg=CARD, fg=FG)
+            elif hover:
+                button.config(bg=DOCK_HOVER, fg=FG)
+            else:
+                button.config(bg=PANEL, fg=MUTED)
+        except tk.TclError:
+            pass       # torn down mid-repaint; nothing to paint on
+
+    def _render_dock(self):
+        """THE ONE WRITER of what the surface region shows.
+
+        Forget first, then pack, so two surfaces are never in the cavity at the
+        same instant. Collapsed means nothing is packed at all: the rail is
+        still there, and the window's minimum width drops to it, so it can be
+        dragged down to a thin dock. (On the desktop the placement is
+        on_desktop's, and on_desktop.MIN_WIDTH is its own floor.)
+        """
+        showing = None if self._dock_collapsed else self._dock_active
+        for key, frame in self._dock_surfaces.items():
+            if key != showing:
+                frame.pack_forget()
+        if showing == "console":
+            self._console_mount()
+        if showing is not None:
+            # padx/pady are the Dashboard's original ones: a surface occupies
+            # exactly the cavity the single page used to occupy. side="left"
+            # takes whatever the rail did not want, and nothing else in the app
+            # packs a surface -- this line is the whole of "one at a time".
+            surface = self._dock_surfaces[showing]
+            surface.pack(side="left", fill="both", expand=True,
+                         padx=10, pady=PAD_SM)
+        for key in self._dock_surfaces:
+            self._paint_dock_entry(key)
+        floor = PAGE_MIN_WINDOW_W
+        if self._dock_collapsed:
+            floor = max(DOCK_COLLAPSED_MIN_W, self._rail_width())
+        try:
+            self.root.minsize(floor, self.root.minsize()[1])
+        except (tk.TclError, IndexError, TypeError):
+            pass
+        return showing
+
+    def _rail_width(self):
+        """What the rail asks for, or the floor if it cannot say yet."""
+        rail = self._dock_rail
+        if rail is None:
+            return DOCK_COLLAPSED_MIN_W
+        try:
+            return int(rail.winfo_reqwidth())
+        except (tk.TclError, ValueError, TypeError):
+            return DOCK_COLLAPSED_MIN_W
+
+    def _dock_state(self, active, collapsed):
+        """The ONE writer of the dock's persisted state.
+
+        Both keys go into openspan_settings.json, the same file and the same
+        two functions every other UI preference uses (float_window,
+        desktop_monitor). Which surface is showing is a preference of exactly
+        that kind, and a second settings file would be a second place for the
+        app's idea of itself to drift.
+        """
+        self._dock_active = active
+        self._dock_collapsed = bool(collapsed)
+        save_setting("dock_surface", self._dock_active)
+        save_setting("dock_collapsed", self._dock_collapsed)
+        self._render_dock()
+        return True
+
+    def _dock_show(self, key):
+        """Invoke a surface. Never collapses -- that is _dock_click's job."""
+        if key not in self._dock_surfaces:
+            return False
+        return self._dock_state(key, False)
+
+    def _dock_click(self, key):
+        """A rail entry was pressed: invoke it, or put away the one showing.
+
+        Clicking the ACTIVE entry collapses. The active key is kept across the
+        collapse rather than cleared, so the next click on it -- or a restart
+        -- comes back to the surface he was on rather than to a default.
+        """
+        if key not in self._dock_surfaces:
+            return False
+        if key == self._dock_active and not self._dock_collapsed:
+            return self._dock_state(key, True)
+        return self._dock_show(key)
+
+    def _restore_dock(self):
+        """Come back up showing what was showing. Reads; never writes.
+
+        An unknown key -- a setting hand-edited, or a surface that has since
+        been removed -- falls back to the first entry rather than to nothing,
+        because a window that opens blank looks broken.
+        """
+        key = load_setting("dock_surface", DOCK_KEYS[0])
+        if key not in self._dock_surfaces:
+            key = DOCK_KEYS[0]
+        self._dock_active = key
+        self._dock_collapsed = bool(load_setting("dock_collapsed", False))
+        return self._render_dock()
+
+    def _build_scripts_surface(self, parent):
+        """The third surface, and it is honestly empty.
+
+        There is no script list, no editor and no run button here, because the
+        scoped scripting system is a separate piece of work that has not been
+        designed. Drawing a plausible one would make the app claim a feature it
+        does not have, and every fake row would have to be deleted before a
+        real one could be written. So: what it will be, and that it is not it.
+        """
+        tk.Label(parent, text="Scripts", bg=BG, fg=FG,
+                 font=(FONT_UI_SEMI, 16), anchor="w").pack(
+            fill="x", padx=16, pady=(PAD_LG, PAD_XS))
+        for line in SCRIPTS_EMPTY_STATE:
+            tk.Label(parent, text=line, bg=BG, fg=MUTED, font=(FONT_UI, 10),
+                     anchor="w", justify="left", wraplength=560).pack(
+                fill="x", padx=16, pady=(0, PAD_MD))
+        return parent
+
     # ---- the single-page viewport ----------------------------------------
     def _sync_page_scrollregion(self):
         """Make every requested document pixel reachable by the scrollbar."""
@@ -8628,10 +8904,18 @@ class App:
         return "break"
 
     def show_section(self, key):
-        """Scroll one already-live section to the top of the viewport."""
+        """Scroll one already-live Dashboard section to the top of the viewport.
+
+        Sections belong to ONE surface, and a section of a surface that is not
+        showing cannot be scrolled to. So an anchor invokes the Dashboard
+        first: the caller asked for the section, and this is what asking for it
+        now costs. "console" is not a key here and must not be -- it is a
+        surface, and it is reached from the dock, not from a scroll.
+        """
         section = self._page_sections.get(key)
         if section is None:
             return False
+        self._dock_show("dashboard")
         self.root.update_idletasks()
         self._sync_page_scrollregion()
         total = max(1, self._page_body.winfo_reqheight())
@@ -9293,16 +9577,16 @@ class App:
                     pass  # root gone -> the pump simply ends
 
     # ---- console ----
-    # THE LOG IS THE BUFFER, NOT THE WIDGET. The console lives in its own
-    # window (law 10: a surface that scrolls as its own window is contained by
-    # nothing, so its scrollbar cannot hijack anyone's gesture), and that window
-    # is closable. A log whose only copy is a closable widget loses its history
-    # the first time it is closed and shows an empty page when it is reopened.
-    # So App.log appends to self._console_lines -- always -- and paints the open
-    # window as a side effect, if there is one. Reopening replays the buffer.
+    # THE LOG IS THE BUFFER, NOT THE WIDGET. The console is a dock surface (law
+    # 10: a sibling surface is contained by nothing, so its scrollbar cannot
+    # hijack anyone's gesture), and the surface is built on first invoke, not
+    # at startup. A log whose only copy is a widget has no history before that
+    # widget exists. So App.log appends to self._console_lines -- always -- and
+    # paints the view as a side effect, if one has been built. The first invoke
+    # replays the buffer into it.
     #
-    # Colours and tags are declared once, here, because the window that uses
-    # them is built and destroyed repeatedly and must look identical each time.
+    # Colours and tags are declared once, here, rather than inline in the
+    # builder, because they are the console's identity and not its layout.
     CONSOLE_BG = "#05080D"
     CONSOLE_FG = "#B8B3C2"
     CONSOLE_FONT = ("Consolas", 9)
@@ -9319,23 +9603,24 @@ class App:
         """Record one timestamped, colour-tagged line (UI thread).
 
         The line goes into the App's bounded buffer first and unconditionally:
-        that is what makes the console window closable without losing output,
-        and what a reopened window is rebuilt from. Painting it into an open
-        window is the second, optional half.
+        that is what lets the console surface be built late, and never invoked
+        at all, without losing output, and it is what the surface is rebuilt
+        from. Painting it into a built view is the second, optional half.
 
         The timestamp is taken HERE, not at paint time, so a line replayed into
-        a window opened an hour later still carries the moment it happened.
+        a console invoked an hour later still carries the moment it happened.
         """
         line = (time.strftime("%H:%M:%S "), str(kind), str(text).rstrip())
         self._console_lines.append(line)   # drops its oldest when full
         self._console_paint((line,))
 
     def _console_paint(self, lines):
-        """Append buffered lines to the open window, if one is open.
+        """Append buffered lines to the console's view, if one has been built.
 
         Tail-following, which is lawful here and was not lawful on the page:
-        this window IS the surface, so following its own tail disturbs nothing
-        else. But it follows only when the view is ALREADY at the bottom. If
+        this Text IS a whole surface, so following its own tail disturbs
+        nothing else. But it follows only when the view is ALREADY at the
+        bottom. If
         Doug has scrolled up to read something, new output must not yank him
         back down -- so the decision is made from yview() BEFORE the insert,
         never after, and never from a flag we set ourselves.
@@ -9358,7 +9643,7 @@ class App:
             pass
 
     def _console_at_tail(self):
-        """Is the console window scrolled to the end of its output?
+        """Is the console surface scrolled to the end of its output?
 
         yview() is (first, last) as fractions of the whole. `last` reaches
         exactly 1.0 at the bottom; the epsilon covers the rounding a partial
@@ -9373,72 +9658,46 @@ class App:
         except (tk.TclError, IndexError, TypeError, ValueError):
             return True
 
-    def _open_console_window(self):
-        """Open the console window, or raise the one already open.
+    def _console_mount(self):
+        """Build the console's view inside its surface, on the first invoke.
 
-        THE SECOND AND LAST PLACE IN THIS APP THAT MAY OPEN AN OS WINDOW, and
-        test_frame_modal exempts it by name alongside _identify_card. The
-        no-pop-out rule (28 July) is about DIALOGS appearing on a screen Doug
-        was not looking at. This is not a dialog: it is a surface he asks for
-        by name, and asking for it is the whole point -- Doug, 27 August:
-        *"make the console a separate surface, then it can scroll lawfully."*
+        NO WINDOW. For one day this method opened a tk.Toplevel and was exempt
+        by name in test_frame_modal; it is a dock surface now and the exemption
+        is gone with it. The reason the Toplevel was ever tolerable is the
+        reason it is unnecessary: what law 10 forbids is a scroller INSIDE
+        another scroller on the same axis, and this Text is inside no scroller
+        at all -- it is a sibling of the page, not a child of it. A window was
+        one way to be nobody's child. Being nobody's child is the other.
 
-        It is deliberately NOT transient() on the root. On the surface the root
-        is pinned to the bottom of the z-order by OnDesktop, and a transient
-        child follows its owner down there; a plain Toplevel keeps its own
-        z-order and its own taskbar button, which is what a second surface is.
-
-        DESTROY, NOT HIDE, on close -- see _close_console_window. The reopen
-        path therefore runs every time and is the only path, so it cannot rot.
+        LATE, AND ONCE. Nothing is built until Doug asks for the console, and
+        nothing is destroyed when he switches away -- switching only unpacks
+        the frame. So the buffer is still the log, rebuild-from-buffer is still
+        the only way a console is ever populated, and there is exactly one copy
+        of the history in the process at any time.
         """
-        win = self._console_win
-        if win is not None:
-            try:
-                win.deiconify()
-                win.lift()
-                win.focus_force()
-                return win
-            except tk.TclError:
-                # destroyed behind our back (session teardown): rebuild
-                self._console_win = self._console_text = None
-        win = tk.Toplevel(self.root)
-        self._console_win = win
-        win.title(f"{APP_LABEL} — Console")
-        win.configure(bg=BG)
-        win.minsize(520, 240)
-        # Where he last put it. A destroyed window has no memory of its own, so
-        # the App keeps the geometry across a close instead of making every
-        # reopen land wherever Windows feels like putting it.
-        win.geometry(self._console_geom or "820x560")
-        try:
-            win.iconbitmap(ICON)
-        except Exception:  # noqa: BLE001
-            pass
-        # CLOSABLE IN BOTH MODES. The main window refuses WM_CLOSE on the
-        # surface (there is no shell to fall back to); this window is the
-        # deliberate exception, because closing it takes away a view of a log
-        # and nothing else. self.surface is not consulted here on purpose.
-        win.protocol("WM_DELETE_WINDOW", self._close_console_window)
-        win.bind("<Escape>", lambda _e: self._close_console_window())
-
-        head = tk.Frame(win, bg=PANEL)
-        head.pack(fill="x", padx=10, pady=(PAD_MD, 0))
+        if self._console_text is not None:
+            return self._console_text
+        parent = self._dock_surfaces.get("console")
+        if parent is None:
+            return None
+        head = tk.Frame(parent, bg=PANEL)
+        head.pack(fill="x", pady=(PAD_MD, 0))
         tk.Label(head, text="Console — every command the app runs", bg=PANEL,
                  fg=MUTED, font=(FONT_UI, 9, "bold")).pack(
             side="left", pady=(0, 4))
+        # Clear, and no Close. Putting the console away is the dock's job now,
+        # and a Close button here would be a second control that disagrees with
+        # the rail about what is showing.
         ttk.Button(head, text="Clear", width=6,
                    command=self._console_clear).pack(side="right")
-        ttk.Button(head, text="Close", width=6,
-                   command=self._close_console_window).pack(
-            side="right", padx=(0, 6))
 
-        wrap = tk.Frame(win, bg=PANEL)
-        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        wrap = tk.Frame(parent, bg=PANEL)
+        wrap.pack(fill="both", expand=True, pady=(0, PAD_MD))
         # LAW 10, satisfied rather than dodged: ONE vertical scroller, and it
-        # belongs to this window, which is not inside anything. Nothing here is
-        # fitted to its content and nothing is capped for layout's sake -- that
-        # was the price of living on the page, and this is what buying out of
-        # it looks like.
+        # belongs to this surface, which is inside no other surface. Nothing
+        # here is fitted to its content and nothing is capped for layout's
+        # sake -- that was the price of living on the page, and this is what
+        # buying out of it looks like.
         scroll = ttk.Scrollbar(wrap, orient="vertical", style=SCROLLBAR_STYLE)
         scroll.pack(side="right", fill="y")
         text = tk.Text(wrap, bg=self.CONSOLE_BG, fg=self.CONSOLE_FG, bd=0,
@@ -9449,22 +9708,17 @@ class App:
         for _tag, _colour in self.CONSOLE_TAGS:
             text.tag_config(_tag, foreground=_colour)
         self._console_text = text
-        # The page's wheel handler is bound with bind_all, so it sees this
-        # window's wheel events too -- and declines them, because _inside()
+        # The Dashboard's wheel handler is bound with bind_all, so it sees this
+        # surface's wheel events too -- and declines them, because _inside()
         # only claims widgets under the page canvas. The Text's own class
         # binding then scrolls this surface. No exemption is needed and none
-        # is added; that is the point of scoping the handler by ancestry.
+        # is added; that is the point of scoping the handler by ancestry, and
+        # it is what makes two scrollers in one window lawful.
         self._console_replay()
-        _paint_dark_titlebar(win)
-        win.lift()
-        try:
-            win.focus_force()
-        except tk.TclError:
-            pass
-        return win
+        return text
 
     def _console_replay(self):
-        """Rebuild the open window's Text from the buffer, from empty."""
+        """Rebuild the console's Text from the buffer, from empty."""
         widget = self._console_text
         if widget is None:
             return
@@ -9476,41 +9730,14 @@ class App:
             return
         self._console_paint(tuple(self._console_lines))
         try:
-            widget.see("end")     # a freshly opened console opens at the tail
+            widget.see("end")     # a freshly built console opens at the tail
         except Exception:  # noqa: BLE001
-            pass
-
-    def _close_console_window(self):
-        """Close the console window without disturbing the app.
-
-        DESTROY, not withdraw. A hidden window would be a second copy of the
-        whole log, kept in step with the buffer forever for the sake of a
-        window nobody is looking at; destroying leaves exactly one copy of the
-        history (the buffer) whenever the window is shut, and makes
-        rebuild-from-buffer the only way a console is ever populated -- so the
-        path that must work after a close is the same path that runs on the
-        first open. The geometry is the one thing worth keeping, and it is kept.
-
-        Nothing here touches the root: closing this window is not closing the
-        app, on the surface or in a window.
-        """
-        win = self._console_win
-        self._console_win = self._console_text = None
-        if win is None:
-            return
-        try:
-            self._console_geom = win.geometry()
-        except tk.TclError:
-            pass
-        try:
-            win.destroy()
-        except tk.TclError:
             pass
 
     def _console_clear(self):
         """Clear BOTH copies. The buffer is the log, so clearing only the
         widget would leave a console that empties and then refills itself the
-        next time it is opened."""
+        next time it is built."""
         self._console_lines.clear()
         widget = self._console_text
         if widget is None:

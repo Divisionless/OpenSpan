@@ -369,6 +369,49 @@ with tempfile.TemporaryDirectory() as tmp:
     check("the EsotericOS Desktop monitor round-trips independently",
           ns["load_setting"]("desktop_monitor") == "\\\\.\\DISPLAY1")
 
+    # The dock's two keys ride the same file, through the same two functions.
+    # Which surface is showing, and whether the dock is collapsed, are UI
+    # preferences of exactly the kind float_window is; a second settings file
+    # would be a second place for the app's idea of itself to drift.
+    check("with nothing written, the dock opens on its first entry uncollapsed",
+          ns["load_setting"]("dock_surface", "dashboard") == "dashboard"
+          and ns["load_setting"]("dock_collapsed", False) is False)
+    ns["save_setting"]("dock_surface", "console")
+    ns["save_setting"]("dock_collapsed", True)
+    check("the active surface and the collapse round-trip through "
+          "openspan_settings.json",
+          ns["load_setting"]("dock_surface") == "console"
+          and ns["load_setting"]("dock_collapsed") is True)
+    with open(settings_path, encoding="utf-8") as f:
+        written = json.load(f)
+    check("and they sit beside the settings already there, destroying none",
+          written["vm_name"] == "OpenSpan"
+          and written["desktop_monitor"] == "\\\\.\\DISPLAY1"
+          and written["dock_surface"] == "console")
+
+
+# ---- the dock writes its state in exactly one place -------------------------
+
+dock_saves = [node for node in ast.walk(tree)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id == "save_setting"
+              and node.args and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value in ("dock_surface", "dock_collapsed")]
+check("each dock key is written in exactly one place", len(dock_saves) == 2)
+dock_state = next((node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef)
+                   and node.name == "_dock_state"), None)
+check("that place is App._dock_state, the one writer",
+      dock_state is not None
+      and all(any(n is save for n in ast.walk(dock_state))
+              for save in dock_saves))
+check("the dock invents no settings file of its own",
+      len([node for node in ast.walk(tree)
+           if isinstance(node, ast.Constant)
+           and isinstance(node.value, str)
+           and node.value.endswith(".json")
+           and "dock" in node.value]) == 0)
+
 
 # ---- the label flips with the state ----------------------------------------
 
@@ -441,22 +484,25 @@ check("the placement goes both ways from the one setting",
       branches == ["apply", "release"])
 
 # Which METHODS open an OS window, not how many calls there are: a count is a
-# number to bump, a name list says who is allowed. Two are: the identify card
-# (a number on each real monitor, which cannot be drawn from inside one window)
-# and the console window (2026-08-27, law 10 -- a scrolling surface is lawful
-# when it is its own window). Anything else is a pop-out and must fail here.
+# number to bump, a name list says who is allowed. ONE is: the identify card (a
+# number on each real monitor, which cannot be drawn from inside one window).
+#
+# The console window was the second for one day (2026-08-27 to 2026-08-28) and
+# is not a window any more. Dialogs are banned; SURFACES are not, and a surface
+# is not a window -- it is a region of this window, invoked by name from the
+# right-side dock and replacing whatever was showing there. So a new surface
+# never appears in this set. Anything that does is a pop-out and must fail here.
 _owners = set()
 for _fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
     if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
            and n.func.attr == "Toplevel" for n in ast.walk(_fn)):
         _owners.add(_fn.name)
-check("no new Toplevel: the identify card and the console window are the only "
-      "two, one call each",
-      _owners == {"_identify_card", "_open_console_window"}
+check("no new Toplevel: the identify card is the only one, one call",
+      _owners == {"_identify_card"}
       and len([node for node in ast.walk(tree)
                if isinstance(node, ast.Call)
                and isinstance(node.func, ast.Attribute)
-               and node.func.attr == "Toplevel"]) == 2)
+               and node.func.attr == "Toplevel"]) == 1)
 
 check("nothing calls the old mode wording anywhere in the app",
       "desk_mode" not in source and "desk mode" not in source.lower())

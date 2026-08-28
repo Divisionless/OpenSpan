@@ -1,22 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The control GUI is one ordered, vertically scrolling document.
+"""The DASHBOARD is one ordered, vertically scrolling document.
 
-FOUR sections, not five. The console left the page on 2026-08-27 and became
-its own window. Law 10, as Doug defined it that morning: *"nested scrolling is
-a scrolling surface inside another surface that scrolls."* The harm is scroll
-hijack -- his gesture is on the page, the pointer drifts over a smaller
-scrollable region, and the scroll is taken away from him mid-gesture. The test
-is same-axis containment, so a surface that scrolls AS ITS OWN WINDOW is
-lawful: nothing contains it, so there is no gesture for it to take. The console
-was the one surface with an unbounded producer, so it was the one that had to
-move -- and having moved, it may scroll, follow its own tail, and keep a
-generous history.
+FOUR sections, not five. The console left the page on 2026-08-27 and is a
+sibling surface of it since 2026-08-28. Law 10, as Doug defined it: *"nested
+scrolling is a scrolling surface inside another surface that scrolls."* The
+harm is scroll hijack -- his gesture is on the page, the pointer drifts over a
+smaller scrollable region, and the scroll is taken away from him mid-gesture.
+The test is same-axis CONTAINMENT, so two scrollers in one window are lawful
+as long as neither is inside the other. The console was the one surface with an
+unbounded producer, so it was the one that had to leave the page -- and having
+left, it may scroll, follow its own tail, and keep a generous history.
+
+This file owns the Dashboard's document contract and the console's buffer. The
+dock that switches between them is asserted in test_dock_surfaces.py.
 
 The test never constructs App: doing that starts workers and can touch the VM.
 It reads the assembly contract from the AST, then drives the shipped viewport
 and console methods against deterministic fakes and withdrawn Tk controls. No
-Toplevel is ever built here; the console window's contract is asserted from
-source and its behaviour from its own methods against a fake Text.
+Toplevel is ever built here -- there is no longer one to build -- and the
+console's contract is asserted from source, its behaviour from its own methods
+against a fake Text.
 """
 import ast
 import collections
@@ -90,17 +93,17 @@ show = _method("App", "show_section")
 wheel = _method("App", "_on_page_mousewheel")
 viewport = _method("App", "_on_page_viewport_configure")
 content = _method("App", "_on_page_content_configure")
-open_console = _method("App", "_open_console_window")
+mount_console = _method("App", "_console_mount")
 check("App.__init__ exists", init is not None)
 check("all viewport methods exist",
-      all((show, wheel, viewport, content, open_console)))
+      all((show, wheel, viewport, content, mount_console)))
 parent, packs = _layout(init)
 init_src = ast.unparse(init)
 
 
 print("\n---- one document, not selectable panes ----")
-# FOUR sections since 2026-08-27. Console was the fifth and is now its own
-# window: law 10 forbids a scroller inside a scroller, and the console is the
+# FOUR sections since 2026-08-27. Console was the fifth and is now a sibling
+# surface: law 10 forbids a scroller inside a scroller, and the console is the
 # one surface whose producer is unbounded, so it was the one that had to leave.
 expected = (("desk", "Desk"), ("devices", "Devices"),
             ("bluetooth", "Bluetooth"), ("system", "System"))
@@ -130,13 +133,14 @@ check("mouse wheel and legacy wheel buttons use the same page handler",
 scrollbars = [node for node in ast.walk(MODULE)
               if isinstance(node, ast.Call)
               and _name(node.func) == "ttk.Scrollbar"]
-# LAW 10 IS PER WINDOW, NOT PER MODULE. It forbids a scrolling surface INSIDE
-# another scrolling surface, because the wheel is hijacked mid-gesture; a
-# surface that scrolls as its own window is contained by nothing and hijacks
-# nothing. So the number to assert is one scrollbar per window, and which
-# method each one is built in is the whole of the claim: the page's, in
-# App.__init__, and the console window's, in _open_console_window. This once
-# asserted 3 (page, device tree, in-page console), then 1, and is now 2 --
+# LAW 10 IS PER SURFACE, NOT PER MODULE AND NOT PER WINDOW. It forbids a
+# scrolling surface INSIDE another scrolling surface, because the wheel is
+# hijacked mid-gesture; two scrollers that are SIBLINGS contain each other
+# nowhere and hijack nothing. So the number to assert is one scrollbar per
+# surface, and which method each one is built in is the whole of the claim:
+# the Dashboard's, in App.__init__, and the Console's, in _console_mount. This
+# once asserted 3 (page, device tree, in-page console), then 1, then 2 for the
+# console window; it is still 2, and now both live in the same window --
 # every change of that number is a law-10 decision, not a tidy-up.
 scroll_owners = {}
 for _cls in [node for node in ast.walk(MODULE)
@@ -148,15 +152,20 @@ for _cls in [node for node in ast.walk(MODULE)
                       and _name(n.func) == "ttk.Scrollbar"])
         if _count:
             scroll_owners[f"{_cls.name}.{_item.name}"] = _count
-check("law 10: exactly two scrollbars, one per window",
+check("law 10: exactly two scrollbars, one per surface",
       len(scrollbars) == 2, f"{len(scrollbars)} Scrollbar calls")
-check("the page owns exactly one, built in App.__init__",
+check("the Dashboard owns exactly one, built in App.__init__",
       scroll_owners.get("App.__init__") == 1, repr(scroll_owners))
-check("the console window owns exactly one, built in _open_console_window",
-      scroll_owners.get("App._open_console_window") == 1, repr(scroll_owners))
+check("the Console owns exactly one, built in _console_mount",
+      scroll_owners.get("App._console_mount") == 1, repr(scroll_owners))
 check("no third owner: nothing else in the module builds a scroller",
-      set(scroll_owners) == {"App.__init__", "App._open_console_window"},
+      set(scroll_owners) == {"App.__init__", "App._console_mount"},
       repr(scroll_owners))
+check("the dock rail builds no scroller: a rail that scrolls could hide an "
+      "entry, and every entry must always be reachable",
+      not [n for n in ast.walk(_method("App", "_build_dock_rail"))
+           if isinstance(n, ast.Call)
+           and _name(n.func) in ("ttk.Scrollbar", "tk.Canvas")])
 check("both scrollbars use the dark named style",
       all(any(keyword.arg == "style"
               and isinstance(keyword.value, ast.Name)
@@ -241,9 +250,10 @@ check("the page document builds no console Text at all",
 
 print("\n---- the console is its own surface, and may scroll ----")
 # THE CAP CHANGED MEANING. It used to bound a fitted container's CONTENT so an
-# unbounded log could not grow the page. In its own window nothing about height
-# depends on length, so only memory is left and the number is generous -- and
-# it now bounds the App's line BUFFER, which is the log and outlives the window.
+# unbounded log could not grow the page. In a surface of its own nothing about
+# height depends on length, so only memory is left and the number is generous
+# -- and it now bounds the App's line BUFFER, which is the log and outlives any
+# view of it.
 check("the console cap is still one module-level number",
       isinstance(A.CONSOLE_BUFFER_LINES, int)
       and A.CONSOLE_BUFFER_LINES > 0, repr(A.CONSOLE_BUFFER_LINES))
@@ -265,24 +275,24 @@ check("the buffer is bounded by the one constant, and by nothing else",
 check("the timestamp is taken when the line happens, not when it is painted",
       "time.strftime('%H:%M:%S ')" in log_src, log_src)
 paint_src = _body_src(_method("App", "_console_paint"))
-check("painting an open window is the SECOND half, and is skipped when there "
-      "is no window", "self._console_text" in paint_src
+check("painting a built view is the SECOND half, and is skipped when the "
+      "console has never been invoked", "self._console_text" in paint_src
       and "if widget is None" in paint_src, paint_src)
 check("the widget is kept the same length as the buffer that feeds it",
       "trim_text_to_lines(widget, CONSOLE_BUFFER_LINES)" in paint_src)
 check("trimming still deletes from the TOP, so the newest output survives",
       'widget.delete("1.0", f"{lines - retained + 1}.0")' in SOURCE)
 
-console_src = _body_src(open_console) if open_console else ""
+console_src = _body_src(mount_console) if mount_console else ""
 replay_src = _body_src(_method("App", "_console_replay"))
-check("a reopened console is rebuilt from the buffer, from empty",
+check("a console is rebuilt from the buffer, from empty",
       "widget.delete('1.0', 'end')" in replay_src
       and "self._console_paint(tuple(self._console_lines))" in replay_src,
       replay_src)
-check("opening the window replays the buffer into it",
+check("building the view replays the buffer into it",
       "self._console_replay()" in console_src, console_src)
 clear_src = _body_src(_method("App", "_console_clear"))
-check("Clear clears BOTH copies, or the console refills itself on reopen",
+check("Clear clears BOTH copies, or the console refills itself on rebuild",
       "self._console_lines.clear()" in clear_src
       and "widget.delete('1.0', 'end')" in clear_src, clear_src)
 
@@ -303,7 +313,7 @@ check("nothing on the PAGE chases its own tail",
               ('self.out.see("end")', 'c.see("end")')))
 # Every see("end") in the module, by the method it lives in. Chasing the tail
 # is exactly the yank law 10 is about, so the set of methods allowed to do it
-# is the assertion, and both are the console window's. (BtPanel.rename's
+# is the assertion, and both are the console surface's. (BtPanel.rename's
 # tree.see(mac) is not tail-chasing -- it realises one row before measuring it
 # -- so the pattern matched here is the literal "end", not see() at large.)
 seers = {node.name for node in ast.walk(MODULE)
@@ -315,7 +325,7 @@ seers = {node.name for node in ast.walk(MODULE)
                  and isinstance(call.args[0], ast.Constant)
                  and call.args[0].value == "end"
                  for call in ast.walk(node))}
-check("the only tail-chasing see('end') calls belong to the console window",
+check("the only tail-chasing see('end') calls belong to the console surface",
       seers == {"_console_paint", "_console_replay"}, repr(sorted(seers)))
 
 
@@ -326,6 +336,9 @@ check("all four section frames are direct children of the document",
       repr({local: parent.get(local) for local in section_locals}))
 check("there is no fifth section frame left behind",
       "pane_console" not in SOURCE and len(section_locals) == len(A.PAGE_KEYS))
+check("the Dashboard's own cavity is a child of the body, beside the rail",
+      parent.get("main") == "body" and parent.get("body") == "full",
+      repr({"main": parent.get("main"), "body": parent.get("body")}))
 check("all sections are registered under PAGE keys",
       "self._page_sections =" in init_src
       and all(f'"{key}": pane_{key}' in SOURCE for key in A.PAGE_KEYS))
@@ -348,29 +361,27 @@ check("the build footer is the document's last row",
       parent.get("foot") == "bridge")
 check("the footer states the canonical copyleft license",
       "AGPL-3.0-or-later" in init_src and "open source · MIT" not in init_src)
-# CONSOLE IS NO LONGER A PAGE ANCHOR. The control in the header used to scroll
-# the page to a Console section; it opens the console WINDOW now, and the
-# window is closable -- deliberately unlike the main window, which refuses
-# WM_CLOSE on the surface.
-check("the Console control opens a window, not a section",
-      "command=self._open_console_window" in init_src
-      and "show_section" not in console_src
-      and "_toggle_console" not in SOURCE)
-check("the Console control no longer promises a place further down the page",
-      '"↓  Console"' not in SOURCE and "self._cons_btn" in init_src)
-check("the console window is closable, and closing it is its own handler",
-      "protocol('WM_DELETE_WINDOW', self._close_console_window)"
-      in console_src, console_src)
-check("a second open reuses or rebuilds -- it never makes a second window",
-      "if win is not None" in console_src
-      and "self._console_win = win" in console_src
-      and console_src.count("tk.Toplevel(") == 1, console_src)
-close_src = _body_src(_method("App", "_close_console_window"))
-check("closing drops the references it destroys, so none can go stale",
-      "self._console_win = self._console_text = None" in close_src
-      and "win.destroy()" in close_src, close_src)
-check("closing the console never touches the app's own window",
-      "self.root" not in close_src, close_src)
+# CONSOLE IS NEITHER A PAGE ANCHOR NOR A WINDOW. It was a section, then a
+# header button that opened a Toplevel; it is a dock surface now, and the rail
+# entry is the only way in. A second control onto the same surface would be a
+# second place for the two to disagree about what is showing.
+check("the header carries no Console control at all",
+      "_cons_btn" not in SOURCE and '"↓  Console"' not in SOURCE
+      and '"↗  Console"' not in SOURCE and "_toggle_console" not in SOURCE)
+check("the console window and its closer are gone by name",
+      "_open_console_window" not in SOURCE
+      and "_close_console_window" not in SOURCE)
+check("the console surface opens no window and keeps no window state",
+      "Toplevel" not in console_src and "protocol(" not in console_src
+      and "_console_win" not in SOURCE and "_console_geom" not in SOURCE,
+      console_src)
+check("it is built once and reused -- a second invoke does not build a "
+      "second Text", "if self._console_text is not None" in console_src
+      and "return self._console_text" in console_src, console_src)
+check("it builds into its registered surface, not into the page",
+      "self._dock_surfaces.get('console')" in console_src, console_src)
+check("putting the console away is the dock's job, so it grows no Close "
+      "button of its own", "Close" not in console_src, console_src)
 
 
 class FakeCanvas:
@@ -414,13 +425,35 @@ class FakeSection:
 
 
 class FakeRoot:
+    def __init__(self):
+        self.minimums = [(940, 680)]
+
     def update_idletasks(self):
         pass
+
+    def minsize(self, width=None, height=None):
+        if width is None:
+            return self.minimums[-1]
+        self.minimums.append((width, height))
+        return None
 
 
 class FakeWidget:
     def __init__(self, master):
         self.master = master
+
+
+class FakeSurface:
+    """A surface frame that records only whether it is packed."""
+
+    def __init__(self):
+        self.packed = False
+
+    def pack(self, **_kwargs):
+        self.packed = True
+
+    def pack_forget(self):
+        self.packed = False
 
 
 print("\n---- deterministic viewport behavior ----")
@@ -433,6 +466,16 @@ app._page_sections = {
     "desk": FakeSection(0), "devices": FakeSection(300),
     "bluetooth": FakeSection(600), "system": FakeSection(1250),
 }
+# show_section invokes the Dashboard before it scrolls, so the fake app needs a
+# dock. Writing settings is stubbed out: this suite must never touch the live
+# openspan_settings.json of the app running on Doug's desk.
+app._dock_surfaces = {key: FakeSurface() for key in A.DOCK_KEYS}
+app._dock_entries = {}
+app._dock_rail = None
+app._dock_active = "console"
+app._dock_collapsed = True
+_saved = []
+A.save_setting = lambda key, value: _saved.append((key, value))
 
 app._sync_page_scrollregion()
 check("scrollregion covers the full document", app._page_canvas.region
@@ -442,15 +485,23 @@ check("viewport resize sets embedded document width", app._page_canvas.width
       == 777, repr(app._page_canvas.width))
 check("unknown anchors are rejected without moving", app.show_section("nope")
       is False and app._page_canvas.fraction is None)
-check("'console' is not an anchor any more -- it is a window",
+check("'console' is not an anchor -- it is a surface, reached from the dock",
       app.show_section("console") is False
       and app._page_canvas.fraction is None)
+check("a rejected anchor does not invoke the Dashboard either",
+      not app._dock_surfaces["dashboard"].packed and _saved == [])
 # The LAST section cannot be scrolled past the end of the document, so its
 # anchor lands on the furthest reachable top rather than on its own y.
 check("the last section's anchor scrolls to the furthest reachable top",
       app.show_section("system") is True
       and abs(app._page_canvas.fraction - (1000 / 1500)) < 1e-9,
       repr(app._page_canvas.fraction))
+check("...and it invoked the Dashboard first, because a section of a hidden "
+      "surface cannot be scrolled to",
+      app._dock_active == "dashboard" and app._dock_collapsed is False
+      and app._dock_surfaces["dashboard"].packed
+      and not app._dock_surfaces["console"].packed,
+      repr({k: v.packed for k, v in app._dock_surfaces.items()}))
 
 inside = FakeWidget(app._page_canvas)
 result = app._on_page_mousewheel(SimpleNamespace(
@@ -466,15 +517,15 @@ check("wheel outside the page is untouched",
       and app._page_canvas.scrolls == before)
 
 
-print("\n---- the log outlives its window ----")
+print("\n---- the log outlives its view ----")
 
 
 class FakeConsoleText:
-    """Enough of tk.Text for the console's own methods, and no window.
+    """Enough of tk.Text for the console's own methods, and no widget.
 
-    The buffer/window split is the whole point of the change, so it is driven
-    here rather than described: no Toplevel is built, and the app on Doug's
-    desk is not touched.
+    The buffer/view split is the whole point of the console, so it is driven
+    here rather than described: nothing is built, and the app on Doug's desk is
+    not touched.
     """
 
     def __init__(self, tail=1.0):
@@ -507,12 +558,11 @@ class FakeConsoleText:
 
 console = A.App.__new__(A.App)
 console._console_lines = collections.deque(maxlen=4)
-console._console_win = None
-console._console_text = None          # the window is CLOSED
+console._console_text = None          # never invoked; there is no view
 
 for _n in range(6):
     console.log("event", f"line {_n}")
-check("with no window open, output still lands in the buffer",
+check("with no console ever invoked, output still lands in the buffer",
       len(console._console_lines) == 4, repr(len(console._console_lines)))
 check("the buffer keeps the NEWEST lines when it is full",
       [row[2] for row in console._console_lines]
@@ -522,15 +572,15 @@ check("each buffered line carries the moment it happened",
       all(len(row) == 3 and row[0][2] == ":" for row in console._console_lines),
       repr(console._console_lines[0]))
 
-# ...and now Doug reopens it. The window is rebuilt from the buffer alone.
+# ...and now Doug invokes it. The view is built from the buffer alone.
 console._console_text = FakeConsoleText()
 console._console_replay()
-check("a reopened console shows the history it was closed with",
+check("a console invoked late shows the history logged before it existed",
       [row.split(" ", 1)[1].rstrip("\n")
        for row in console._console_text.rows]
       == ["line 2", "line 3", "line 4", "line 5"],
       repr(console._console_text.rows))
-check("a freshly opened console opens at the tail",
+check("a freshly built console opens at the tail",
       console._console_text.saw_end >= 1)
 
 # TAIL-FOLLOWING: at the bottom, follow. Scrolled up to read, do not yank.
@@ -558,7 +608,7 @@ check("Clear empties BOTH the buffer and the open widget",
       not console._console_lines and not console._console_text.rows)
 console._console_text = FakeConsoleText()
 console._console_replay()
-check("and a console reopened after Clear is empty, not refilled",
+check("and a console rebuilt after Clear is empty, not refilled",
       console._console_text.rows == [])
 
 root = tk.Tk()

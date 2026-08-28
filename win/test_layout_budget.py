@@ -121,17 +121,38 @@ check("final geometry height is computed", isinstance(last_geometry.args[0],
                                                        ast.JoinedStr))
 check("final minsize height is computed from min_h",
       _name(last_minsize.args[1]) == "min_h")
-check("minimum width remains 940",
-      isinstance(last_minsize.args[0], ast.Constant)
-      and last_minsize.args[0].value == 940)
+check("minimum width remains 940, and is now the one named constant that "
+      "_render_dock restates when the dock expands",
+      _name(last_minsize.args[0]) == "PAGE_MIN_WINDOW_W"
+      and A.PAGE_MIN_WINDOW_W == 940)
 check("work area uses the selected EsotericOS Desktop monitor",
       "self._desktop_monitor_name()" in init_src
       and "work_area_height" in init_src)
 
 
 print("\n---- only viewport cavities expand ----")
-check("outer main cavity expands", app_packs.get("main", {}).get("expand")
-      is True, repr(app_packs.get("main")))
+# `main` is the DASHBOARD SURFACE, and since 2026-08-28 it is not packed in
+# __init__ at all: App._render_dock packs exactly one surface into the body,
+# which is what makes "one surface showing" a property of the code rather than
+# of everyone remembering. So the expanding cavity to assert here is the body,
+# and the surface's own pack is read from the method that owns it.
+dock_packs = _packs(_method("App", "_render_dock"))
+rail_packs = _packs(_method("App", "_build_dock_rail"))
+check("outer body cavity expands", app_packs.get("body", {}).get("expand")
+      is True and app_packs.get("body", {}).get("fill") == "both",
+      repr(app_packs.get("body")))
+check("the dock rail takes the right edge and only its own width",
+      rail_packs.get("rail", {}).get("side") == "right"
+      and rail_packs.get("rail", {}).get("fill") == "y"
+      and not rail_packs.get("rail", {}).get("expand"),
+      repr(rail_packs.get("rail")))
+check("a surface fills whatever the rail left, and nothing in __init__ packs "
+      "one",
+      dock_packs.get("surface", {}).get("expand") is True
+      and dock_packs.get("surface", {}).get("fill") == "both"
+      and dock_packs.get("surface", {}).get("side") == "left"
+      and "main" not in app_packs,
+      repr(dock_packs))
 check("page Canvas consumes the viewport",
       app_packs.get("page_canvas", {}).get("expand") is True
       and app_packs.get("page_canvas", {}).get("fill") == "both",

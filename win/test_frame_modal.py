@@ -196,24 +196,31 @@ check("wait_window returns when the modal closes", done[0] == "returned",
 # dialogs they replaced, and a text search cannot tell that from a call.
 here = os.path.dirname(os.path.abspath(__file__))
 BANNED = {"Toplevel", "messagebox", "filedialog", "simpledialog"}
-# THE EXEMPTIONS, BY NAME, AND THERE ARE TWO.
+# THE EXEMPTION, BY NAME, AND THERE IS ONE AGAIN.
 #
 # _identify_card (2026-08-15) puts a number on each real monitor for a moment,
 # the way Windows Settings does. That is not a dialog -- it takes no focus and
 # asks nothing -- and it cannot be done from inside the frame, because its
 # whole point is to appear on the OTHER screens.
 #
-# _open_console_window (2026-08-27) is the console. Doug: *"make the console a
-# separate surface, then it can scroll lawfully."* Law 10 forbids a scrolling
-# surface inside another scrolling surface, because the wheel is hijacked
-# mid-gesture; a window contains nothing and is contained by nothing, so its
-# scrollbar is lawful. This is also not a dialog: it does not interrupt, it is
-# opened by name from the Console control and closed the same way, and it is
-# the one window in the app that stays closable on the surface.
+# A DIALOG IS BANNED. A SURFACE IS NOT, AND A SURFACE IS NOT A WINDOW. This is
+# the distinction Doug drew on 2026-08-28: *"no pop out but we can replace
+# surfaces and invoke entire new ones in the side."* A dialog is an OS window
+# that Windows places, on a screen he was not looking at; a surface is a region
+# of the app's own window, invoked by name from the right-side dock, replacing
+# whatever was showing there. So a new surface needs no exemption here and must
+# never ask for one: it is built as a Frame in the surface region, registered
+# in openspan.DOCK_SPEC, and switched by App._render_dock.
 #
-# Both live in exactly one method each, so each exemption is exactly one method
+# _open_console_window was the second exemption for exactly one day
+# (2026-08-27 to 2026-08-28). The console is a dock surface now -- law 10 asks
+# only that a scroller not be inside another scroller on the same axis, and a
+# sibling surface is inside nothing -- so the Toplevel went, and so did the
+# exemption. Nothing about the rule changed; the layout stopped needing it.
+#
+# The one exemption lives in exactly one method, so it is exactly one method
 # wide; a Toplevel anywhere else in these files is still an offender.
-EXEMPT_FUNCTIONS = {"_identify_card", "_open_console_window"}
+EXEMPT_FUNCTIONS = {"_identify_card"}
 offenders = []
 for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
              "openspan_launcher.py"):
@@ -232,29 +239,37 @@ for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
             offenders.append(f"{name}:{node.lineno}")
 check("no dialog anywhere still opens an OS window",
       not offenders, ", ".join(offenders))
-_app_tree = ast.parse(
-    open(os.path.join(here, "openspan.py"), encoding="utf-8").read())
+_app_source = open(os.path.join(here, "openspan.py"), encoding="utf-8").read()
+_app_tree = ast.parse(_app_source)
 _app_funcs = [n for n in ast.walk(_app_tree) if isinstance(n, ast.FunctionDef)]
 for _exempt in sorted(EXEMPT_FUNCTIONS):
     check(f"the {_exempt} exemption exists and is one method wide",
           len([n for n in _app_funcs if n.name == _exempt]) == 1)
-# The console window is the exception to the surface's refusal to close, and
-# that has to be visible in the source rather than trusted: it wires
-# WM_DELETE_WINDOW to its own closer, and its closer never consults
-# self.surface (which is what makes the MAIN window unclosable there).
-_closer = next((n for n in _app_funcs
-                if n.name == "_close_console_window"), None)
-check("the console window has its own close handler", _closer is not None)
-if _closer is not None:
-    # body WITHOUT the docstring: prose naming the surface must not be able to
-    # fail a check about code that touches it
-    _stmts = (_closer.body[1:] if (_closer.body
-                                   and isinstance(_closer.body[0], ast.Expr))
-              else _closer.body)
-    _closer_src = "\n".join(ast.unparse(n) for n in _stmts)
-    check("closing the console does not consult surface mode and does not "
-          "touch the root", "self.surface" not in _closer_src
-          and "self.root" not in _closer_src, _closer_src)
+check("the exemption list is back to one -- the console needs none",
+      EXEMPT_FUNCTIONS == {"_identify_card"}, repr(sorted(EXEMPT_FUNCTIONS)))
+# THE WINDOW IS GONE, NOT MERELY UNUSED. A console Toplevel that still exists
+# behind a dead call site is a pop-out waiting to be re-wired, so the two
+# methods that owned it must be absent by name.
+for _dead in ("_open_console_window", "_close_console_window"):
+    check(f"{_dead} no longer exists anywhere in the app",
+          not [n for n in _app_funcs if n.name == _dead]
+          and _dead not in _app_source)
+# ...and what replaced them is a surface: a Frame in the surface region, built
+# on first invoke, with no window-manager call anywhere in it.
+_mount = next((n for n in _app_funcs if n.name == "_console_mount"), None)
+check("the console is built by _console_mount instead", _mount is not None)
+if _mount is not None:
+    _stmts = (_mount.body[1:] if (_mount.body
+                                  and isinstance(_mount.body[0], ast.Expr))
+              else _mount.body)
+    _mount_src = "\n".join(ast.unparse(n) for n in _stmts)
+    check("the console surface makes no window-manager call at all",
+          not any(token in _mount_src for token in
+                  ("Toplevel", "protocol(", "geometry(", "iconbitmap",
+                   "deiconify", "focus_force", "overrideredirect")),
+          _mount_src)
+    check("it builds into the surface registered in the dock",
+          "self._dock_surfaces" in _mount_src, _mount_src)
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))
