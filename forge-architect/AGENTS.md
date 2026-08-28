@@ -97,11 +97,20 @@ beginning with `/`** — its absence is not a grant of the seat.
 8. **Never let a deliverable exist only in a transcript.** The handoff record is updated at
    every checkpoint and named at every `prepare()`.
 9. **Every substantive reply ends with the Next Action Item.**
-10. **No nested scrollers** (Doug, 2026-08-24). One vertical scroller per window: the page
-    itself. Every container adapts to its contents; while Doug turns the wheel, nothing smaller
-    may capture that scroll. Where adapting is genuinely infeasible — an unbounded log, a list
-    too large to realise without virtualisation — bound the **content**, not the container, and
-    **raise the objection to Doug**. Never resolve it by nesting a scroller.
+10. **No nested scrollers** (Doug, 2026-08-24; defined 2026-08-27). *"Nested scrolling is a
+    scrolling surface inside another surface that scrolls."* The harm is **scroll hijack**: Doug
+    is scrolling a surface, the pointer drifts over a smaller scrollable region, and his scroll
+    is disrupted mid-gesture. That must never happen here.
+    **The test is same-axis containment** — does this scrollable surface sit inside another
+    surface that scrolls *in the same axis*? If yes it can steal a scroll in progress: forbidden.
+    If no, there is nothing to disrupt. So these are **lawful**: orthogonal scrollers (a vertical
+    list inside a horizontally scrolling container — a vertical wheel has one candidate);
+    **sibling** panes that are not inside one another; and a surface that scrolls **as its own
+    window**, since nothing contains it. Do not read this law as "one scrollbar per window" or
+    as a ban on scrollbars — that misreading breaks compliant designs such as Files' column view.
+    Where a container would have to hold unbounded content, **give it its own surface** (Doug's
+    remedy for the Console) or bound the **content** — and **raise the objection to Doug**.
+    Never resolve it by nesting a scroller inside a same-axis one.
 
 ## The Next Action Item
 

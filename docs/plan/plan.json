@@ -4,8 +4,8 @@
   "version": 3,
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
-  "updated": "2026-08-27",
-  "nextSid": 155,
+  "updated": "2026-08-28",
+  "nextSid": 156,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2808,7 +2808,34 @@
         "app": "DONE in tree, uncommitted: exemption deleted, 3 scrollbars -> 1, Treeview/out/console fitted, CONSOLE_RETAINED_LINES=2000, static 33/33 green",
         "verify": "TEST-WINDOW entry 10 -- eleven real-Tk suites appended to Doug's next restart",
         "pending": "Doug rulings: scope (shell fork, plan.html), modal/popover exemption, cap value",
-        "violations_open": "shell EsotericOS.Files column-view ListBox vertical scroll; Cairo Explorer sidebar (likely dead scaffold); plan.html .logbody max-height:340px overflow:auto"
+        "violations_open": "RETRACTED - Files column view is COMPLIANT: its columns scroll vertically inside a HORIZONTALLY scrolling container, so a vertical wheel has one candidate and no outer vertical scroll to disrupt. The earlier finding matched 'scroller inside scroller' without asking the axis. Still genuinely nested (same-axis, out of scope by Doug's app-GUI-only ruling): plan.html .logbody (overflow:auto inside the scrolling document); Cairo Explorer sidebar ScrollViewer wrapping a ListView (likely dead scaffold).",
+        "definition": "Doug 2026-08-27: 'nested scrolling is a scrolling surface inside another surface that scrolls'. Harm = scroll hijack mid-gesture. TEST: same-axis containment. Lawful: orthogonal scrollers, sibling panes, a surface that scrolls as its own window. NOT a one-scrollbar-per-window rule."
+      }
+    },
+    {
+      "sid": "v3.155",
+      "hcidx": 155,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.145",
+        "v3.149"
+      ],
+      "title": "Desktop hub -- host the Files surface as the desktop on the EsotericOS Desktop-role screen, delete the desktop icon field, dead black canvas on every other screen  [desktop-hub]",
+      "why": "Doug 2026-08-27: 'i don't want desktop icons - i want esoteric OS primary screen to be a GUI hub and the other screens just get dead black background as their canvas'",
+      "estTokens": "700k-1.4M",
+      "costDrivers": "the spine is extracting EsotericOS.Files' UI from a Window into a hostable UserControl (597-line monolithic MainWindow.xaml, zero UserControls today); then desktop hosting, input-ownership reconciliation, and Show-Desktop redefinition",
+      "estTime": "12h",
+      "model": "Opus code + main-session review",
+      "status": "todo",
+      "actualTokens": null,
+      "actualTime": null,
+      "extra": {
+        "terrain": "Measured 2026-08-28. EASIER THAN FEARED: the Desktop is ONE Window spanning the virtual screen, and the icon field already positions itself to just the role screen's rect (DesktopManager.GetUsableDesktopRect); Files inherits that same placement, so per-monitor WINDOWS are not needed. Black elsewhere = the single window's Background, and a solid-colour brush path already exists (Desktop.xaml.cs GetCairoBackgroundBrush_Color, unexposed in Settings). Icon field injection point is clean: added/cleared in exactly two places in DesktopManager.cs, IDesktopManager has no icon-specific members. No project-reference cycle risk.",
+        "obstacle": "THE one real obstacle: EsotericOS.Files.MainWindow is a Window (OutputType WinExe), and a Window cannot be a child of a Grid -- the desktop's content slot takes UserControls. Its UI must be extracted into a hostable control; the alternative (cross-process HwndHost reparenting) is fragile and unprecedented in this codebase.",
+        "leverage": "That same extraction is what v3.132 files-grid (the board's only BLOCKED row) needs: panes, tabs and an arbitrary split grid require a composable browsing control rather than a window. One extraction unblocks both.",
+        "role_plumbing": "COMPLETE end to end: the app writes desktop-monitor.txt (win/openspan.py:89, contract test win/test_desktop_role_contract.py), the shell's DesktopRoleService reads it, and icon field, top bar and dock all follow it. NOT following it: the desktop background layer and DesktopNavigationToolbar (uses PrimaryMonitorDeviceSize directly).",
+        "behaviour_changes": "MainWindow calls Close() when the last tab closes (Ctrl+W) -- the desktop must never be closable that way; Desktop window already owns right-click and drag/drop independently of Files' own; Show-Desktop reparents the hosted control between two windows and needs redefining; the desktop window is destroyed and recreated on DWM restart; Popup z-order under a bottom-of-stack owner is unproven (Cairo's own desktop-adjacent windows need explicit z-order babysitting).",
+        "open_rulings": "hub root (Desktop folder vs named root vs composed hub); desktop right-click's fate; what Show Desktop means once icons are gone"
       }
     }
   ],
@@ -6441,8 +6468,16 @@
     {
       "date": "2026-08-27",
       "entry": "LAW 10 (Doug): no nested scrollers -- one vertical scroller per window, containers adapt to contents, bound the content where adapting is infeasible and raise the objection. Charter law 10 in all three vendor charters. v3.154 added. App side done in tree: the _on_page_mousewheel isinstance exemption for Text/Listbox/Treeview deleted, ttk.Scrollbar 3 -> 1, Bluetooth tree + BtPanel.out + Console fitted to content, console content capped at 2000 lines trimmed from the top (it does NOT persist to disk), see('end') removed. Objection recorded: an unbounded log cannot adapt, and the fitted tree now shifts rows under the cursor as a scan lands. Control Center spec amended (results list loses its scrollbar). Open: shell fork and plan.html violations pending Doug's scope ruling."
+    },
+    {
+      "date": "2026-08-27",
+      "entry": "LAW 10 DEFINED (Doug): 'nested scrolling is a scrolling surface inside another surface that scrolls' -- the harm is scroll hijack, where a pointer drifting over a smaller scrollable region disrupts a scroll already in progress. The operative test is SAME-AXIS containment. Charter law 10 rewritten in all three vendor charters, because the earlier wording ('one vertical scroller per window') was wrong and would have driven a successor to break compliant designs. Files column view finding RETRACTED as a false positive: vertical columns inside a horizontal container steal nothing. The virtualisation objection raised against Files therefore dissolves -- Files needs no change and no exemption. Remedy for unbounded content is its own surface (the Console), not a cap."
+    },
+    {
+      "date": "2026-08-28",
+      "entry": "v3.155 desktop-hub added on Doug's word: Files surface hosted as the desktop on the Desktop-role screen, icon field deleted, dead black canvas elsewhere. Terrain measured in the shell fork. Per-monitor windows turn out NOT to be required -- the single spanning Desktop window already places the icon field on the role screen's rect alone, and Files inherits that. The one real obstacle is that Files is a Window, not a hostable control; extracting it is the spine of the work and also unblocks v3.132 files-grid. Desktop-role plumbing verified complete on both sides (app writes desktop-monitor.txt, shell reads it)."
     }
   ],
   "extraCols": [],
-  "rev": 31
+  "rev": 33
 }

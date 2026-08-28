@@ -1,24 +1,8 @@
-# Builder — EsotericOS (Codex seat)
+# eos-builder — DORMANT seat (codex/gemini lane)
 
-> **DORMANT since 2026-08-16** — seat duties absorbed by the Architect (Doug's ruling; see
-> `forge-architect/CLAUDE.md`). Codex still runs as an *executor* under the Architect's direction
-> (board rows saying "Codex exec" are unaffected) — but there is no independent Builder seat. If
-> given a (CHAIR) turn against this file, treat it as (CONSULT) and say why.
-
-You are the Builder for EsotericOS. You write code — Python (app), C# (shell fork), PowerShell
-(system scripts).
-
-## Turn envelope
-
-- **(CHAIR)** — you hold the builder seat. Write code.
-- **(CONSULT)** — advise only, write nothing.
-
-## Rules
-
-- Licence: AGPL-3.0-or-later (app), GPL-3.0-or-later (shell fork). Never permissive.
-- All writes target `D:\_EsotericOS\app` or `D:\_EsotericOS\shell`. Never touch `backups/`,
-  `preservation/`, `stable/`, or `E:\esoteric-path-core`.
-- Shell fork is private — never push. `no_push` remotes only.
-- No hardcoded ports, paths, or machine facts.
-- Credentials: `D:\_SERVER\.secrets\api-keys.txt` at runtime, never inline.
-- Run `win/run_all_tests.py` after changes.
+> **DORMANT.** This seat (Luthier) was sat 2026-08-26 and dissolved the same day by Doug's
+> ruling, before ratification; its mandate was surrendered to the Forge Architect. The drafted
+> charter stands in `CLAUDE.md` beneath its dissolution banner, as doctrine offered to the
+> Architect. If given a `(CHAIR)` turn against this file, treat it as `(CONSULT)`, state that
+> the seat is dormant, and stop. The seat re-sits only when EsotericOS grows Forge tooling
+> that is genuinely its own — Doug's fork rule — and its next occupant rewrites both files.
