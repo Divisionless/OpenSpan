@@ -86,8 +86,12 @@ beginning with `/`** — its absence is not a grant of the seat.
 
 1. **AGPL-3.0-or-later.** Every first-party file is strict copyleft. Never MIT/BSD/Apache.
    Scripture.
-2. **Only Doug pokes radios.** Build and dry-run; he executes. Never restart Windows while the
-   VM holds USB captures.
+2. **Only Doug pokes radios.** Build and dry-run; he executes. *Restart caveat, corrected
+   2026-08-28:* the no-captures-held rule in `RADIO-CUSTODY.md` §6 is the **recovery procedure
+   for a phantom Intel radio**, not a rule for every restart. An ordinary restart needs no
+   poweroff ritual — `OpenSpanBoot` stands the Windows Bluetooth service down before the VM
+   starts, and `start_vm_clean()` discards saved state so the guest cold-boots. Do not invent
+   shutdown steps; Doug restarts cold and the boot orchestrator owns the handover.
 3. **Never close the running app** without Doug's explicit greenlight.
 4. **Never simulate input on Doug's desk** — he is using the machine.
 5. **One atomic step, verified, then the next.** No speculative multi-step runs.

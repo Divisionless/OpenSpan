@@ -5902,6 +5902,13 @@ class BtPanel(tk.Frame):
     saved locally (bt_prefs.json), so a rename survives re-pairing and
     blacklisted devices never appear in scans."""
 
+    # The boot wait. start_vm_clean() DISCARDS saved state and cold-boots the
+    # bridge in about ninety seconds, so the launch radio check can easily ask
+    # a machine that is not there yet. These two give it roughly three minutes
+    # to get a real answer, sampled once every five seconds and never faster.
+    RADIO_WAIT_MS = 5000
+    RADIO_WAIT_TRIES = 36        # 36 x 5s = 180s, then it stops for good
+
     def __init__(self, master, app=None):
         super().__init__(master, bg=BG)
         self.app = app
@@ -6090,12 +6097,24 @@ class BtPanel(tk.Frame):
         self.audio_level_box = tk.Frame(self, bg=BG)
         self.audio_level_box.pack(fill="x", padx=12)
         # deferred: two VBoxManage calls must not sit in front of the first
-        # paint, and the answer is worth having before anything is clicked
+        # paint, and the answer is worth having before anything is clicked.
+        #
+        # 1.2s is FASTER THAN THE VM. On a cold restart start_vm_clean() is
+        # still booting, vm_running() is legitimately False, and this sample
+        # used to write "The VM is not running" ONCE and never ask again --
+        # leaving that sentence on screen for the whole session while the app's
+        # own status line went on to say vm: up, devices 3/3, READY. It now
+        # keeps asking until the VM answers; _radio_wait_retry holds the bound.
+        self._radio_wait_job = None     # pending retry; the UI thread owns it
+        self._radio_wait_left = self.RADIO_WAIT_TRIES
         self.after(1200, self._radio_usb_check)
         # The launch audit, and the Windows-Update re-bind guard in one: if WU
         # (or anything else) has put Intel's driver back on a radio that was in
         # custody, the very next launch says so here and the button is there to
         # take it again. Reports only -- it never acts.
+        # This sample races the same cold boot: mid-boot it reports radios the
+        # VM has not taken yet, which is not the settled answer. When the wait
+        # above finds the VM, it re-runs this once against settled state.
         self.after(1800, self._custody_check)
 
         self.menu = tk.Menu(self, tearoff=0, bg=CARD, fg=FG,
@@ -6147,23 +6166,102 @@ class BtPanel(tk.Frame):
         if self.app:
             self.app.ui(apply)      # workers never touch Tk, not even after()
 
-    def _radio_usb_check(self):
+    def _radio_usb_check(self, waiting=False):
         """Report how many of this machine's radios the guest can see.
 
         Two read-only VBoxManage calls, on a worker thread -- the UI must not
         wait on a subprocess.
+
+        A VM that is not running is not a final answer at launch, only a VM
+        that has not finished booting yet, so that branch asks again instead of
+        giving up. `waiting` marks an attempt made BY that wait rather than by
+        launch or by a button, and is what makes the custody audit re-run: the
+        audit fires 1.8s after launch and, on a cold boot, samples the radios
+        before the VM has taken any of them.
         """
+        # One wait chain at a time: whoever asks now owns it, so a Repair click
+        # arriving mid-wait does not leave a second check running behind it.
+        self._radio_wait_cancel()
+
         def work():
             if not vm_running():
                 self._radio_usb_apply(
                     "The VM is not running, so it holds no radios. Start it on "
                     "the Bridge tab.", 0)
+                self._radio_wait_retry()     # it may simply not be up YET
                 return
             state = read_radio_state()
             config = self.app.canvas.config if self.app else {}
             text, repairable = radio_status_text(state, config, VM)
             self._radio_usb_apply(text, repairable)
+            if waiting:
+                # The VM came up after the launch custody audit had already
+                # run, so that audit read a half-booted machine. Take it again
+                # now that the radios have settled -- once: the wait ends here,
+                # because this attempt got a real answer.
+                self._custody_check()
         threading.Thread(target=work, daemon=True).start()
+
+    def _radio_wait_cancel(self):
+        """Drop a pending boot-wait retry. Callable from any thread.
+
+        after_cancel is a Tk call like every other one here, so it is marshaled
+        through app.ui rather than made from a worker; the TclError is the
+        panel already being gone, which is not a fault.
+        """
+        def drop():
+            job, self._radio_wait_job = self._radio_wait_job, None
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+        if self.app:
+            self.app.ui(drop)
+
+    def _radio_wait_retry(self):
+        """Ask again shortly, while there is budget left to ask with.
+
+        Called from the worker, so the after() is created inside app.ui: a
+        background after() racing the UI thread is the interpreter-level crash
+        App.ui exists to prevent (see its docstring).
+
+        The bound is a plain countdown that only the UI thread touches and that
+        is never refilled, so however often this is entered the panel can spend
+        at most RADIO_WAIT_TRIES samples in total on waiting for a VM.
+        """
+        def again():
+            if self._radio_wait_job is not None:
+                return          # a retry is already pending; one chain only
+            if self._radio_wait_left <= 0:
+                self._radio_usb_apply(
+                    "The VM did not come up while this panel waited for it, so "
+                    "it holds no radios. Start it on the Bridge tab, then use "
+                    "Repair radios.", 0)
+                return
+            self._radio_wait_left -= 1
+            try:
+                self._radio_wait_job = self.after(self.RADIO_WAIT_MS,
+                                                  self._radio_wait_fire)
+            except tk.TclError:              # the panel went away mid-wait
+                self._radio_wait_job = None
+        if self.app:
+            self.app.ui(again)
+
+    def _radio_wait_fire(self):
+        """One retry, on the UI thread.
+
+        Tk registers an after() job on the interpreter and not on the widget,
+        so a panel destroyed while the VM was still booting is still called
+        here -- and a dead widget must not raise out of an after callback.
+        """
+        self._radio_wait_job = None
+        try:
+            alive = self.winfo_exists()
+        except tk.TclError:
+            return
+        if alive:
+            self._radio_usb_check(waiting=True)
 
     # ---- radio custody ---------------------------------------------------
     def _custody_apply_text(self, text):

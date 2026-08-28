@@ -617,6 +617,258 @@ check("a wedged radio's explanation is not overwritten by a bare count",
 check("every Tk call in the worker goes through app.ui, including after()",
       "self.app.ui(lambda: self.after(" in reclaim_src)
 
+# ---- the launch check has to outlast a cold boot ----------------------------
+# Doug, after a cold restart: all three radios genuinely Captured, the VM up,
+# the app's own status line saying vm: up / devices 3/3 / READY -- and this
+# panel still saying "The VM is not running, so it holds no radios".
+#
+# start_vm_clean() DISCARDS saved state and cold-boots in about ninety seconds.
+# The launch sample fires at 1.2s, so it asked a machine that was not there
+# yet; having no retry and no caller but the radio buttons, that answer then
+# stood for the whole session. On a hot swap the VM is already up and the 1.2s
+# sample wins the race, which is the only reason this stayed latent.
+#
+# Nothing below constructs a widget. The four wait methods are taken off the
+# real class and run against a recorder, so no Tk root is created by this file.
+import types  # noqa: E402
+
+
+class ImmediateThread:
+    """threading.Thread that runs the worker inline: one deterministic call,
+    no sleep, no join, no scheduling nondeterminism."""
+
+    def __init__(self, target, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+class FakePanel:
+    """A BtPanel stand-in whose after/after_cancel/winfo_exists are recorders."""
+
+    RADIO_WAIT_MS = A.BtPanel.RADIO_WAIT_MS
+    RADIO_WAIT_TRIES = A.BtPanel.RADIO_WAIT_TRIES
+    _radio_usb_check = A.BtPanel._radio_usb_check
+    _radio_wait_cancel = A.BtPanel._radio_wait_cancel
+    _radio_wait_retry = A.BtPanel._radio_wait_retry
+    _radio_wait_fire = A.BtPanel._radio_wait_fire
+
+    def __init__(self, app=True, alive=True):
+        self.app = (types.SimpleNamespace(
+            ui=self._ui, canvas=types.SimpleNamespace(config={}))
+            if app else None)
+        self.applied = []        # (text, repairable)
+        self.custody = 0         # times the launch audit was re-taken
+        self.scheduled = []      # live jobs: (ms, callback, job)
+        self.history = []        # every after() ever made
+        self.cancelled = []
+        self.alive = alive
+        self._radio_wait_job = None
+        self._radio_wait_left = self.RADIO_WAIT_TRIES
+
+    def _ui(self, fn):
+        fn()                     # the real queue drains this on the UI thread
+
+    def _radio_usb_apply(self, text, repairable):
+        self.applied.append((text, repairable))
+
+    def _custody_check(self):
+        self.custody += 1
+
+    def after(self, ms, callback):
+        job = "after#%d" % (len(self.history) + 1)
+        self.history.append((ms, job))
+        self.scheduled.append((ms, callback, job))
+        return job
+
+    def after_cancel(self, job):
+        self.scheduled = [row for row in self.scheduled if row[2] != job]
+        self.cancelled.append(job)
+
+    def winfo_exists(self):
+        if self.alive == "destroyed":
+            raise A.tk.TclError('bad window path name ".!btpanel"')
+        return 1 if self.alive else 0
+
+    def fire(self):
+        """Run the pending retry the way Tk's after() would."""
+        _ms, callback, _job = self.scheduled.pop(0)
+        callback()
+
+
+def _raise_tcl(*_args, **_kwargs):
+    raise A.tk.TclError('bad window path name ".!btpanel"')
+
+
+def _dotted(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value)
+        return None if base is None else base + "." + node.attr
+    return None
+
+
+WAIT_METHODS = ("_radio_usb_check", "_radio_wait_cancel", "_radio_wait_retry",
+                "_radio_wait_fire")
+wait_src = {name: textwrap.dedent(inspect.getsource(getattr(A.BtPanel, name)))
+            for name in WAIT_METHODS}
+
+samples = []
+real_names = {name: getattr(A, name) for name in
+              ("vm_running", "read_radio_state", "radio_status_text")}
+real_thread = A.threading.Thread
+
+
+def vm_down():
+    samples.append(False)
+    return False
+
+
+def vm_up():
+    samples.append(True)
+    return True
+
+
+try:
+    A.threading.Thread = ImmediateThread
+    A.read_radio_state = lambda: dict(
+        mine=[], lost=[], absent=[], filters=[], captured=[], attachable=[],
+        unavailable=[], ambiguous_filters=[])
+    A.radio_status_text = lambda state, config, vm: ("3 of 3 radios", 0)
+
+    # the branch that used to be terminal
+    A.vm_running = vm_down
+    panel = FakePanel()
+    panel._radio_usb_check()
+    check("a VM that is not running YET schedules another attempt",
+          len(panel.scheduled) == 1
+          and panel.scheduled[0][0] == A.BtPanel.RADIO_WAIT_MS,
+          str(panel.history))
+    check("and the informative line is kept while it waits",
+          panel.applied
+          and panel.applied[0][0].startswith("The VM is not running"),
+          str(panel.applied))
+    check("the retry is spaced seconds apart, not a busy loop",
+          A.BtPanel.RADIO_WAIT_MS >= 2000, str(A.BtPanel.RADIO_WAIT_MS))
+
+    # bounded: past a ~90s cold boot, nowhere near forever
+    budget = A.BtPanel.RADIO_WAIT_MS * A.BtPanel.RADIO_WAIT_TRIES
+    check("the wait outlasts a ~90s cold boot without becoming a poller",
+          150000 <= budget <= 600000, f"{budget}ms")
+    samples.clear()
+    for _ in range(A.BtPanel.RADIO_WAIT_TRIES + 5):
+        if not panel.scheduled:
+            break
+        panel.fire()
+    check("the wait stops on its own instead of running for the session",
+          panel.scheduled == [] and panel._radio_wait_job is None,
+          str(panel.scheduled))
+    check("and spends exactly its capped number of VBoxManage samples",
+          len(panel.history) == A.BtPanel.RADIO_WAIT_TRIES
+          and len(samples) == A.BtPanel.RADIO_WAIT_TRIES,
+          f"{len(panel.history)} waits / {len(samples)} samples")
+    check("every attempt is spaced by the same interval",
+          {ms for ms, _job in panel.history} == {A.BtPanel.RADIO_WAIT_MS},
+          str(panel.history[:3]))
+    check("giving up leaves a truthful final line, not the mid-boot one",
+          "did not come up" in panel.applied[-1][0], panel.applied[-1][0])
+
+    # a real answer is final: this is the hot-swap path, unchanged
+    A.vm_running = vm_up
+    panel = FakePanel()
+    panel._radio_usb_check()
+    check("a check that gets a real answer schedules nothing",
+          panel.history == [] and panel.scheduled == []
+          and panel.applied == [("3 of 3 radios", 0)], str(panel.applied))
+    check("and a launch that finds the VM already up re-audits nothing",
+          panel.custody == 0, str(panel.custody))
+
+    # the boot, end to end: down, down, up
+    booting = [False, False, True]
+    A.vm_running = lambda: booting.pop(0) if booting else True
+    panel = FakePanel()
+    panel._radio_usb_check()          # 1.2s after launch: still booting
+    panel.fire()                      # +5s: still booting
+    panel.fire()                      # +10s: the VM answers
+    check("when the VM finally answers the wait ends and the real check has run",
+          panel.scheduled == [] and len(panel.history) == 2
+          and panel.applied[-1] == ("3 of 3 radios", 0), str(panel.applied))
+    check("and the launch custody audit is re-run ONCE, against settled state",
+          panel.custody == 1, str(panel.custody))
+
+    # one chain only
+    A.vm_running = vm_down
+    panel = FakePanel()
+    panel._radio_usb_check()
+    pending = panel._radio_wait_job
+    panel._radio_wait_retry()
+    check("a second retry request does not stack a second pending wait",
+          len(panel.history) == 1 and panel._radio_wait_job == pending,
+          str(panel.history))
+    A.vm_running = vm_up
+    panel._radio_usb_check()          # a radio action arriving mid-wait
+    check("a radio action arriving mid-wait cancels the pending retry",
+          panel.cancelled == [pending] and panel._radio_wait_job is None
+          and panel.scheduled == [], str(panel.cancelled))
+
+    # the panel can be destroyed while the VM is still booting
+    A.vm_running = vm_down
+    panel = FakePanel(alive="destroyed")
+    panel._radio_wait_job = "after#9"
+    panel._radio_wait_fire()
+    check("a destroyed panel ends the wait instead of raising out of after()",
+          panel.history == [] and panel.applied == []
+          and panel._radio_wait_job is None)
+    panel = FakePanel(alive=False)
+    panel._radio_wait_fire()
+    check("a panel that no longer exists starts no further check",
+          panel.history == [] and panel.applied == [])
+    panel = FakePanel()
+    panel._radio_wait_job = "after#1"
+    panel.after_cancel = _raise_tcl
+    panel._radio_wait_cancel()
+    check("cancelling a job Tk has already forgotten is not an error",
+          panel._radio_wait_job is None)
+    panel = FakePanel()
+    panel.after = _raise_tcl
+    panel._radio_wait_retry()
+    check("a panel destroyed AS the retry is scheduled leaves no dangling job",
+          panel._radio_wait_job is None)
+
+    # the marshal is the only road to Tk
+    A.vm_running = vm_down
+    panel = FakePanel(app=False)
+    panel._radio_usb_check()
+    check("with no app.ui to marshal through, the wait touches no Tk at all",
+          panel.history == [] and panel.cancelled == [], str(panel.history))
+finally:
+    A.threading.Thread = real_thread
+    for _name, _real in real_names.items():
+        setattr(A, _name, _real)
+
+check("the worker itself never schedules or cancels the retry",
+      "self.after(" not in wait_src["_radio_usb_check"]
+      and "after_cancel" not in wait_src["_radio_usb_check"])
+for _name, _call in (("_radio_wait_cancel", "after_cancel"),
+                     ("_radio_wait_retry", "after")):
+    _outer = ast.parse(wait_src[_name]).body[0]
+    _closure = next((node.args[0].id for node in ast.walk(_outer)
+                     if isinstance(node, ast.Call)
+                     and _dotted(node.func) == "self.app.ui"
+                     and node.args and isinstance(node.args[0], ast.Name)),
+                    None)
+    _inner = next((node for node in _outer.body
+                   if isinstance(node, ast.FunctionDef)
+                   and node.name == _closure), None)
+    check(f"{_name} makes its self.{_call}() call on the UI side, inside the "
+          "closure app.ui runs",
+          _inner is not None
+          and any(_dotted(node.func) == "self." + _call
+                  for node in ast.walk(_inner)
+                  if isinstance(node, ast.Call)), str(_closure))
+
 # ---- the boot banner ---------------------------------------------------------
 # "Booting the bridge... (~90s)" is the worst thing this app can say when
 # something is wrong, and it is what it said for as long as it was left running.
