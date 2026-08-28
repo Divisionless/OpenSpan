@@ -469,6 +469,15 @@ check("a probe that fails cannot satisfy a window-scoped binding",
       blind.process_key_event(event(), both).kind
       is KeyboardRoutingVerdictKind.PASS_THROUGH)
 
+se._SCREEN_CACHE[1234] = ScreenFacts("deadbeefdeadbeef", True)
+se.reset_screen_cache()
+check("the EDID lookup is cached off the hook thread and can be reset",
+      not se._SCREEN_CACHE
+      and "attached_identities" not in ast.dump(next(
+          item for item in ast.walk(engine_tree)
+          if isinstance(item, ast.FunctionDef)
+          and item.name == "_screen_for_window")))
+
 check("the same event twice gives the same verdict",
       consumer.process_key_event(event(), both).kind
       is consumer.process_key_event(event(), both).kind)

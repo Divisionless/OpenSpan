@@ -800,32 +800,60 @@ def _process_name(process_id: int) -> str:
         kernel32.CloseHandle(handle)
 
 
+# Resolving a stable key means reading EDID out of the registry, which is far
+# too slow to do on the hook thread for every scoped chord.  The map is cached
+# by monitor handle and is self-invalidating: changing the display arrangement
+# produces new HMONITORs, so the next lookup misses and rebuilds.  The app may
+# also call reset_screen_cache() from its display watch -- for instance when
+# only which display is *primary* changed, which keeps the handles.
+_SCREEN_CACHE: dict[int, ScreenFacts] = {}
+_SCREEN_GATE = threading.Lock()
+
+
+def reset_screen_cache() -> None:
+    with _SCREEN_GATE:
+        _SCREEN_CACHE.clear()
+
+
+def _rebuild_screen_cache() -> dict[int, ScreenFacts]:
+    from monitor_identity import attached_identities
+    from window_tiling import enumerate_work_areas
+
+    identities = {item.device_name.lower(): item
+                  for item in attached_identities()}
+    built: dict[int, ScreenFacts] = {}
+    for area in enumerate_work_areas():
+        identity = identities.get(getattr(area, "device_name", "").lower())
+        built[int(getattr(area, "handle", 0))] = ScreenFacts(
+            identity.stable_key if identity is not None else None,
+            bool(area.is_primary))
+    return built
+
+
 def _screen_for_window(handle: Any) -> ScreenFacts:
     """Resolve the window's monitor to a stable key, as WindowActions does."""
     import ctypes
     from ctypes import wintypes
 
-    try:
-        from monitor_identity import attached_identities
-        from window_tiling import enumerate_work_areas
-    except ImportError:
-        return ScreenFacts()
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     user32.MonitorFromWindow.restype = wintypes.HMONITOR
     user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
     monitor = int(user32.MonitorFromWindow(handle, 2) or 0)
     if not monitor:
         return ScreenFacts()
-    for area in enumerate_work_areas():
-        if int(getattr(area, "handle", 0)) != monitor:
-            continue
-        device = getattr(area, "device_name", "").lower()
-        for identity in attached_identities():
-            if identity.device_name.lower() == device:
-                return ScreenFacts(identity.stable_key,
-                                   bool(area.is_primary))
-        return ScreenFacts(None, bool(area.is_primary))
-    return ScreenFacts()
+    with _SCREEN_GATE:
+        known = _SCREEN_CACHE.get(monitor)
+        if known is not None:
+            return known
+    try:
+        built = _rebuild_screen_cache()
+    except (ImportError, OSError, RuntimeError):
+        return ScreenFacts()
+    with _SCREEN_GATE:
+        if len(_SCREEN_CACHE) > 32:
+            _SCREEN_CACHE.clear()
+        _SCREEN_CACHE.update(built)
+    return built.get(monitor, ScreenFacts())
 
 
 # ---- the consumer ------------------------------------------------------------
