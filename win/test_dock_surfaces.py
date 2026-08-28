@@ -20,6 +20,13 @@ siblings of one another, exactly one is packed at a time, and each owns at most
 one vertical scroller. Two scrollers in one window are lawful precisely because
 neither can ever be inside the other.
 
+THE SCRIPTS SURFACE STOPPED BEING EMPTY on 2026-08-28. It is the face of
+``script_engine`` now: what is on disk, what would not parse, and where to
+write. So this file also holds the engine's LIFETIME contract -- constructed in
+one place, started only from the switch or the startup arm, stopped with the
+other hook owner on the way out -- because the lifetime and the surface are the
+same piece of work and a surface that outlives its engine is the bug.
+
 NO TK ROOT IS CONSTRUCTED IN THIS FILE, deliberately. The app is running on
 Doug's desk while these run. The layout contract is read from the AST and the
 switching behaviour is driven against fakes.
@@ -27,7 +34,9 @@ switching behaviour is driven against fakes.
 import ast
 import collections
 import os
+import shutil
 import sys
+import tempfile
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -37,6 +46,8 @@ except Exception:  # noqa: BLE001
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import openspan as A  # noqa: E402
+import script_engine as SE  # noqa: E402
+from settings_service import FeatureRegistry  # noqa: E402
 
 fails = []
 
@@ -114,6 +125,15 @@ restore = _method("App", "_restore_dock")
 paint_entry = _method("App", "_paint_dock_entry")
 scripts_fn = _method("App", "_build_scripts_surface")
 console_mount = _method("App", "_console_mount")
+scripts_refresh = _method("App", "_scripts_refresh")
+scripts_report = _method("App", "_scripts_report")
+scripts_reload = _method("App", "_scripts_reload")
+scripts_seed = _method("App", "_scripts_seed")
+script_host = _method("App", "_script_host")
+toggle_scripts = _method("App", "_toggle_scripts")
+start_scripts = _method("App", "_start_scripts")
+autostart = _method("App", "_autostart_window_features")
+full_stop = _method("App", "_full_stop")
 init_parents = _parents(init)
 init_src = ast.unparse(init)
 render_src = _body_src(render)
@@ -197,9 +217,10 @@ for _cls in [n for n in ast.walk(MODULE) if isinstance(n, ast.ClassDef)]:
         count = len(_calls(_item, "ttk.Scrollbar"))
         if count:
             scroll_owners[f"{_cls.name}.{_item.name}"] = count
-check("exactly two vertical scrollers in the whole app, one per surface that "
-      "has something to hide",
-      scroll_owners == {"App.__init__": 1, "App._console_mount": 1},
+check("exactly three vertical scrollers in the whole app, one per surface, and "
+      "no surface owns two",
+      scroll_owners == {"App.__init__": 1, "App._console_mount": 1,
+                        "App._build_scripts_surface": 1},
       repr(scroll_owners))
 check("the Dashboard's scroller is built on the Dashboard's own cavity",
       all(_name(node.args[0]) == "main"
@@ -210,10 +231,35 @@ check("the Console's scroller is built inside the Console surface",
       in _body_src(console_mount)
       and all(_name(node.args[0]) == "wrap"
               for node in _calls(console_mount, "ttk.Scrollbar")))
-check("the Scripts surface owns no scroller, because it hides nothing",
-      not _calls(scripts_fn, "ttk.Scrollbar")
-      and not _calls(scripts_fn, "tk.Canvas")
-      and not _calls(scripts_fn, "tk.Text"))
+# LAW 10 FOR THE THIRD SURFACE. It has content now, so it has a scroller, and
+# the whole of its compliance is that it has exactly ONE and that one lives on
+# a frame the surface owns -- never on another surface, never inside the page.
+scripts_parents = _parents(scripts_fn)
+check("the Scripts surface owns exactly ONE vertical scroller",
+      len(_calls(scripts_fn, "ttk.Scrollbar")) == 1,
+      repr(len(_calls(scripts_fn, "ttk.Scrollbar"))))
+check("...and it is built on a frame inside the surface it was handed, so it "
+      "is a sibling of the other two scrollers and inside neither",
+      scripts_parents.get("wrap") == "parent"
+      and all(_name(node.args[0]) == "wrap"
+              for node in _calls(scripts_fn, "ttk.Scrollbar"))
+      and scripts_parents.get("text") == "wrap", repr(scripts_parents))
+check("...and there is exactly one scrollable widget under it: one Text, no "
+      "Canvas, so nothing inside the scroller can scroll on the same axis",
+      len(_calls(scripts_fn, "tk.Text")) == 1
+      and not _calls(scripts_fn, "tk.Canvas"), _body_src(scripts_fn))
+check("the head row is a plain Frame on the surface and scrolls nothing -- "
+      "Reload and the switch stay put while the report moves",
+      scripts_parents.get("head") == "parent"
+      and not any(_name(node.args[0]) == "head"
+                  for node in _calls(scripts_fn, "ttk.Scrollbar")),
+      repr(scripts_parents.get("head")))
+check("the painter and the decider build no widget at all, so neither can "
+      "smuggle in a second scroller as the report grows",
+      not any(_calls(fn, ctor)
+              for fn in (scripts_refresh, scripts_report)
+              for ctor in ("ttk.Scrollbar", "tk.Canvas", "tk.Text",
+                           "tk.Frame", "tk.Label", "ttk.Button")))
 check("the wheel handler still claims only the page canvas -- the Console's "
       "own Text keeps its class binding, and needs no exemption",
       "self._inside(widget, self._page_canvas)"
@@ -232,7 +278,10 @@ check("no dock or surface method opens one",
       not (toplevel_owners & {"_build_dock_rail", "_render_dock",
                               "_dock_click", "_dock_show", "_dock_state",
                               "_restore_dock", "_console_mount",
-                              "_build_scripts_surface"}))
+                              "_build_scripts_surface", "_scripts_refresh",
+                              "_scripts_report", "_scripts_reload",
+                              "_toggle_scripts", "_start_scripts",
+                              "_script_host"}))
 check("the console's window era is gone by name, not merely unreachable",
       "_open_console_window" not in SOURCE
       and "_close_console_window" not in SOURCE
@@ -259,6 +308,10 @@ check("the console is mounted from the renderer, so a restored console is "
       "built exactly like a clicked one",
       "self._console_mount()" in render_src
       and render_src.count("self._console_mount()") == 1, render_src)
+check("Scripts is repainted from the renderer for the same reason: what it "
+      "shows changed while it was hidden",
+      "self._scripts_refresh()" in render_src
+      and render_src.count("self._scripts_refresh()") == 1, render_src)
 
 
 print("\n---- the state persists where every other preference does ----")
@@ -286,39 +339,197 @@ check("the restore happens at the END of __init__, after the page has been "
       > init_src.index("page_window_plan(avail_h)"))
 
 
-print("\n---- Scripts is honestly empty ----")
+print("\n---- Scripts: two controls, one report, still no editor ----")
 scripts_src = _body_src(scripts_fn)
 check("the empty state is one module-level constant, so it can be read here",
       isinstance(A.SCRIPTS_EMPTY_STATE, tuple)
       and all(isinstance(line, str) and line for line in
               A.SCRIPTS_EMPTY_STATE), repr(A.SCRIPTS_EMPTY_STATE))
-check("it says there is nothing here and that nothing here runs",
-      "Nothing here yet" in A.SCRIPTS_EMPTY_STATE[0]
-      and "runs anything" in A.SCRIPTS_EMPTY_STATE[0],
+check("it says plainly that there is nothing, rather than opening a tour",
+      "No scripts found" in A.SCRIPTS_EMPTY_STATE[0]
+      and "nothing runs" in A.SCRIPTS_EMPTY_STATE[0],
       repr(A.SCRIPTS_EMPTY_STATE[0]))
-check("it names what the surface will be, in Doug's own terms",
-      any("scoped scripting system" in line for line in A.SCRIPTS_EMPTY_STATE))
-check("it admits nothing is wired here yet rather than implying something is",
-      any("none of it is wired to this surface yet" in line
-          for line in A.SCRIPTS_EMPTY_STATE))
-check("and it names, item by item, the three things it is NOT showing",
-      all(token in " ".join(A.SCRIPTS_EMPTY_STATE) for token in
-          ("no script list", "no editor", "no run button")))
-# NO FAKE UI. A drawing of a feature is worse than an empty page: every
-# invented row has to be deleted before a real one can be written, and until
-# then the app is claiming something it cannot do.
-check("the surface builds labels and nothing else -- no buttons, no entries, "
-      "no list, no tree",
+check("it names the location he has to write in",
+      any("scripts directory" in line for line in A.SCRIPTS_EMPTY_STATE),
+      repr(A.SCRIPTS_EMPTY_STATE))
+check("...and the file extension and the load order, so the directory is "
+      "actionable rather than merely named",
+      all(token in " ".join(A.SCRIPTS_EMPTY_STATE)
+          for token in (".eos", "filename order")))
+check("it points at the format document by name",
+      A.SCRIPTS_FORMAT_DOC.endswith("SCRIPTS-FORMAT.md")
+      and any(A.SCRIPTS_FORMAT_DOC in line
+              for line in A.SCRIPTS_EMPTY_STATE), A.SCRIPTS_FORMAT_DOC)
+check("the format document it points at actually exists on disk",
+      os.path.isfile(os.path.join(
+          os.path.dirname(HERE), *A.SCRIPTS_FORMAT_DOC.replace("\\", "/")
+          .split("/"))), A.SCRIPTS_FORMAT_DOC)
+check("it still promises no editor, because there still is not one",
+      "no editor here" in " ".join(A.SCRIPTS_EMPTY_STATE))
+check("the switched-off state is its own constant and says the feature is off "
+      "rather than showing a list that cannot fire",
+      isinstance(A.SCRIPTS_DISABLED_STATE, tuple)
+      and "switched off" in A.SCRIPTS_DISABLED_STATE[0]
+      and "No chord is intercepted" in A.SCRIPTS_DISABLED_STATE[0],
+      repr(A.SCRIPTS_DISABLED_STATE))
+check("...and it names the one action that changes that",
+      any("Turn on scripts" in line for line in A.SCRIPTS_DISABLED_STATE))
+
+# THE EXAMPLE SCRIPT IS RUN THROUGH THE REAL PARSER. It is written to Doug's
+# disk on first run, so a typo in it would greet him as an error report on a
+# file he never wrote. This is the check that stops that.
+example = SE.parse_script(A.SCRIPTS_EXAMPLE, A.SCRIPTS_EXAMPLE_NAME)
+check("the seeded example parses with no problems at all",
+      not example.problems,
+      repr([problem.describe() for problem in example.problems]))
+check("...and it binds something, so first run is not another empty file",
+      len(example.bindings) >= 1,
+      repr([binding.describe() for binding in example.bindings]))
+check("...and what it binds is harmless and reversible: no send, no catalog",
+      all(action.verb in (SE.Verb.WINDOW, SE.Verb.PASS)
+          for binding in example.bindings for action in binding.actions),
+      repr([binding.describe() for binding in example.bindings]))
+check("the example is named with a number, so filename order is visible from "
+      "the first file he ever sees",
+      A.SCRIPTS_EXAMPLE_NAME.endswith(SE.EXTENSION)
+      and A.SCRIPTS_EXAMPLE_NAME[0].isdigit(), A.SCRIPTS_EXAMPLE_NAME)
+check("it is mostly comment: the format is taught in the file, not guessed",
+      sum(1 for line in A.SCRIPTS_EXAMPLE.splitlines()
+          if line.lstrip().startswith("#")) > len(example.bindings))
+
+# TWO CONTROLS, AND EXACTLY TWO. An editor, a run button or a file picker here
+# would each be a second way to do something the format already does better.
+scripts_buttons = _calls(scripts_fn, "ttk.Button")
+check("the surface builds exactly two buttons", len(scripts_buttons) == 2,
+      repr(len(scripts_buttons)))
+check("...and they are Reload and the switch, nothing else",
+      sorted(keyword.value.value for node in scripts_buttons
+             for keyword in node.keywords if keyword.arg == "text")
+      == ["Reload", "Turn on scripts"],
+      repr([keyword.value.value for node in scripts_buttons
+            for keyword in node.keywords if keyword.arg == "text"]))
+check("Reload is wired to the app's reload path and the switch to the toggle",
+      "command=self._scripts_reload" in scripts_src
+      and "command=self._toggle_scripts" in scripts_src, scripts_src)
+check("there is still no editor: no entry, no list, no tree, no menu",
       not any(_calls(scripts_fn, ctor) for ctor in
-              ("ttk.Button", "tk.Button", "ttk.Entry", "tk.Entry",
-               "tk.Listbox", "ttk.Treeview", "ttk.Combobox", "tk.Checkbutton",
-               "ttk.Checkbutton", "tk.Menu")),
-      scripts_src)
-check("and it wires no command anywhere",
-      "command=" not in scripts_src and "bind(" not in scripts_src,
-      scripts_src)
-check("nothing in the app pretends a script exists",
+              ("ttk.Entry", "tk.Entry", "tk.Listbox", "ttk.Treeview",
+               "ttk.Combobox", "tk.Checkbutton", "ttk.Checkbutton",
+               "tk.Menu")), scripts_src)
+check("the report Text is read-only, so the surface cannot be typed into",
+      "state='disabled'" in scripts_src, scripts_src)
+check("nothing in the app pretends a script exists: the rows come from the "
+      "engine or there are no rows",
       "script_rows" not in SOURCE and "run_script" not in SOURCE)
+
+
+print("\n---- the engine's lifetime: one owner, one start, one stop ----")
+# The hotkey host is the worked example and this is the same shape: built on
+# first use, started only from a named place, stopped with the other hook owner
+# on the way out. The whole point is that CONSTRUCTION is free -- no hook, no
+# thread, no file -- so the object may exist all session while the keyboard is
+# untouched.
+host_src = _body_src(script_host)
+builders = {node.name for node in ast.walk(MODULE)
+            if isinstance(node, ast.FunctionDef)
+            and _calls(node, "script_engine.ScriptEngine")}
+check("the engine is constructed in exactly one method, and it is the lazy "
+      "accessor", builders == {"_script_host"}, repr(sorted(builders)))
+assigners = {node.name for node in ast.walk(MODULE)
+             if isinstance(node, ast.FunctionDef)
+             and "self._script_engine =" in _body_src(node)}
+check("...and only __init__ (to None) and that accessor ever fill the slot",
+      assigners == {"__init__", "_script_host"}, repr(sorted(assigners)))
+check("the slot is created before _restore_dock can repaint onto Scripts, so "
+      "a session that ended on Scripts does not come back to an "
+      "AttributeError",
+      init_src.index("self._script_engine = None")
+      < init_src.index("self._restore_dock()"))
+check("CONSTRUCTION IS SIDE-EFFECT-FREE: the accessor starts nothing, reloads "
+      "nothing and seeds nothing",
+      not _calls(script_host, "engine.start")
+      and not _calls(script_host, "engine.reload")
+      and "self._scripts_seed" not in host_src, host_src)
+check("the accessor imports the engine module inside itself, so importing the "
+      "app installs no hook and costs no import",
+      any(isinstance(node, ast.Import)
+          and any(alias.name == "script_engine" for alias in node.names)
+          for node in ast.walk(script_host))
+      and not any(isinstance(node, (ast.Import, ast.ImportFrom))
+                  and "script_engine" in ast.unparse(node)
+                  for node in MODULE.body), host_src)
+check("THE DECLARATION IS REGISTERED on the way in, before anything can ask "
+      "whether the feature is on",
+      bool(_calls(script_host, "script_engine.ScriptEngine.ensure_declaration")),
+      host_src)
+starters = {node.name for node in ast.walk(MODULE)
+            if isinstance(node, ast.FunctionDef)
+            and _calls(node, "engine.start")}
+check("only the switch and the startup arm ever start the engine",
+      starters == {"_toggle_scripts", "_start_scripts"}, repr(sorted(starters)))
+check("both of them go through the one accessor rather than building their own",
+      all("self._script_host()" in _body_src(_method("App", name))
+          for name in starters))
+check("the startup arm is armed exactly once, beside the other hook features",
+      [_name(node) for node in ast.walk(autostart)
+       if isinstance(node, ast.Attribute)
+       and _name(node) == "self._start_scripts"] == ["self._start_scripts"],
+      _body_src(autostart))
+check("scripts are OPT-IN: the arm consults the feature flag and starts "
+      "nothing when it is off",
+      "self._scripts_enabled(engine)" in _body_src(start_scripts)
+      and SE.FEATURE_DECLARATION.default_enabled is False,
+      _body_src(start_scripts))
+check("every path that changes whether the engine is running repaints the "
+      "surface afterwards, so live state is live",
+      all("self._scripts_refresh()" in _body_src(fn)
+          for fn in (start_scripts, toggle_scripts, scripts_reload)))
+stop_src = _body_src(full_stop)
+check("the engine is STOPPED on the way out, beside the other hook owner",
+      "_scripts.stop()" in stop_src and "_script_engine" in stop_src, stop_src)
+check("...and it comes out before the VM, the tray and the child processes, "
+      "for the same reason the hotkey host does: a low-level hook outliving "
+      "its process is how a desk ends up with dead chords",
+      stop_src.index("_scripts.stop()") < stop_src.index("self._tray"),
+      stop_src)
+stoppers = {node.name for node in ast.walk(MODULE)
+            if isinstance(node, ast.FunctionDef)
+            and ("_scripts.stop()" in _body_src(node)
+                 or _calls(node, "engine.stop"))}
+check("stopping happens in exactly two places: the switch and the full stop",
+      stoppers == {"_toggle_scripts", "_full_stop"}, repr(sorted(stoppers)))
+check("RELOAD IS WIRED TO reload(), in one place, and it does not start or "
+      "stop anything",
+      bool(_calls(scripts_reload, "engine.reload"))
+      and not _calls(scripts_reload, "engine.start")
+      and not _calls(scripts_reload, "engine.stop"),
+      _body_src(scripts_reload))
+reloaders = {node.name for node in ast.walk(MODULE)
+             if isinstance(node, ast.FunctionDef)
+             and _calls(node, "engine.reload")}
+check("...and it is the only caller of reload() in the app",
+      reloaders == {"_scripts_reload"}, repr(sorted(reloaders)))
+
+# The declaration itself, against the real registry rather than a description
+# of one. ensure_declaration is what the app calls, so this is what the app
+# does.
+registry_probe = FeatureRegistry()
+SE.ScriptEngine.ensure_declaration(registry_probe)
+check("ensure_declaration registers native-scripts in an empty registry",
+      registry_probe.get(SE.FEATURE_ID) is SE.FEATURE_DECLARATION,
+      SE.FEATURE_ID)
+SE.ScriptEngine.ensure_declaration(registry_probe)
+check("...and calling it a second time is a no-op rather than a ValueError",
+      len(registry_probe.features) == 1,
+      repr([item.id for item in registry_probe.features]))
+check("the declaration discloses the hook it joins, so the settings service "
+      "can say so without asking the engine",
+      any("WH_KEYBOARD_LL" in item
+          for item in SE.FEATURE_DECLARATION.input_hooks),
+      repr(SE.FEATURE_DECLARATION.input_hooks))
+check("the engine sits below the tiling host, so a hand-written script can "
+      "take a chord back from a shipped default",
+      SE.DEFAULT_PRIORITY < 50, repr(SE.DEFAULT_PRIORITY))
 
 
 # =========================================================================
@@ -380,6 +591,7 @@ def new_app(active="dashboard", collapsed=False):
     app._dock_active = active
     app._dock_collapsed = collapsed
     app._console_mount = lambda: mounted.append(app._dock_active)
+    app._scripts_refresh = lambda: repainted.append(app._dock_active)
     return app
 
 
@@ -389,6 +601,7 @@ def packed(app):
 
 saved = []
 mounted = []
+repainted = []
 A.save_setting = lambda key, value: saved.append((key, value))
 
 
@@ -404,6 +617,9 @@ check("and the console's view is mounted on the way in", mounted == ["console"])
 app._dock_click("scripts")
 check("clicking Scripts replaces THAT", packed(app) == {"scripts"},
       repr(packed(app)))
+check("and Scripts is repainted from the engine on the way in, so it is never "
+      "a view of a state the engine has left",
+      repainted == ["scripts"], repr(repainted))
 app._dock_click("console")
 check("coming back to the console does not build a second view",
       packed(app) == {"console"} and mounted == ["console", "console"])
@@ -530,12 +746,21 @@ check("with nothing stored, the app opens on the Dashboard, uncollapsed",
 
 
 # =========================================================================
-# THE CONSOLE'S BUFFER SURVIVED THE MOVE. It was written for a closable
-# window and it is unchanged for a hideable surface, because what it was
-# always really protecting is that THE LOG IS THE BUFFER, not the widget.
+# THE SCRIPTS SURFACE, AGAINST A HALF-REAL ENGINE. The binding set, the
+# problems, the files and the resolver are the SHIPPED ones -- the fake owns
+# only the three things a test must not do for real: touch the config store,
+# read the desk, and install a hook. So every state below is the state the
+# surface will actually be in, not a description of one.
 # =========================================================================
 
 class FakeText:
+    """A tk.Text, for BOTH surfaces that own one -- Scripts and the Console.
+
+    One fake because the two are the same widget doing the same job: rebuilt
+    from a buffer that lives somewhere else, appended to, trimmed, and asked
+    where its view is before anything is written into it.
+    """
+
     def __init__(self, tail=1.0):
         self.rows = []
         self.state = "disabled"
@@ -573,6 +798,329 @@ class FakeText:
         self.order.append("see")
         self.saw_end += 1
 
+
+class FakeVar:
+    def __init__(self, value=""):
+        self.value = value
+
+    def set(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+class FakeButton:
+    def __init__(self):
+        self.text = None
+        self.states = []
+
+    def config(self, **kwargs):
+        self.text = kwargs.get("text", self.text)
+
+    def state(self, spec):
+        self.states.append(tuple(spec))
+
+
+class FakeSettings:
+    """The engine's settings service, as far as the surface is concerned."""
+
+    def __init__(self, enabled=False):
+        self.enabled = bool(enabled)
+        self.asked = []
+        self.writes = []
+
+    def is_enabled(self, feature_id):
+        self.asked.append(feature_id)
+        return self.enabled
+
+    def set_enabled(self, feature_id, enabled):
+        self.asked.append(feature_id)
+        self.enabled = bool(enabled)
+        self.writes.append(bool(enabled))
+
+
+class FakeEngine:
+    """A ScriptEngine with a real binding set and no hook, store or desk."""
+
+    def __init__(self, directory, files=(), bindings=(), problems=(),
+                 enabled=False, running=False):
+        self.directory = directory
+        self.settings_service = FakeSettings(enabled)
+        self.is_running = bool(running)
+        self._files = tuple(files)
+        self._problems = tuple(problems)
+        self.bindings = SE.BindingSet(bindings, problems)
+        self.reloads = self.starts = self.stops = 0
+        self.explained = []
+
+    def scripts(self):
+        return self._files
+
+    def problems(self):
+        return self._problems
+
+    def explain(self, chord, facts, screen):
+        self.explained.append(chord)
+        return self.bindings.resolve(chord, facts, screen)
+
+    def reload(self):
+        self.reloads += 1
+        return SE.ReloadResult(str(self.directory), self._files,
+                               len(self.bindings.bindings), self._problems)
+
+    def start(self):
+        self.starts += 1
+        if self.is_running:
+            return SE.EngineResult("start", False, "already running")
+        self.is_running = True
+        return SE.EngineResult("start", True,
+                               "joined the running keyboard hook")
+
+    def stop(self):
+        self.stops += 1
+        self.is_running = False
+        return SE.EngineResult("stop", True, "stopped")
+
+
+FACTS = SE.WindowFacts("notepad", "Untitled - Notepad", "Notepad")
+SCREEN = SE.ScreenFacts("9f2c4a1b7e0d3355", True)
+GOOD_TEXT = ("scope os\n"
+             "  Ctrl+Alt+Shift+C -> window center\n"
+             "scope window process=notepad\n"
+             "  Ctrl+Alt+Shift+C -> pass\n")
+BROKEN_TEXT = ("scope os\n"
+               "  Ctrl+Alt+Y -> fly away\n")
+GOOD = SE.parse_script(GOOD_TEXT, "10-good.eos")
+BROKEN = SE.parse_script(BROKEN_TEXT, "20-broken.eos", start_order=2)
+GOOD_FILE = SE.ScriptFile("10-good.eos", "C:\\scripts\\10-good.eos", True,
+                          len(GOOD.bindings), GOOD.problems)
+BROKEN_FILE = SE.ScriptFile("20-broken.eos", "C:\\scripts\\20-broken.eos",
+                            True, len(BROKEN.bindings), BROKEN.problems)
+WHERE = "C:\\EsotericOS\\data\\scripts"
+
+
+def scripts_app(engine, text=None):
+    """An App with the Scripts surface's four slots and nothing else."""
+    app = A.App.__new__(A.App)
+    app._script_engine = engine
+    app._scripts_text = text
+    app.scripts_state = FakeVar()
+    app.scripts_where = FakeVar()
+    app.scripts_btn = FakeButton()
+    app._scripts_facts = lambda: (FACTS, SCREEN)
+    return app
+
+
+def body_text(body):
+    return "\n".join(line for _tag, line in body)
+
+
+print("\n---- the Scripts surface in every state it has ----")
+state, where, body = scripts_app(None)._scripts_report(None)
+check("with no engine at all the surface says so and shows no list",
+      state == "unavailable on this build" and where == ""
+      and len(body) == 1 and body[0][0] == "err",
+      repr((state, where, body)))
+
+off = FakeEngine(WHERE, files=(GOOD_FILE,), bindings=GOOD.bindings)
+state, where, body = scripts_app(off)._scripts_report(off)
+check("SWITCHED OFF: the surface says the feature is off rather than showing "
+      "a list of bindings that cannot fire",
+      "switched off" in state
+      and [line for _tag, line in body] == list(A.SCRIPTS_DISABLED_STATE),
+      repr((state, body_text(body))))
+check("...and no file name leaks into that state",
+      "10-good.eos" not in body_text(body), body_text(body))
+check("...but the location is still shown, so he can write while it is off",
+      WHERE in where, repr(where))
+check("the flag is read from the feature the engine declares, by id",
+      off.settings_service.asked and set(off.settings_service.asked)
+      == {SE.FEATURE_ID}, repr(off.settings_service.asked))
+
+empty = FakeEngine(WHERE, enabled=True)
+state, where, body = scripts_app(empty)._scripts_report(empty)
+check("EMPTY: with nothing on disk the surface prints the empty state whole",
+      [line for _tag, line in body] == list(A.SCRIPTS_EMPTY_STATE),
+      body_text(body))
+check("...and the empty state is shown UNDER the location, so 'the scripts "
+      "directory named above' names something",
+      WHERE in where and "scripts directory" in body_text(body).lower(),
+      repr(where))
+check("...and it does not claim to be intercepting anything yet",
+      "not intercepting" in state, repr(state))
+
+loaded = FakeEngine(WHERE, files=(GOOD_FILE, BROKEN_FILE),
+                    bindings=GOOD.bindings + BROKEN.bindings,
+                    problems=GOOD.problems + BROKEN.problems,
+                    enabled=True, running=True)
+state, where, body = scripts_app(loaded)._scripts_report(loaded)
+rendered = body_text(body)
+check("LOADED: the state line says the chords are actually intercepted",
+      state == "ON — scripts are intercepted", repr(state))
+check("every file is listed with its binding count",
+      "10-good.eos: 2 binding(s)" in rendered
+      and "20-broken.eos: 0 binding(s)" in rendered, rendered)
+check("...and with the scopes it declares, in declaration order",
+      "scope os" in rendered
+      and "scope window process=notepad" in rendered
+      and rendered.index("scope os") < rendered.index(
+          "scope window process=notepad"), rendered)
+flaw = BROKEN.problems[0]
+check("the broken script really is located to a line and a column, which is "
+      "what makes 'first-class' worth anything",
+      flaw.source == "20-broken.eos" and flaw.line == 2 and flaw.column > 0
+      and "fly" in flaw.message, flaw.describe())
+check("PROBLEMS ARE FIRST-CLASS CONTENT: file, line, column and reason, "
+      "verbatim from the engine",
+      all(problem.describe() in rendered for problem in loaded.problems())
+      and flaw.describe() in rendered, rendered)
+check("...and they are named as errors, not as prose",
+      [tag for tag, line in body
+       if any(problem.describe() in line
+              for problem in loaded.problems())] == ["err"], repr(body[:4]))
+check("...and they come BEFORE the file list, so a broken script cannot be "
+      "scrolled past",
+      rendered.index(flaw.describe()) < rendered.index("10-good.eos: 2"),
+      rendered)
+check("...and the count is stated, with what a problem actually costs",
+      "1 problem(s)" in body[0][1] and "ONE binding" in body[0][1],
+      repr(body[0]))
+check("the resolution for each claimed chord is shown, resolved against the "
+      "window that has the focus",
+      "notepad" in rendered and "window center" in rendered
+      and loaded.explained == list(loaded.bindings.chords),
+      repr(loaded.explained))
+check("...and the heading says which window and which screen it resolved "
+      "against, so 'here' is not a mystery",
+      "9f2c4a1b7e0d3355" in rendered and "(primary)" in rendered, rendered)
+check("the narrower `pass` really did stand aside for the os binding, which "
+      "is the resolver's answer and not the surface's",
+      any(tag == "ok" and "-> window center" in line for tag, line in body),
+      rendered)
+
+blind = scripts_app(loaded)
+blind._scripts_facts = lambda: (None, None)
+check("a desk that cannot be read costs the resolution and nothing else: the "
+      "files and the problems are still there",
+      "could not be read" in body_text(blind._scripts_report(loaded)[2])
+      and "10-good.eos: 2 binding(s)"
+      in body_text(blind._scripts_report(loaded)[2]))
+
+
+print("\n---- painting it, and the two controls ----")
+view = FakeText()
+app = scripts_app(loaded, view)
+body = app._scripts_refresh()
+check("the repaint rebuilds from empty rather than appending",
+      view.order[0] == "delete" and view.order.count("delete") == 1,
+      repr(view.order))
+check("every reported line reaches the widget, in order",
+      [row.rstrip("\n") for row in view.rows] == [line for _tag, line in body],
+      repr(view.rows[:3]))
+check("...and the view is placed LAST, at the top, because the problems are "
+      "at the top -- this surface does not follow a tail",
+      view.order[-1] == "see" and view.saw_end == 1, repr(view.order[-3:]))
+check("the state line and the location are written to their own labels, not "
+      "into the scroller",
+      "intercepted" in app.scripts_state.get()
+      and WHERE in app.scripts_where.get(),
+      repr((app.scripts_state.get(), app.scripts_where.get())))
+check("a running engine's switch offers to turn it OFF",
+      app.scripts_btn.text == "Turn off scripts", repr(app.scripts_btn.text))
+stopped = FakeEngine(WHERE, enabled=True)
+app = scripts_app(stopped, FakeText())
+app._scripts_refresh()
+check("a stopped engine's switch offers to turn it ON",
+      app.scripts_btn.text == "Turn on scripts", repr(app.scripts_btn.text))
+app = scripts_app(None, FakeText())
+app._script_host = lambda: None
+app._scripts_refresh()
+check("with no engine the switch is disabled rather than lying about what it "
+      "would do", app.scripts_btn.states == [("disabled",)],
+      repr(app.scripts_btn.states))
+
+engine = FakeEngine(WHERE, files=(GOOD_FILE,), bindings=GOOD.bindings,
+                    enabled=True)
+app = scripts_app(engine, FakeText())
+app._scripts_seed = lambda _engine: False
+app._scripts_reload()
+check("RELOAD calls the engine's reload exactly once and starts nothing",
+      (engine.reloads, engine.starts, engine.stops) == (1, 0, 0),
+      repr((engine.reloads, engine.starts, engine.stops)))
+check("...and repaints afterwards, so the surface shows what was just read",
+      "10-good.eos: 2 binding(s)" in "".join(app._scripts_text.rows))
+app._scripts_reload()
+check("...and reloading twice reloads twice; it is not a one-shot",
+      engine.reloads == 2)
+
+engine = FakeEngine(WHERE, files=(GOOD_FILE,), bindings=GOOD.bindings)
+app = scripts_app(engine, FakeText())
+app._scripts_seed = lambda _engine: False
+app._toggle_scripts()
+check("THE SWITCH starts the engine and writes the feature flag on",
+      engine.starts == 1 and engine.is_running
+      and engine.settings_service.writes == [True],
+      repr((engine.starts, engine.settings_service.writes)))
+check("...and the surface comes back showing the loaded list",
+      "10-good.eos: 2 binding(s)" in "".join(app._scripts_text.rows))
+app._toggle_scripts()
+check("pressing it again stops the engine and writes the flag off",
+      engine.stops == 1 and not engine.is_running
+      and engine.settings_service.writes == [True, False],
+      repr(engine.settings_service.writes))
+check("...and it never started twice on the way", engine.starts == 1)
+
+refused = FakeEngine(WHERE, enabled=False)
+refused.start = lambda: SE.EngineResult("start", False, "hook refused")
+app = scripts_app(refused, FakeText())
+app._scripts_seed = lambda _engine: False
+app._toggle_scripts()
+check("a refused start does NOT write the flag on, so the app does not spend "
+      "every launch retrying something that cannot work",
+      refused.settings_service.writes == [] and not refused.is_running,
+      repr(refused.settings_service.writes))
+
+
+print("\n---- the scripts directory, created once ----")
+seed_root = tempfile.mkdtemp(prefix="esotericos-scripts-")
+try:
+    target = os.path.join(seed_root, "data", "scripts")
+    engine = FakeEngine(target)
+    app = scripts_app(engine)
+    created = app._scripts_seed(engine)
+    example = os.path.join(target, A.SCRIPTS_EXAMPLE_NAME)
+    check("first run creates the directory and writes one example into it",
+          created is True and os.path.isdir(target)
+          and os.path.isfile(example), repr(os.listdir(seed_root)))
+    written = open(example, encoding="utf-8").read()
+    check("...and what it wrote parses with the shipped parser",
+          not SE.parse_script(written, A.SCRIPTS_EXAMPLE_NAME).problems)
+    check("...and the engine would find it: it ends in the engine's extension",
+          example.endswith(SE.EXTENSION))
+    os.remove(example)
+    check("a SECOND run writes nothing: an existing directory is his, and a "
+          "deleted example stays deleted",
+          app._scripts_seed(engine) is False
+          and not os.path.exists(example))
+    engine.directory = os.path.join(seed_root, "nested", "a", "b", "scripts")
+    check("a directory several levels deep is created whole",
+          app._scripts_seed(engine) is True
+          and os.path.isdir(engine.directory))
+    engine.directory = ""
+    check("an engine with no directory at all is refused, not crashed into",
+          app._scripts_seed(engine) is False)
+finally:
+    shutil.rmtree(seed_root, ignore_errors=True)
+
+
+# =========================================================================
+# THE CONSOLE'S BUFFER SURVIVED THE MOVE. It was written for a closable
+# window and it is unchanged for a hideable surface, because what it was
+# always really protecting is that THE LOG IS THE BUFFER, not the widget.
+# FakeText is defined with the Scripts fakes above; both surfaces own one
+# Text and neither owns the history inside it.
+# =========================================================================
 
 print("\n---- the log is the buffer, and it outlived the window ----")
 console = A.App.__new__(A.App)

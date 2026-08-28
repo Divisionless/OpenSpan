@@ -1406,7 +1406,10 @@ PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 # rail that switches them does not scroll at all. Each surface may therefore
 # own its own vertical scroller without owing anything to the others. The
 # Dashboard owns the page Canvas; the Console owns its Text's scrollbar; the
-# Scripts surface owns none, because it has nothing to hide yet.
+# Scripts surface owns its own Text's scrollbar, and exactly one -- its head
+# row (Reload, the switch, the directory) never scrolls, and everything that
+# can grow without bound (files, problems, bindings, resolutions) is inside
+# that one scroller.
 #
 # NAMING: `on_desktop.dock_rect` docks this WINDOW to the right edge of the
 # desktop. THIS dock is the rail INSIDE the window. They are unrelated, and
@@ -1425,18 +1428,70 @@ DOCK_COLLAPSED_MIN_W = 96
 # colour from App._theme, so a rail entry lights up exactly like every other
 # button in the app rather than inventing a second hover.
 DOCK_HOVER = "#221F2A"
-# The Scripts surface has no content and this is what it says instead. It is a
-# constant so the honesty of it is assertable: there is no script list, no
-# editor and no run button anywhere in the app, and a paragraph promising one
-# would be a drawing of a feature rather than the feature.
+# ---- the Scripts surface's words -------------------------------------------
+# The scoped scripting system exists now (win/script_engine.py over
+# win/script_scope.py) and this surface is its face. It shows what is on disk,
+# what would not parse, and where to write -- and it still has NO EDITOR. Doug
+# writes the files himself; the app reads them.
+#
+# WHERE SCRIPTS LIVE IS NOT DECIDED HERE. ScriptEngine.directory owns that
+# answer -- the ConfigStore's data directory plus "scripts", overridable by the
+# native-scripts `directory` setting -- and this surface ASKS the engine rather
+# than recomputing it. Two places that both know where scripts live is exactly
+# how a surface ends up pointing at a folder the engine never reads.
+SCRIPTS_FORMAT_DOC = "docs\\SCRIPTS-FORMAT.md"
+SCRIPTS_EXAMPLE_NAME = "10-example.eos"
+# Written into the scripts directory the first time that directory is created,
+# and never written again -- an existing empty directory means he deleted the
+# example, and putting it back would be the app arguing with him. It must
+# PARSE: test_dock_surfaces runs the real parser over this constant, so a typo
+# here fails a test rather than greeting him with an error on first run.
+SCRIPTS_EXAMPLE = """\
+# 10-example.eos -- written by EsotericOS the first time the scripts
+# directory was created. Delete it; it will not come back.
+#
+# Every *.eos file in this directory is loaded, in filename order. A # starts
+# a comment. The whole format -- scopes, chords, verbs, and every error it can
+# report -- is in docs\\SCRIPTS-FORMAT.md.
+#
+# NOTHING HERE FIRES until native scripts are switched on from the Scripts
+# surface. The engine ships disabled, so a file sitting in this directory
+# binds nothing at all until you say so.
+
+# `scope os` is the widest scope: it matches wherever the focus is.
+scope os
+  # Centre the focused window on the work area it is already on. Harmless and
+  # reversible, and it proves the chord reached the engine.
+  Ctrl+Alt+Shift+C -> window center
+
+# A narrower scope beats a wider one whatever the priority says. This one
+# matches only while Notepad has the focus, and it hands the chord straight
+# back to Windows instead of acting -- which is how an exception is carved out
+# of a wider binding.
+scope window process=notepad
+  Ctrl+Alt+Shift+C -> pass
+"""
+# WITH NO SCRIPTS ON DISK. Not a product tour: it says there is nothing, and
+# names the two things that fix that -- the directory to write in (printed
+# above these lines by the surface itself) and the document that says what to
+# write. A constant so the honesty of it is assertable.
 SCRIPTS_EMPTY_STATE = (
-    "Nothing here yet, and nothing here runs anything.",
-    "This surface is reserved for a scoped scripting system: named scripts, "
-    "each carrying the scope it is allowed to act in, invoked from this dock "
-    "entry against a chosen target.",
-    "That system is a separate piece of work, and none of it is wired to this "
-    "surface yet, so there is no script list, no editor and no run button to "
-    "show you.",
+    "No scripts found. Nothing is bound and nothing runs.",
+    "Write a .eos file in the scripts directory named above, then press "
+    "Reload. Every *.eos in that directory is loaded, in filename order.",
+    "The format -- scopes, chords, verbs, and every error it can report -- is "
+    "in " + SCRIPTS_FORMAT_DOC + ". There is no editor here: you write the "
+    "files, the app reads them.",
+)
+# WITH THE FEATURE SWITCHED OFF. A list of scripts that cannot fire is a lie
+# told in detail, so the surface shows this instead of a dead list -- the state
+# first, and the one action that changes it.
+SCRIPTS_DISABLED_STATE = (
+    "Native scripts are switched off. No chord is intercepted by a script, "
+    "and nothing in the scripts directory is loaded.",
+    "Press Turn on scripts to read the directory and join the keyboard hook. "
+    "The switch is the native-scripts feature flag and it survives a restart.",
+    "The format is in " + SCRIPTS_FORMAT_DOC + ".",
 )
 
 
@@ -7512,6 +7567,14 @@ class App:
         # reason _uiq does -- log() must never arrive before its own storage.
         self._console_lines = collections.deque(maxlen=CONSOLE_BUFFER_LINES)
         self._console_text = None    # the surface's Text, once it is built
+        # THE SCRIPT ENGINE'S TWO SLOTS, and they sit here rather than beside
+        # self._wm_host down at the end of __init__ for the same reason _uiq
+        # sits here: _restore_dock() runs BEFORE that line, and restoring onto
+        # the Scripts surface repaints it, which asks for the engine. A slot
+        # that arrives after its first reader is an AttributeError on the one
+        # path nobody tests -- the session that ended on Scripts.
+        self._scripts_text = None    # the Scripts surface's Text
+        self._script_engine = None   # built on first use; see _script_host
         # Which thread IS the Tk thread. busy() and the row repaints are called
         # from both sides -- a click handler is already on it, a worker never is
         # -- and queueing a repaint that could just happen now costs up to a
@@ -7730,7 +7793,11 @@ class App:
         # by _console_mount on the first invoke, so the buffer remains the log
         # and rebuild-from-buffer remains the only way a console is populated.
         cons = tk.Frame(body, bg=BG)
-        # SCRIPTS. New, and honestly empty -- see SCRIPTS_EMPTY_STATE.
+        # SCRIPTS. Its chrome -- the head row and the one scroller -- is built
+        # here, exactly once; its CONTENT is written by _scripts_refresh, which
+        # reads the engine every time the surface is invoked or reloaded. So
+        # what is on screen is what is on disk, never a snapshot taken at
+        # startup and left to rot.
         scripts = tk.Frame(body, bg=BG)
         self._build_scripts_surface(scripts)
         self._dock_surfaces = {
@@ -8234,14 +8301,17 @@ class App:
     # deliberately: Doug drove both live and asked for the program to start
     # in the state he tested. Spaces stays opt-in because it HIDES windows,
     # and a feature that can make work vanish should be a decision, not a
-    # side effect of launching. Every switch still turns off in one click,
-    # and WINDOW_FEATURE_AUTOSTART=0 in the environment disables the lot.
+    # side effect of launching. Native scripts are opt-in for the same kind
+    # of reason and one step further: they obey their own stored flag, which
+    # ships off, so _start_scripts arms nothing until Doug has thrown the
+    # switch once. Every switch still turns off in one click, and
+    # WINDOW_FEATURE_AUTOSTART=0 in the environment disables the lot.
     def _autostart_window_features(self):
         if os.environ.get("WINDOW_FEATURE_AUTOSTART", "1").strip() == "0":
             _emit("info", "window features left off (WINDOW_FEATURE_AUTOSTART=0).")
             return
         for arm in (self._toggle_window_chords, self._toggle_screen_zoom,
-                    self._toggle_spaces):
+                    self._toggle_spaces, self._start_scripts):
             try:
                 arm()
             except Exception as exc:  # noqa: BLE001
@@ -8306,6 +8376,155 @@ class App:
         self.wm_btn.config(text="Turn off window chords")
         _emit("ok", "window chords on — try Ctrl+Win+Alt+Numpad 4 on a "
                     "focused window.")
+
+    # ---- native scoped scripts (win/script_engine.py) ----------------------
+    # Built lazily and started ONLY from _start_scripts or the switch, exactly
+    # as the hotkey host is. Constructing a ScriptEngine reads no file, starts
+    # no thread and installs no hook -- the module says so at the top and means
+    # it -- so the object can exist all session while the keyboard is untouched.
+    # start() is the only thing that joins the hook, and it JOINS: when the
+    # hotkey host already holds the central KeyboardInterceptionService the
+    # engine registers a consumer beside it rather than installing a second
+    # WH_KEYBOARD_LL.
+
+    def _script_host(self):
+        """The script engine, built on first use. None when unavailable."""
+        if self._script_engine is None:
+            try:
+                import script_engine
+                engine = script_engine.ScriptEngine()
+                # THE DECLARATION FIRST. is_enabled() raises KeyError on an
+                # unknown feature id, so the surface could not even ask
+                # whether scripts are on until native-scripts is registered.
+                # The engine's own settings service registers it on the way
+                # in; this line says so out loud and is idempotent.
+                script_engine.ScriptEngine.ensure_declaration(
+                    engine.settings_service.registry)
+                self._script_engine = engine
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"scripts unavailable: {exc}")
+                return None
+        return self._script_engine
+
+    def _scripts_seed(self, engine):
+        """Create the scripts directory on first run, with one example in it.
+
+        ONLY when the directory does not exist. An existing empty directory is
+        a decision -- he deleted the example -- and writing it back would be
+        the app arguing with him. The example parses and does one harmless,
+        reversible thing, and it cannot fire while the feature is off.
+        """
+        if engine is None:
+            return False
+        try:
+            directory = str(engine.directory)
+            if not directory or os.path.isdir(directory):
+                return False
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, SCRIPTS_EXAMPLE_NAME), "w",
+                      encoding="utf-8", newline="\n") as handle:
+                handle.write(SCRIPTS_EXAMPLE)
+        except Exception as exc:  # noqa: BLE001
+            _emit("err", f"scripts: cannot create the scripts directory: {exc}")
+            return False
+        _emit("ok", f"scripts: created {directory} with "
+                    f"{SCRIPTS_EXAMPLE_NAME}.")
+        return True
+
+    def _scripts_reload(self):
+        """Re-read the directory and repaint. The ONE caller of reload().
+
+        Reloading does not start or stop anything: the consumer swaps its
+        binding set under its own lock, so a reload while the hook is live
+        changes what the next keystroke resolves against and nothing else.
+        """
+        engine = self._script_host()
+        if engine is None:
+            return self._scripts_refresh()
+        self._scripts_seed(engine)
+        try:
+            result = engine.reload()
+        except Exception as exc:  # noqa: BLE001
+            _emit("err", f"scripts: reload failed: {exc}")
+            return self._scripts_refresh()
+        _emit("err" if result.problems else "ok",
+              f"scripts: {result.bindings} binding(s) from "
+              f"{len(result.files)} file(s) in {result.directory}"
+              + (f" — {len(result.problems)} problem(s)"
+                 if result.problems else ""))
+        return self._scripts_refresh()
+
+    def _toggle_scripts(self):
+        """Start or stop the script engine. The ONE place either happens.
+
+        It also writes the native-scripts feature flag, so the choice survives
+        a restart and _start_scripts obeys it on the next launch. The switch
+        and the flag are the same decision; two places for it would drift.
+        The flag is only set ON once start() has actually succeeded, so a
+        refusal does not leave the app trying again forever.
+        """
+        engine = self._script_host()
+        if engine is None:
+            return None
+        if engine.is_running:
+            engine.stop()
+            self._scripts_set_enabled(engine, False)
+            _emit("ok", "scripts off — no chord is intercepted by a script.")
+            return self._scripts_refresh()
+        self._scripts_seed(engine)
+        result = engine.start()
+        if not result.performed:
+            _emit("err", f"scripts refused: {result.reason}")
+            return self._scripts_refresh()
+        self._scripts_set_enabled(engine, True)
+        _emit("ok", f"scripts on — {result.reason}; "
+                    f"{len(engine.bindings)} binding(s) loaded.")
+        return self._scripts_refresh()
+
+    @staticmethod
+    def _scripts_set_enabled(engine, enabled):
+        """Persist the switch through the feature flag it already has."""
+        try:
+            import script_engine
+            engine.settings_service.set_enabled(script_engine.FEATURE_ID,
+                                                bool(enabled))
+        except Exception as exc:  # noqa: BLE001
+            _emit("err", f"scripts: could not save the switch: {exc}")
+            return False
+        return True
+
+    def _start_scripts(self):
+        """Arm scripts at startup, but only if the feature is switched ON.
+
+        Chords and zoom come up on; scripts deliberately do NOT. The
+        native-scripts declaration ships default_enabled=False, and a file
+        Doug wrote by hand that swallows a chord should be a decision he made
+        rather than a side effect of launching. The stored flag is the whole
+        gate, and the switch on the Scripts surface is the only thing that
+        writes it.
+
+        The directory is created either way, so the surface has somewhere real
+        to point at before he has ever turned the feature on.
+        """
+        engine = self._script_host()
+        if engine is None:
+            return
+        self._scripts_seed(engine)
+        if not self._scripts_enabled(engine):
+            _emit("info", "scripts off — turn them on from the Scripts "
+                          "surface in the dock.")
+        else:
+            result = engine.start()
+            if result.performed:
+                _emit("ok", f"scripts on — {result.reason}; "
+                            f"{len(engine.bindings)} binding(s) loaded.")
+            else:
+                _emit("err", f"scripts refused: {result.reason}")
+        # Repaint whatever the outcome was. _restore_dock has already run by
+        # now, so a session that ended ON the Scripts surface is looking at it
+        # while this decides -- and a surface that shows the state the app was
+        # in one line ago is the thing this method exists to avoid.
+        self._scripts_refresh()
 
     def _toggle_spaces(self):
         """Enable or disable separate Spaces. Disable ALWAYS restores."""
@@ -8754,6 +8973,13 @@ class App:
                 frame.pack_forget()
         if showing == "console":
             self._console_mount()
+        # Scripts repaints on the way IN, for the same reason the console
+        # mounts on the way in: the surface is a view of something that
+        # changed while it was hidden -- files on disk, the switch, a reload
+        # -- and a view that only updates while it is being looked at is not
+        # a view of anything.
+        if showing == "scripts":
+            self._scripts_refresh()
         if showing is not None:
             # padx/pady are the Dashboard's original ones: a surface occupies
             # exactly the cavity the single page used to occupy. side="left"
@@ -8833,22 +9059,224 @@ class App:
         return self._render_dock()
 
     def _build_scripts_surface(self, parent):
-        """The third surface, and it is honestly empty.
+        """The third surface: what is on disk, what would not parse, and where.
 
-        There is no script list, no editor and no run button here, because the
-        scoped scripting system is a separate piece of work that has not been
-        designed. Drawing a plausible one would make the app claim a feature it
-        does not have, and every fake row would have to be deleted before a
-        real one could be written. So: what it will be, and that it is not it.
+        THE CHROME ONLY. Two controls and one readout are built here and never
+        rebuilt; every word inside them is written by _scripts_refresh from the
+        engine. There is still NO EDITOR -- Doug writes the .eos files himself
+        and this surface reads them back to him -- so the whole widget budget
+        is a switch, a Reload, the directory, and one scrolling report.
+
+        LAW 10, satisfied the way the console satisfies it: ONE vertical
+        scroller, belonging to a surface that is inside no other surface. The
+        head row and the directory line do not scroll and never will; anything
+        that can grow without bound -- files, problems, bindings, resolutions
+        -- is inside the one Text. Nothing here is fitted to its content, so
+        nothing here can grow a container instead of scrolling.
         """
-        tk.Label(parent, text="Scripts", bg=BG, fg=FG,
-                 font=(FONT_UI_SEMI, 16), anchor="w").pack(
-            fill="x", padx=16, pady=(PAD_LG, PAD_XS))
-        for line in SCRIPTS_EMPTY_STATE:
-            tk.Label(parent, text=line, bg=BG, fg=MUTED, font=(FONT_UI, 10),
-                     anchor="w", justify="left", wraplength=560).pack(
-                fill="x", padx=16, pady=(0, PAD_MD))
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x", padx=16, pady=(PAD_LG, PAD_XS))
+        tk.Label(head, text="Scripts", bg=BG, fg=FG,
+                 font=(FONT_UI_SEMI, 16), anchor="w").pack(side="left")
+        # Reload is the rightmost control because it is the one he presses
+        # after editing a file; the switch sits inboard of it because it is
+        # pressed once. Both are ttk.Buttons, the same vocabulary as every
+        # other action in the app -- see the Window management section.
+        ttk.Button(head, text="Reload",
+                   command=self._scripts_reload).pack(side="right")
+        self.scripts_btn = ttk.Button(head, text="Turn on scripts",
+                                      command=self._toggle_scripts)
+        self.scripts_btn.pack(side="right", padx=(0, PAD_MD))
+
+        # The switch's own state line, worded like wm_state and zoom_state:
+        # what the feature is doing right now, in lower case, beside it.
+        self.scripts_state = tk.StringVar(
+            value="off — no chord is intercepted")
+        tk.Label(parent, textvariable=self.scripts_state, bg=BG, fg=MUTED,
+                 font=(FONT_UI, 8), anchor="w").pack(
+            fill="x", padx=16, pady=(0, PAD_XS))
+        # WHERE TO WRITE, in the console font because it is a path he will
+        # copy. Filled by _scripts_refresh from ScriptEngine.directory, so the
+        # app cannot point at a directory the engine does not read.
+        self.scripts_where = tk.StringVar(value="")
+        _where = tk.Label(parent, textvariable=self.scripts_where, bg=BG,
+                          fg=MUTED, font=("Consolas", 8), anchor="w",
+                          justify="left")
+        _where.pack(fill="x", padx=16, pady=(0, PAD_SM))
+        bind_wraplength(_where)
+
+        wrap = tk.Frame(parent, bg=PANEL)
+        wrap.pack(fill="both", expand=True, padx=16, pady=(0, PAD_MD))
+        scroll = ttk.Scrollbar(wrap, orient="vertical", style=SCROLLBAR_STYLE)
+        scroll.pack(side="right", fill="y")
+        text = tk.Text(wrap, bg=self.CONSOLE_BG, fg=self.CONSOLE_FG, bd=0,
+                       font=self.CONSOLE_FONT, wrap="word", state="disabled",
+                       insertbackground=FG, yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.config(command=text.yview)
+        # The console's palette, deliberately reused rather than duplicated: a
+        # parse problem is red here for the same reason an error is red there,
+        # and a second tag table would be a second idea of what red means.
+        for _tag, _colour in self.CONSOLE_TAGS:
+            text.tag_config(_tag, foreground=_colour)
+        self._scripts_text = text
+        # As with the console: the Dashboard's wheel handler is bound with
+        # bind_all and declines this surface, because _inside() only claims
+        # widgets under the page canvas. The Text's own class binding scrolls
+        # it. No exemption is added, because none is needed.
         return parent
+
+    # ---- the Scripts surface's content -----------------------------------
+    # _scripts_report DECIDES and _scripts_refresh PAINTS. Every state the
+    # surface can be in -- unavailable, switched off, empty, broken, loaded --
+    # is one branch of the decider, which builds no widget and can therefore be
+    # driven from a Tk-free test against a fake engine. The painter has no
+    # branches about content at all, so there is no second place for this
+    # surface to make up its mind.
+
+    @staticmethod
+    def _scripts_scopes(engine, item):
+        """The distinct scopes one file declares, in declaration order."""
+        seen = []
+        for binding in engine.bindings.bindings:
+            if binding.source != item.name:
+                continue
+            described = binding.scope.describe() or "os"
+            if described not in seen:
+                seen.append(described)
+        return tuple(seen)
+
+    def _scripts_facts(self):
+        """The foreground window and its screen, for `explain`. Read-only.
+
+        Separate and guarded so a probe that fails costs the RESOLUTION
+        section and nothing else: the file list and the problems are read off
+        the engine and owe the desk nothing.
+        """
+        try:
+            import script_engine
+            return script_engine.default_probe()
+        except Exception:  # noqa: BLE001
+            return None, None
+
+    def _scripts_enabled(self, engine):
+        """Is the native-scripts feature switched on? Defaults to no."""
+        if engine is None:
+            return False
+        try:
+            import script_engine
+            return bool(engine.settings_service.is_enabled(
+                script_engine.FEATURE_ID))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _scripts_report(self, engine):
+        """Everything the Scripts surface says: (switch line, where, body).
+
+        `body` is a tuple of (tag, line) pairs in the console's own tag
+        vocabulary. Problems come FIRST and in full -- file, line, column and
+        reason -- because a script that will not parse is the most useful
+        thing this surface can tell him, and burying it under a file list is
+        how a broken binding stays silent.
+        """
+        if engine is None:
+            return ("unavailable on this build", "",
+                    (("err", "The scripting engine could not be loaded on "
+                             "this build. Nothing is bound and nothing runs."),))
+        try:
+            directory = str(engine.directory)
+        except Exception:  # noqa: BLE001
+            directory = ""
+        where = ("Scripts directory: " + directory if directory
+                 else "Scripts directory: not known on this build")
+        if not self._scripts_enabled(engine):
+            return ("off — native scripts are switched off", where,
+                    tuple(("info", line) for line in SCRIPTS_DISABLED_STATE))
+        running = bool(getattr(engine, "is_running", False))
+        state = ("ON — scripts are intercepted" if running
+                 else "loaded, but not intercepting — press Turn on scripts")
+        files = tuple(engine.scripts())
+        problems = tuple(engine.problems())
+        if not files:
+            return (state, where,
+                    tuple(("info", line) for line in SCRIPTS_EMPTY_STATE))
+
+        body = []
+        if problems:
+            body.append(("err", f"{len(problems)} problem(s). Each one dropped "
+                                "ONE binding; the rest of its file still "
+                                "loaded."))
+            for problem in problems:
+                body.append(("err", "  " + problem.describe()))
+            body.append(("info", ""))
+        body.append(("event", f"{len(files)} file(s) in {directory}:"))
+        for item in files:
+            body.append(("cmd", "  " + item.describe()))
+            for scope in self._scripts_scopes(engine, item):
+                body.append(("info", "      scope " + scope))
+        body.append(("info", ""))
+
+        # WHAT A CHORD WOULD DO, HERE. explain() is the pure resolver over the
+        # loaded set, so this costs one probe of the foreground window and no
+        # keystroke at all. The heading names the window it resolved against,
+        # because "here" is right now and right now the focus is this app.
+        try:
+            chords = tuple(engine.bindings.chords)
+        except Exception:  # noqa: BLE001
+            chords = ()
+        if chords:
+            facts, screen = self._scripts_facts()
+            if facts is None or screen is None:
+                body.append(("info", "The foreground window could not be read, "
+                                     "so there is no resolution to show."))
+            else:
+                body.append(("event", "With " + (facts.process or "(unknown)")
+                             + " focused on screen "
+                             + (screen.stable_key or "(no stable key)")
+                             + (" (primary)" if screen.is_primary else "")
+                             + ", these chords resolve to:"))
+                for chord in chords:
+                    try:
+                        line = engine.explain(chord, facts, screen).describe()
+                    except Exception as exc:  # noqa: BLE001
+                        line = f"{chord} -> could not be resolved: {exc}"
+                    body.append(("ok", "  " + line))
+        return (state, where, tuple(body))
+
+    def _scripts_refresh(self):
+        """Repaint the Scripts surface from the engine. Reads; never starts.
+
+        The ONE writer of what this surface shows. Called on invoke, after a
+        reload, and after the switch is thrown, so the surface is never a
+        snapshot of a state the engine has since left.
+        """
+        engine = self._script_host()
+        state, where, body = self._scripts_report(engine)
+        self.scripts_state.set(state)
+        self.scripts_where.set(where)
+        try:
+            self.scripts_btn.config(
+                text="Turn off scripts"
+                if engine is not None and getattr(engine, "is_running", False)
+                else "Turn on scripts")
+            if engine is None:
+                self.scripts_btn.state(["disabled"])
+        except Exception:  # noqa: BLE001
+            pass
+        widget = self._scripts_text
+        if widget is None:
+            return body
+        try:
+            widget.config(state="normal")
+            widget.delete("1.0", "end")
+            for tag, line in body:
+                widget.insert("end", line + "\n", tag)
+            widget.config(state="disabled")
+            widget.see("1.0")    # a repaint opens at the top, not the tail:
+            #                      the problems are at the top
+        except Exception:  # noqa: BLE001
+            pass
+        return body
 
     # ---- the single-page viewport ----------------------------------------
     def _sync_page_scrollregion(self):
@@ -10086,6 +10514,18 @@ class App:
         if _host is not None and _host.is_running:
             try:
                 _host.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        # ...and the script engine, which is on the SAME hook, for the same
+        # reason. It comes out beside the host rather than after the other
+        # features because the risk it carries is the keyboard's, not its own:
+        # its consumer is registered with the central interception service, and
+        # stop() unregisters it and drops the hook if it was the engine that
+        # installed one.
+        _scripts = getattr(self, "_script_engine", None)
+        if _scripts is not None and getattr(_scripts, "is_running", False):
+            try:
+                _scripts.stop()
             except Exception:  # noqa: BLE001
                 pass
         # Zoom too, and for a sharper reason: stop() puts magnification back

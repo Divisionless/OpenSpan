@@ -12,13 +12,36 @@ There is no AutoHotkey here and nothing is shelled out to. The engine is
 
 ## Where scripts live
 
-Files end in `.eos` and sit in the scripts directory — by default
-`<data>/scripts` beside the config store, overridable with the `directory`
-setting of the `native-scripts` feature.
+Files end in `.eos` and sit in the scripts directory: `ConfigStore`'s data
+directory plus `scripts`, which is `<product root>\data\scripts` — the same
+root that holds `config\esotericos_config.json`, and beside the exe on a frozen
+build. It is overridable with the `directory` setting of the `native-scripts`
+feature.
+
+The app creates that directory on first run if it is absent and drops one
+commented example, `10-example.eos`, into it. Delete the example and it does
+not come back: an existing directory is never re-seeded.
 
 Every `*.eos` in that directory is loaded, in filename order. Filename order is
 the declaration order used to break exact ties, so `10-desk.eos` is consulted
 before `20-code.eos`.
+
+### The Scripts surface
+
+The **Scripts** entry in the app's right-side dock is the whole UI. It shows
+the directory, every file found with its scopes and binding count, every parse
+problem with file, line, column and reason, and what each bound chord would
+resolve to against the window that has the focus right now. It has two
+controls: **Reload**, which re-reads the directory, and the switch that turns
+native scripts on and off.
+
+There is no editor and there will not be one. You write the files; the app
+reads them.
+
+The feature ships **off** — `native-scripts` declares `default_enabled=False` —
+so a file in the scripts directory binds nothing until the switch is thrown
+once. The switch writes the feature flag, so the choice survives a restart, and
+the engine re-arms itself at the next launch without asking again.
 
 ---
 
