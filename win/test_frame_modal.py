@@ -196,13 +196,24 @@ check("wait_window returns when the modal closes", done[0] == "returned",
 # dialogs they replaced, and a text search cannot tell that from a call.
 here = os.path.dirname(os.path.abspath(__file__))
 BANNED = {"Toplevel", "messagebox", "filedialog", "simpledialog"}
-# THE ONE EXEMPTION, BY NAME. Identify (2026-08-15) puts a number on each
-# real monitor for a moment, the way Windows Settings does. That is not a
-# dialog -- it takes no focus and asks nothing -- and it cannot be done from
-# inside the frame, because its whole point is to appear on the OTHER
-# screens. It lives in exactly one method so the exemption is exactly one
-# method wide; a Toplevel anywhere else in these files is still an offender.
-EXEMPT_FUNCTIONS = {"_identify_card"}
+# THE EXEMPTIONS, BY NAME, AND THERE ARE TWO.
+#
+# _identify_card (2026-08-15) puts a number on each real monitor for a moment,
+# the way Windows Settings does. That is not a dialog -- it takes no focus and
+# asks nothing -- and it cannot be done from inside the frame, because its
+# whole point is to appear on the OTHER screens.
+#
+# _open_console_window (2026-08-27) is the console. Doug: *"make the console a
+# separate surface, then it can scroll lawfully."* Law 10 forbids a scrolling
+# surface inside another scrolling surface, because the wheel is hijacked
+# mid-gesture; a window contains nothing and is contained by nothing, so its
+# scrollbar is lawful. This is also not a dialog: it does not interrupt, it is
+# opened by name from the Console control and closed the same way, and it is
+# the one window in the app that stays closable on the surface.
+#
+# Both live in exactly one method each, so each exemption is exactly one method
+# wide; a Toplevel anywhere else in these files is still an offender.
+EXEMPT_FUNCTIONS = {"_identify_card", "_open_console_window"}
 offenders = []
 for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
              "openspan_launcher.py"):
@@ -221,10 +232,29 @@ for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
             offenders.append(f"{name}:{node.lineno}")
 check("no dialog anywhere still opens an OS window",
       not offenders, ", ".join(offenders))
-check("the Identify exemption exists and is one method wide",
-      any(isinstance(n, ast.FunctionDef) and n.name == "_identify_card"
-          for n in ast.walk(ast.parse(
-              open(os.path.join(here, "openspan.py"), encoding="utf-8").read()))))
+_app_tree = ast.parse(
+    open(os.path.join(here, "openspan.py"), encoding="utf-8").read())
+_app_funcs = [n for n in ast.walk(_app_tree) if isinstance(n, ast.FunctionDef)]
+for _exempt in sorted(EXEMPT_FUNCTIONS):
+    check(f"the {_exempt} exemption exists and is one method wide",
+          len([n for n in _app_funcs if n.name == _exempt]) == 1)
+# The console window is the exception to the surface's refusal to close, and
+# that has to be visible in the source rather than trusted: it wires
+# WM_DELETE_WINDOW to its own closer, and its closer never consults
+# self.surface (which is what makes the MAIN window unclosable there).
+_closer = next((n for n in _app_funcs
+                if n.name == "_close_console_window"), None)
+check("the console window has its own close handler", _closer is not None)
+if _closer is not None:
+    # body WITHOUT the docstring: prose naming the surface must not be able to
+    # fail a check about code that touches it
+    _stmts = (_closer.body[1:] if (_closer.body
+                                   and isinstance(_closer.body[0], ast.Expr))
+              else _closer.body)
+    _closer_src = "\n".join(ast.unparse(n) for n in _stmts)
+    check("closing the console does not consult surface mode and does not "
+          "touch the root", "self.surface" not in _closer_src
+          and "self.root" not in _closer_src, _closer_src)
 
 root.destroy()
 print("\nRESULT: " + ("ALL PASS" if not fails else f"{len(fails)} FAILED"))

@@ -5,7 +5,7 @@
   "anchor": "git:b0cd8f7",
   "created": "2026-08-09",
   "updated": "2026-08-28",
-  "nextSid": 157,
+  "nextSid": 158,
   "nextMilestoneSid": 11,
   "milestones": [
     {
@@ -2785,7 +2785,7 @@
       "actualTime": "P1: 26m agent + review",
       "extra": {
         "spec": "docs/CONTROL-CENTER.md",
-        "phase": "1 DELIVERED 2026-08-24, gate met: 128 deterministic tests, byte-identical double run, verified in main session. 175 records / 4 sources; capture matched spec baseline (1131/18/20 exact; 44 CLSIDs vs 41, measured not forced). Uncommitted pending Doug. Next: Phase 2 broker."
+        "phase": "2 DELIVERED 2026-08-28, gate met. Authenticated Medium-integrity broker: length-prefixed JSON, 4096-byte bound, 18 closed reason codes, ID allow-list grammar, nonce + freshness. Pipe ACL O:<sid>G:<sid>D:P(A;;GA;;;<sid>) verified three ways incl. a real kernel object. Activation seam is the ONLY file that can start a process (asserted); ships DISARMED. ~94 hostile cases / 1068 shell assertions + 177 app assertions, seam reached 0 times. control-panel-clsid refused as route-unsupported because its only route is Explorer. NOT done: sln registration, shell startup wiring, manifest deployment -- those are Phase 4."
       }
     },
     {
@@ -2827,8 +2827,8 @@
       "costDrivers": "the spine is extracting EsotericOS.Files' UI from a Window into a hostable UserControl (597-line monolithic MainWindow.xaml, zero UserControls today); then desktop hosting, input-ownership reconciliation, and Show-Desktop redefinition",
       "estTime": "12h",
       "model": "Opus code + main-session review",
-      "status": "todo",
-      "actualTokens": null,
+      "status": "doing",
+      "actualTokens": "365k (extraction 140k + hosting 224k)",
       "actualTime": null,
       "extra": {
         "terrain": "Measured 2026-08-28. EASIER THAN FEARED: the Desktop is ONE Window spanning the virtual screen, and the icon field already positions itself to just the role screen's rect (DesktopManager.GetUsableDesktopRect); Files inherits that same placement, so per-monitor WINDOWS are not needed. Black elsewhere = the single window's Background, and a solid-colour brush path already exists (Desktop.xaml.cs GetCairoBackgroundBrush_Color, unexposed in Settings). Icon field injection point is clean: added/cleared in exactly two places in DesktopManager.cs, IDesktopManager has no icon-specific members. No project-reference cycle risk.",
@@ -2836,7 +2836,10 @@
         "leverage": "That same extraction is what v3.132 files-grid (the board's only BLOCKED row) needs: panes, tabs and an arbitrary split grid require a composable browsing control rather than a window. One extraction unblocks both.",
         "role_plumbing": "COMPLETE end to end: the app writes desktop-monitor.txt (win/openspan.py:89, contract test win/test_desktop_role_contract.py), the shell's DesktopRoleService reads it, and icon field, top bar and dock all follow it. NOT following it: the desktop background layer and DesktopNavigationToolbar (uses PrimaryMonitorDeviceSize directly).",
         "behaviour_changes": "MainWindow calls Close() when the last tab closes (Ctrl+W) -- the desktop must never be closable that way; Desktop window already owns right-click and drag/drop independently of Files' own; Show-Desktop reparents the hosted control between two windows and needs redefining; the desktop window is destroyed and recreated on DWM restart; Popup z-order under a bottom-of-stack owner is unproven (Cairo's own desktop-adjacent windows need explicit z-order babysitting).",
-        "open_rulings": "hub root (Desktop folder vs named root vs composed hub); desktop right-click's fate; what Show Desktop means once icons are gone"
+        "open_rulings": "hub root (Desktop folder vs named root vs composed hub); desktop right-click's fate; what Show Desktop means once icons are gone",
+        "built": "2026-08-28, uncommitted then committed, NOT yet staged as a shell candidate. Files UI extracted to FilesSurface UserControl (MainWindow 596->20 XAML, 1382->101 code-behind, moved verbatim, warnings unchanged). DesktopHub.cs hosts it on the Desktop-role screen's usable rect via the existing GetUsableDesktopRect path -- no per-monitor windows needed. Canvas is a frozen black brush; wallpaper machinery intact but unreachable (one-line revert). DesktopIcons unreferenced, left on disk for later cleanup. Show Desktop kept, now summoning the hub. Hub has its own desktop-hub-state.json so it cannot clobber standalone Files tabs.",
+        "theme_finding": "Merging Files' dictionaries into the shell Application.Resources was REFUSED after measurement: Files' Tokens.xaml has a keyless ScrollBar style that would restyle every scrollbar in the shell, and CairoApplicationThemeService calls MergedDictionaries.Clear() on every theme change, which would make the hub's right-click throw. The surface carries its own theme by pack URI instead; root attributes needed DynamicResource.",
+        "bugs_found": "Two latent bugs found by reading: the desktop's grid_PreviewMouseLeftButtonDown treats any ScrollViewer click as 'clicked empty desktop' and would have dismissed the overlay on the first click in the hub; the right-click guard would have fired the native shell menu over Files' own popup. Both now gated by ancestry walk, not coordinates."
       }
     },
     {
@@ -2858,6 +2861,28 @@
         "fix": "RADIO_WAIT_MS=5000, RADIO_WAIT_TRIES=36 (180s, past a 90s boot). Lifetime countdown, never refilled, so clicking cannot extend the poll. after()/after_cancel() marshalled through app.ui() closures so workers never touch Tk; winfo_exists + TclError guards for a panel destroyed mid-boot; a radio action cancels the pending retry. When the VM comes up the custody launch audit re-runs exactly once against settled state.",
         "verified": "win/test_radio_usb.py 110 checks PASS, byte-identical twice; test_radio_custody.py green; no Tk root constructed",
         "residue": "_custody_check has no wait of its own; if the VM never comes up the launch audit keeps its mid-boot reading"
+      }
+    },
+    {
+      "sid": "v3.157",
+      "hcidx": 157,
+      "milestone": "v3.M9",
+      "deps": [
+        "v3.154"
+      ],
+      "title": "Console surface -- move the Console out of the single scrolling page into its own closable window, reopened from the page anchor  [console-surface]",
+      "why": "Doug 2026-08-27: 'make the console a separate surface, then it can scroll lawfully'. A window contained by nothing cannot hijack a scroll, so law 10 is satisfied by construction rather than by capping content",
+      "estTokens": "157k actual",
+      "costDrivers": "page section list, anchor machinery and three test suites all assert the old shape",
+      "estTime": "2h",
+      "model": "Opus code + main-session review",
+      "status": "doing",
+      "actualTokens": "157k",
+      "actualTime": null,
+      "extra": {
+        "built": "Page down to FOUR sections; ttk.Scrollbar now 2 -- one per window, which is what law 10 asks for. Log lines live in App._console_lines, a deque bounded by CONSOLE_BUFFER_LINES (renamed from CONSOLE_RETAINED_LINES, 2000 -> 20000: it was a LAYOUT bound, now only a memory bound). Window destroys on close so history has exactly one home and rebuild-from-buffer is the only populate path. Not transient() -- on-desktop mode pins the root to HWND_BOTTOM and a transient child would follow. Tail-follow reads at-tail BEFORE inserting so a scrolled-up reader is never yanked.",
+        "rule_conflict": "RAISED FOR DOUG: the 28 July no-pop-out ban is AST-enforced (test_frame_modal.py bans Toplevel/messagebox/filedialog/simpledialog across four files) and had one exemption, _identify_card. This adds a second, _open_console_window. Doug's 27 Aug ruling and his 28 July rule point opposite ways here; the exemption was widened openly rather than renaming a method to slip past the check. If July governs, this row is the revert.",
+        "unverified": "ten Tk-rooted suites not executed (app is live on Doug's desk); static greps found nothing left to fix"
       }
     }
   ],
@@ -6502,8 +6527,12 @@
     {
       "date": "2026-08-28",
       "entry": "v3.154 law 10 ARMED and live: candidate EsotericOS-law10-... restarted into 21:17, rollback build untouched on disk. Delivery used the named-candidate route (build a named exe, point the elevated autostart task at it, restart) -- NOT swap-build, which is a hot swap for a different job. Correction on record: an ordinary restart needs no VM poweroff ritual; OpenSpanBoot stands Windows BT down before the VM starts and start_vm_clean cold boots the guest. The RADIO-CUSTODY passage requiring no-captures-held is the recovery procedure for a phantom Intel radio, not a rule for every restart. v3.156 added: the cold-boot sampling race Doug found on that first restart."
+    },
+    {
+      "date": "2026-08-28",
+      "entry": "Three fronts landed in parallel. v3.157 console-surface: Console moved out of the page into its own closable window (page now 4 sections, 2 scrollbars one per window, 20k-line buffer in the App). Raises a rule conflict for Doug: the 28 July AST-enforced no-pop-out ban vs the 27 Aug console-as-surface ruling. v3.153 Phase 2 broker DELIVERED and gated: 1068 hostile assertions, activation seam provably unreached and shipped disarmed, no Explorer route anywhere. v3.155 desktop hub BUILT (not staged): FilesSurface extracted and hosted on the Desktop-role screen, icon field unreferenced, canvas black; the theme merge was refused after measurement and the surface carries its own dictionaries."
     }
   ],
   "extraCols": [],
-  "rev": 34
+  "rev": 35
 }

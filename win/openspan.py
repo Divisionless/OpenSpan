@@ -9,6 +9,7 @@ pairing, hand off the Bluetooth radio, and edit the keymap.
 Pure standard library (tkinter + ctypes). No dependencies.
 """
 
+import collections
 import copy
 import datetime
 import json
@@ -1359,16 +1360,23 @@ def page_window_plan(avail_h=None, preferred=PAGE_PREFERRED_WINDOW_H,
 
 
 # ---- one scrolling page ----------------------------------------------------
-# These are document sections, not selectable panes. All five are built once,
+# These are document sections, not selectable panes. All four are built once,
 # packed in this order, and remain live. BtPanel and MultiArrangeCanvas are
 # service objects as much as widgets: the background poll reads both whether
 # or not their section is currently inside the viewport.
+#
+# THE CONSOLE IS NOT ONE OF THEM ANY MORE (2026-08-27). It is its own window --
+# see App._open_console_window -- and the Console control in the header opens
+# that window instead of scrolling to a section. Doug: *"make the console a
+# separate surface, then it can scroll lawfully."* Law 10 forbids a scrolling
+# surface INSIDE another scrolling surface, because the wheel gets hijacked
+# mid-gesture; a surface that scrolls as its own window contains nothing and is
+# contained by nothing, so there is no gesture to hijack.
 PAGE_SPEC = (
     ("desk", "Desk"),
     ("devices", "Devices"),
     ("bluetooth", "Bluetooth"),
     ("system", "System"),
-    ("console", "Console"),
 )
 PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 
@@ -1381,16 +1389,25 @@ PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 # why the only ttk.Scrollbar left in this file is the page's own.
 #
 # Where a container genuinely cannot adapt forever, the CONTENT is bounded
-# instead of the container. Exactly one surface here has an unbounded
-# producer -- the console -- so exactly one thing is capped.
+# instead of the container. The one surface here with an unbounded producer --
+# the console -- used to be such a container, and this number was a LAYOUT
+# bound: the in-page console was fitted to its own content, and an unbounded
+# log grows a fitted container until the page is unusable, so the log had to be
+# cut short to keep the page a sane height. 2000 lines was that compromise.
 #
-# The console retains this many lines; the excess is deleted from the TOP so
-# what remains is always the newest output. Doug may correct the number: this
-# line is the whole knob. NOTE: the console is not persisted anywhere, so this
-# cap does discard history rather than merely hide it. portal.log and
-# audio_send.log are the portal and audio SENDER's own stdout, not this
-# widget's contents.
-CONSOLE_RETAINED_LINES = 2000
+# THE MEANING CHANGED on 2026-08-27, when the console became its own window.
+# A window scrolls; nothing about its height depends on how much is in it. The
+# only cost of a long log is now MEMORY, so the number is generous rather than
+# grudging, and it bounds the App's own line BUFFER (self._console_lines) --
+# which is the log, and outlives any open window -- rather than a widget.
+# Doug may correct the number: this line is the whole knob.
+#
+# NOTE, unchanged and still the important part: the console is not persisted
+# anywhere, so this cap DISCARDS history rather than merely hiding it. Beyond
+# it the oldest lines are gone from the process, not scrolled off. portal.log
+# and audio_send.log are the portal and audio SENDER's own stdout, not these
+# lines.
+CONSOLE_BUFFER_LINES = 20000
 # Floors, in rows. An empty container is still a legible strip rather than a
 # hairline. Deliberately no ceilings anywhere: a ceiling is a nested scroller.
 TEXT_MIN_LINES = 1
@@ -1491,10 +1508,16 @@ def bind_fit_text_height(widget, minimum=TEXT_MIN_LINES, delay=120):
     widget.bind("<Configure>", on_configure, add="+")
 
 
-def trim_text_to_lines(widget, retained=CONSOLE_RETAINED_LINES):
+def trim_text_to_lines(widget, retained=CONSOLE_BUFFER_LINES):
     """Bound the CONTENT of an unbounded log, from the top.
 
     The newest output is what survives. Returns the resulting line count.
+
+    Still used by the console WINDOW, for a different reason than it was
+    written for: the window's Text must hold exactly what the App's line
+    buffer holds, and the buffer drops its oldest line silently when it is
+    full. Trimming here is what keeps the two the same length, so a window
+    that has been open for a week shows the same history as one just opened.
     """
     try:
         lines = int(widget.index("end-1c").split(".")[0])
@@ -7419,6 +7442,17 @@ class App:
         # ui() queue + its UI-thread pump MUST exist before any worker thread
         # can be spawned (console sink, BtPanel refresh, boot thread, _tick)
         self._uiq = queue.Queue()
+        # THE LOG, and it is these four lines rather than a widget. The console
+        # is its own window now (law 10 -- see _open_console_window), the window
+        # is closable, and history that dies with a window is not a log. So the
+        # lines live in the App, bounded by CONSOLE_BUFFER_LINES, and a window
+        # is a VIEW of them: App.log appends here always and paints an open
+        # window as a side effect. This sits with _uiq for the same reason _uiq
+        # does -- log() must never be able to arrive before its own storage.
+        self._console_lines = collections.deque(maxlen=CONSOLE_BUFFER_LINES)
+        self._console_win = None     # the Toplevel, while one is open
+        self._console_text = None    # its Text, while one is open
+        self._console_geom = None    # where Doug last put it / how big
         # Which thread IS the Tk thread. busy() and the row repaints are called
         # from both sides -- a click handler is already on it, a worker never is
         # -- and queueing a repaint that could just happen now costs up to a
@@ -7512,8 +7546,13 @@ class App:
             _mn.bind("<Leave>", lambda e: _mn.config(bg=BG, fg=MUTED))
             ttk.Button(head, text="—  Minimize", command=self._to_tray).pack(
                 side="right", padx=(0, 12))
-        self._cons_btn = ttk.Button(head, text="↓  Console",
-                                    command=self._toggle_console)
+        # The Console control. It used to read "↓ Console" and scroll the page
+        # down to a Console section; the arrow was a promise about where the
+        # thing was. It is a window now, so the glyph says "opens away from
+        # here" and the command opens or raises it. This is the ONE control
+        # that behaves the same in window mode and on the surface.
+        self._cons_btn = ttk.Button(head, text="↗  Console",
+                                    command=self._open_console_window)
         self._cons_btn.pack(side="right", padx=(0, 8))
         # DRAG the window by the header. Native HTCAPTION doesn't fire here (Tk's
         # content window covers the subclassed frame), so we move it ourselves --
@@ -7592,11 +7631,9 @@ class App:
         pane_devices = tk.Frame(bridge, bg=BG)
         pane_bluetooth = tk.Frame(bridge, bg=BG)
         pane_system = tk.Frame(bridge, bg=BG)
-        pane_console = tk.Frame(bridge, bg=BG)
         self._page_sections = {
             "desk": pane_desk, "devices": pane_devices,
             "bluetooth": pane_bluetooth, "system": pane_system,
-            "console": pane_console,
         }
         for _key, _label in PAGE_SPEC:
             _heading = tk.Frame(self._page_sections[_key], bg=BG)
@@ -7604,39 +7641,18 @@ class App:
             tk.Label(_heading, text=_label, bg=BG, fg=FG,
                      font=(FONT_UI_SEMI, 16), anchor="w").pack(side="left")
 
-        # ---- Console section -----------------------------------------------
-        # Was a fixed 390px strip pinned to the right edge, toggled by widening
-        # the whole window from 1120 to 1520. It is an ordinary section now: the
-        # width literals and _set_win_width are gone with it, and the console is
-        # finally a thing you can look at rather than a thing you make room for.
-        chead = tk.Frame(pane_console, bg=PANEL)
-        chead.pack(fill="x", padx=10, pady=(PAD_MD, 0))
-        tk.Label(chead, text="Console — every command the app runs", bg=PANEL,
-                 fg=MUTED, font=(FONT_UI, 9, "bold")).pack(
-            side="left", pady=(0, 4))
-        ttk.Button(chead, text="Clear", width=6,
-                   command=self._console_clear).pack(side="right")
-        cwrap = tk.Frame(pane_console, bg=PANEL)
-        cwrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
-        # LAW 10, and the one place in this window where the law's escape
-        # hatch applies. The console's producer is unbounded, so the container
-        # cannot adapt forever -- therefore the CONTENT is bounded, not the
-        # container: App.log keeps CONSOLE_RETAINED_LINES lines and deletes
-        # the excess from the TOP. What is on screen is the whole of what is
-        # kept, at its full height, with no scrollbar of its own.
-        self.console = tk.Text(cwrap, bg="#05080D", fg="#B8B3C2", bd=0,
-                               height=TEXT_MIN_LINES,
-                               font=("Consolas", 9), wrap="word",
-                               state="disabled", insertbackground=FG)
-        self.console.pack(fill="both", expand=True)
-        bind_fit_text_height(self.console)
-        self.console.tag_config("ts", foreground="#6E687A")
-        self.console.tag_config("cmd", foreground="#B28DFF")
-        self.console.tag_config("ok", foreground=ACCENT)
-        self.console.tag_config("err", foreground=DANGER)
-        self.console.tag_config("bt", foreground=PORTAL)
-        self.console.tag_config("event", foreground=FG)
-        self.console.tag_config("info", foreground=MUTED)
+        # ---- the console, which is NOT a section any more --------------------
+        # First it was a fixed 390px strip pinned to the right edge, toggled by
+        # widening the whole window. Then it was an ordinary page section, whose
+        # Text had to be fitted to its content and its content cut to 2000 lines
+        # so a fitted container could not grow the page without limit. Now it is
+        # its own window (_open_console_window) and neither compromise is left:
+        # nothing is built here at all, and the page has four sections.
+        #
+        # The buffer these lines go into was created at the top of __init__,
+        # with _uiq. This is only the moment the rest of the app is allowed to
+        # start talking -- unchanged, so that what the log captures during
+        # startup is exactly what it captured before.
         set_log_sink(self._log_sink)
         self.log("event", f"{APP_LABEL} started.")
 
@@ -8680,10 +8696,6 @@ class App:
                  fg="#6E687A", font=(FONT_UI, 8), anchor="w").pack(
             fill="x", pady=(2, 0))
 
-    def _toggle_console(self):
-        """The pinned shortcut scrolls the one page to its Console section."""
-        self.show_section("console")
-
     def _vol_changed(self, _=None):
         if self._vol_syncing:
             return
@@ -9281,40 +9293,232 @@ class App:
                     pass  # root gone -> the pump simply ends
 
     # ---- console ----
+    # THE LOG IS THE BUFFER, NOT THE WIDGET. The console lives in its own
+    # window (law 10: a surface that scrolls as its own window is contained by
+    # nothing, so its scrollbar cannot hijack anyone's gesture), and that window
+    # is closable. A log whose only copy is a closable widget loses its history
+    # the first time it is closed and shows an empty page when it is reopened.
+    # So App.log appends to self._console_lines -- always -- and paints the open
+    # window as a side effect, if there is one. Reopening replays the buffer.
+    #
+    # Colours and tags are declared once, here, because the window that uses
+    # them is built and destroyed repeatedly and must look identical each time.
+    CONSOLE_BG = "#05080D"
+    CONSOLE_FG = "#B8B3C2"
+    CONSOLE_FONT = ("Consolas", 9)
+    CONSOLE_TAGS = (
+        ("ts", "#6E687A"), ("cmd", "#B28DFF"), ("ok", ACCENT), ("err", DANGER),
+        ("bt", PORTAL), ("event", FG), ("info", MUTED),
+    )
+
     def _log_sink(self, kind, text):
         """Thread-safe entry point for module-level _emit: queue to the UI."""
         self.ui(lambda: self.log(kind, text))
 
     def log(self, kind, text):
-        """Append a timestamped, color-tagged line to the console (UI thread).
+        """Record one timestamped, colour-tagged line (UI thread).
 
-        Law 10, bounding the CONTENT: the console is trimmed from the top to
-        CONSOLE_RETAINED_LINES and then sized to exactly what survives, so it
-        never scrolls internally and never grows without limit either. The
-        widget is the only copy -- nothing here is written to disk -- so a
-        trimmed line is gone, and that is what the cap buys.
+        The line goes into the App's bounded buffer first and unconditionally:
+        that is what makes the console window closable without losing output,
+        and what a reopened window is rebuilt from. Painting it into an open
+        window is the second, optional half.
 
-        There is deliberately no see("end") and no page-level scroll: new
-        output extends the page downward and leaves the viewport exactly where
-        Doug put it. Output must never yank the page out from under a read.
+        The timestamp is taken HERE, not at paint time, so a line replayed into
+        a window opened an hour later still carries the moment it happened.
         """
+        line = (time.strftime("%H:%M:%S "), str(kind), str(text).rstrip())
+        self._console_lines.append(line)   # drops its oldest when full
+        self._console_paint((line,))
+
+    def _console_paint(self, lines):
+        """Append buffered lines to the open window, if one is open.
+
+        Tail-following, which is lawful here and was not lawful on the page:
+        this window IS the surface, so following its own tail disturbs nothing
+        else. But it follows only when the view is ALREADY at the bottom. If
+        Doug has scrolled up to read something, new output must not yank him
+        back down -- so the decision is made from yview() BEFORE the insert,
+        never after, and never from a flag we set ourselves.
+        """
+        widget = self._console_text
+        if widget is None or not lines:
+            return
         try:
-            c = self.console
-            c.config(state="normal")
-            c.insert("end", time.strftime("%H:%M:%S "), "ts")
-            c.insert("end", text.rstrip() + "\n", kind)
-            trim_text_to_lines(c, CONSOLE_RETAINED_LINES)
-            fit_text_height(c)
-            c.config(state="disabled")
+            at_tail = self._console_at_tail()
+            widget.config(state="normal")
+            for stamp, kind, text in lines:
+                widget.insert("end", stamp, "ts")
+                widget.insert("end", text + "\n", kind)
+            # keep the widget exactly as long as the buffer that feeds it
+            trim_text_to_lines(widget, CONSOLE_BUFFER_LINES)
+            widget.config(state="disabled")
+            if at_tail:
+                widget.see("end")
         except Exception:  # noqa: BLE001
             pass
 
-    def _console_clear(self):
+    def _console_at_tail(self):
+        """Is the console window scrolled to the end of its output?
+
+        yview() is (first, last) as fractions of the whole. `last` reaches
+        exactly 1.0 at the bottom; the epsilon covers the rounding a partial
+        last row leaves behind. An empty or unmeasurable view counts as at the
+        tail, because a console nobody has scrolled should follow.
+        """
+        widget = self._console_text
+        if widget is None:
+            return True
         try:
-            self.console.config(state="normal")
-            self.console.delete("1.0", "end")
-            fit_text_height(self.console)   # law 10: shrink back to nothing
-            self.console.config(state="disabled")
+            return float(widget.yview()[1]) >= 0.999
+        except (tk.TclError, IndexError, TypeError, ValueError):
+            return True
+
+    def _open_console_window(self):
+        """Open the console window, or raise the one already open.
+
+        THE SECOND AND LAST PLACE IN THIS APP THAT MAY OPEN AN OS WINDOW, and
+        test_frame_modal exempts it by name alongside _identify_card. The
+        no-pop-out rule (28 July) is about DIALOGS appearing on a screen Doug
+        was not looking at. This is not a dialog: it is a surface he asks for
+        by name, and asking for it is the whole point -- Doug, 27 August:
+        *"make the console a separate surface, then it can scroll lawfully."*
+
+        It is deliberately NOT transient() on the root. On the surface the root
+        is pinned to the bottom of the z-order by OnDesktop, and a transient
+        child follows its owner down there; a plain Toplevel keeps its own
+        z-order and its own taskbar button, which is what a second surface is.
+
+        DESTROY, NOT HIDE, on close -- see _close_console_window. The reopen
+        path therefore runs every time and is the only path, so it cannot rot.
+        """
+        win = self._console_win
+        if win is not None:
+            try:
+                win.deiconify()
+                win.lift()
+                win.focus_force()
+                return win
+            except tk.TclError:
+                # destroyed behind our back (session teardown): rebuild
+                self._console_win = self._console_text = None
+        win = tk.Toplevel(self.root)
+        self._console_win = win
+        win.title(f"{APP_LABEL} — Console")
+        win.configure(bg=BG)
+        win.minsize(520, 240)
+        # Where he last put it. A destroyed window has no memory of its own, so
+        # the App keeps the geometry across a close instead of making every
+        # reopen land wherever Windows feels like putting it.
+        win.geometry(self._console_geom or "820x560")
+        try:
+            win.iconbitmap(ICON)
+        except Exception:  # noqa: BLE001
+            pass
+        # CLOSABLE IN BOTH MODES. The main window refuses WM_CLOSE on the
+        # surface (there is no shell to fall back to); this window is the
+        # deliberate exception, because closing it takes away a view of a log
+        # and nothing else. self.surface is not consulted here on purpose.
+        win.protocol("WM_DELETE_WINDOW", self._close_console_window)
+        win.bind("<Escape>", lambda _e: self._close_console_window())
+
+        head = tk.Frame(win, bg=PANEL)
+        head.pack(fill="x", padx=10, pady=(PAD_MD, 0))
+        tk.Label(head, text="Console — every command the app runs", bg=PANEL,
+                 fg=MUTED, font=(FONT_UI, 9, "bold")).pack(
+            side="left", pady=(0, 4))
+        ttk.Button(head, text="Clear", width=6,
+                   command=self._console_clear).pack(side="right")
+        ttk.Button(head, text="Close", width=6,
+                   command=self._close_console_window).pack(
+            side="right", padx=(0, 6))
+
+        wrap = tk.Frame(win, bg=PANEL)
+        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        # LAW 10, satisfied rather than dodged: ONE vertical scroller, and it
+        # belongs to this window, which is not inside anything. Nothing here is
+        # fitted to its content and nothing is capped for layout's sake -- that
+        # was the price of living on the page, and this is what buying out of
+        # it looks like.
+        scroll = ttk.Scrollbar(wrap, orient="vertical", style=SCROLLBAR_STYLE)
+        scroll.pack(side="right", fill="y")
+        text = tk.Text(wrap, bg=self.CONSOLE_BG, fg=self.CONSOLE_FG, bd=0,
+                       font=self.CONSOLE_FONT, wrap="word", state="disabled",
+                       insertbackground=FG, yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.config(command=text.yview)
+        for _tag, _colour in self.CONSOLE_TAGS:
+            text.tag_config(_tag, foreground=_colour)
+        self._console_text = text
+        # The page's wheel handler is bound with bind_all, so it sees this
+        # window's wheel events too -- and declines them, because _inside()
+        # only claims widgets under the page canvas. The Text's own class
+        # binding then scrolls this surface. No exemption is needed and none
+        # is added; that is the point of scoping the handler by ancestry.
+        self._console_replay()
+        _paint_dark_titlebar(win)
+        win.lift()
+        try:
+            win.focus_force()
+        except tk.TclError:
+            pass
+        return win
+
+    def _console_replay(self):
+        """Rebuild the open window's Text from the buffer, from empty."""
+        widget = self._console_text
+        if widget is None:
+            return
+        try:
+            widget.config(state="normal")
+            widget.delete("1.0", "end")
+            widget.config(state="disabled")
+        except Exception:  # noqa: BLE001
+            return
+        self._console_paint(tuple(self._console_lines))
+        try:
+            widget.see("end")     # a freshly opened console opens at the tail
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _close_console_window(self):
+        """Close the console window without disturbing the app.
+
+        DESTROY, not withdraw. A hidden window would be a second copy of the
+        whole log, kept in step with the buffer forever for the sake of a
+        window nobody is looking at; destroying leaves exactly one copy of the
+        history (the buffer) whenever the window is shut, and makes
+        rebuild-from-buffer the only way a console is ever populated -- so the
+        path that must work after a close is the same path that runs on the
+        first open. The geometry is the one thing worth keeping, and it is kept.
+
+        Nothing here touches the root: closing this window is not closing the
+        app, on the surface or in a window.
+        """
+        win = self._console_win
+        self._console_win = self._console_text = None
+        if win is None:
+            return
+        try:
+            self._console_geom = win.geometry()
+        except tk.TclError:
+            pass
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+
+    def _console_clear(self):
+        """Clear BOTH copies. The buffer is the log, so clearing only the
+        widget would leave a console that empties and then refills itself the
+        next time it is opened."""
+        self._console_lines.clear()
+        widget = self._console_text
+        if widget is None:
+            return
+        try:
+            widget.config(state="normal")
+            widget.delete("1.0", "end")
+            widget.config(state="disabled")
         except Exception:  # noqa: BLE001
             pass
 

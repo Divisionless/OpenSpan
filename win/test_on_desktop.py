@@ -440,12 +440,23 @@ branches = sorted(n.func.attr for n in ast.walk(apply_fn)
 check("the placement goes both ways from the one setting",
       branches == ["apply", "release"])
 
-toplevels = [node for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and isinstance(node.func,
-                                                          ast.Attribute)
-             and node.func.attr == "Toplevel"]
-check("no new Toplevel: the identify card is still the only one",
-      len(toplevels) == 1)
+# Which METHODS open an OS window, not how many calls there are: a count is a
+# number to bump, a name list says who is allowed. Two are: the identify card
+# (a number on each real monitor, which cannot be drawn from inside one window)
+# and the console window (2026-08-27, law 10 -- a scrolling surface is lawful
+# when it is its own window). Anything else is a pop-out and must fail here.
+_owners = set()
+for _fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+    if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+           and n.func.attr == "Toplevel" for n in ast.walk(_fn)):
+        _owners.add(_fn.name)
+check("no new Toplevel: the identify card and the console window are the only "
+      "two, one call each",
+      _owners == {"_identify_card", "_open_console_window"}
+      and len([node for node in ast.walk(tree)
+               if isinstance(node, ast.Call)
+               and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "Toplevel"]) == 2)
 
 check("nothing calls the old mode wording anywhere in the app",
       "desk_mode" not in source and "desk mode" not in source.lower())

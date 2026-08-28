@@ -1,11 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The control GUI is one ordered, vertically scrolling document.
 
+FOUR sections, not five. The console left the page on 2026-08-27 and became
+its own window. Law 10, as Doug defined it that morning: *"nested scrolling is
+a scrolling surface inside another surface that scrolls."* The harm is scroll
+hijack -- his gesture is on the page, the pointer drifts over a smaller
+scrollable region, and the scroll is taken away from him mid-gesture. The test
+is same-axis containment, so a surface that scrolls AS ITS OWN WINDOW is
+lawful: nothing contains it, so there is no gesture for it to take. The console
+was the one surface with an unbounded producer, so it was the one that had to
+move -- and having moved, it may scroll, follow its own tail, and keep a
+generous history.
+
 The test never constructs App: doing that starts workers and can touch the VM.
 It reads the assembly contract from the AST, then drives the shipped viewport
-methods against deterministic fakes and withdrawn Tk controls.
+and console methods against deterministic fakes and withdrawn Tk controls. No
+Toplevel is ever built here; the console window's contract is asserted from
+source and its behaviour from its own methods against a fake Text.
 """
 import ast
+import collections
 import os
 import sys
 import tkinter as tk
@@ -76,17 +90,20 @@ show = _method("App", "show_section")
 wheel = _method("App", "_on_page_mousewheel")
 viewport = _method("App", "_on_page_viewport_configure")
 content = _method("App", "_on_page_content_configure")
-toggle = _method("App", "_toggle_console")
+open_console = _method("App", "_open_console_window")
 check("App.__init__ exists", init is not None)
-check("all viewport methods exist", all((show, wheel, viewport, content, toggle)))
+check("all viewport methods exist",
+      all((show, wheel, viewport, content, open_console)))
 parent, packs = _layout(init)
 init_src = ast.unparse(init)
 
 
 print("\n---- one document, not selectable panes ----")
+# FOUR sections since 2026-08-27. Console was the fifth and is now its own
+# window: law 10 forbids a scroller inside a scroller, and the console is the
+# one surface whose producer is unbounded, so it was the one that had to leave.
 expected = (("desk", "Desk"), ("devices", "Devices"),
-            ("bluetooth", "Bluetooth"), ("system", "System"),
-            ("console", "Console"))
+            ("bluetooth", "Bluetooth"), ("system", "System"))
 check("PAGE_SPEC is the complete reading order", A.PAGE_SPEC == expected,
       repr(A.PAGE_SPEC))
 check("the old pane API is absent", not hasattr(A.App, "select_pane")
@@ -113,12 +130,34 @@ check("mouse wheel and legacy wheel buttons use the same page handler",
 scrollbars = [node for node in ast.walk(MODULE)
               if isinstance(node, ast.Call)
               and _name(node.func) == "ttk.Scrollbar"]
-# LAW 10: one vertical scroller per window, and it is the page's. This used to
-# assert 3 -- the page, the Bluetooth device tree and the console. The other
-# two were nested scrollers; the correct number is 1.
-check("law 10: the page's is the only scrollbar in the module",
-      len(scrollbars) == 1, f"{len(scrollbars)} Scrollbar calls")
-check("the one scrollbar uses the dark named style",
+# LAW 10 IS PER WINDOW, NOT PER MODULE. It forbids a scrolling surface INSIDE
+# another scrolling surface, because the wheel is hijacked mid-gesture; a
+# surface that scrolls as its own window is contained by nothing and hijacks
+# nothing. So the number to assert is one scrollbar per window, and which
+# method each one is built in is the whole of the claim: the page's, in
+# App.__init__, and the console window's, in _open_console_window. This once
+# asserted 3 (page, device tree, in-page console), then 1, and is now 2 --
+# every change of that number is a law-10 decision, not a tidy-up.
+scroll_owners = {}
+for _cls in [node for node in ast.walk(MODULE)
+             if isinstance(node, ast.ClassDef)]:
+    for _item in _cls.body:
+        if not isinstance(_item, ast.FunctionDef):
+            continue
+        _count = len([n for n in ast.walk(_item) if isinstance(n, ast.Call)
+                      and _name(n.func) == "ttk.Scrollbar"])
+        if _count:
+            scroll_owners[f"{_cls.name}.{_item.name}"] = _count
+check("law 10: exactly two scrollbars, one per window",
+      len(scrollbars) == 2, f"{len(scrollbars)} Scrollbar calls")
+check("the page owns exactly one, built in App.__init__",
+      scroll_owners.get("App.__init__") == 1, repr(scroll_owners))
+check("the console window owns exactly one, built in _open_console_window",
+      scroll_owners.get("App._open_console_window") == 1, repr(scroll_owners))
+check("no third owner: nothing else in the module builds a scroller",
+      set(scroll_owners) == {"App.__init__", "App._open_console_window"},
+      repr(scroll_owners))
+check("both scrollbars use the dark named style",
       all(any(keyword.arg == "style"
               and isinstance(keyword.value, ast.Name)
               and keyword.value.id == "SCROLLBAR_STYLE"
@@ -184,40 +223,109 @@ for where, body in tree_mutators:
 check("the device tree declares no fixed row count",
       "height=8" not in bt_init and "height=TREE_MIN_ROWS" in bt_init)
 
-for receiver in ("self.out", "self.console"):
+# self.out (the Bluetooth panel's log) is the ONE Text left on the page, so it
+# is still the one that must fit its content and must never chase its own tail.
+# self.console is gone from this list because it is gone from the page.
+for receiver in ("self.out",):
     mutators = _mutators(receiver)
     check(f"{receiver} has mutation points to check", bool(mutators))
     for where, body in mutators:
         check(f"{where} refits {receiver} to its content",
-              f"fit_text_height({receiver}" in body
-              or "fit_text_height(c)" in body, where)
+              f"fit_text_height({receiver}" in body, where)
     check(f"{receiver} never scrolls itself to the tail",
           f"{receiver}.see(" not in SOURCE)
-check("neither Text declares a fixed line count",
-      "height=5" not in bt_init
-      and "height=TEXT_MIN_LINES" in bt_init
-      and "height=TEXT_MIN_LINES" in init_src)
+check("the one page Text declares no fixed line count",
+      "height=5" not in bt_init and "height=TEXT_MIN_LINES" in bt_init)
+check("the page document builds no console Text at all",
+      "self.console" not in SOURCE and "tk.Text(" not in init_src)
 
-check("the console cap is one module-level number",
-      isinstance(A.CONSOLE_RETAINED_LINES, int)
-      and A.CONSOLE_RETAINED_LINES > 0, repr(A.CONSOLE_RETAINED_LINES))
+print("\n---- the console is its own surface, and may scroll ----")
+# THE CAP CHANGED MEANING. It used to bound a fitted container's CONTENT so an
+# unbounded log could not grow the page. In its own window nothing about height
+# depends on length, so only memory is left and the number is generous -- and
+# it now bounds the App's line BUFFER, which is the log and outlives the window.
+check("the console cap is still one module-level number",
+      isinstance(A.CONSOLE_BUFFER_LINES, int)
+      and A.CONSOLE_BUFFER_LINES > 0, repr(A.CONSOLE_BUFFER_LINES))
+check("the old layout-era name is gone, so nothing reads the old meaning",
+      not hasattr(A, "CONSOLE_RETAINED_LINES")
+      and "CONSOLE_RETAINED_LINES" not in SOURCE)
+check("a surface with its own scrollbar can afford real history",
+      A.CONSOLE_BUFFER_LINES >= 10000, repr(A.CONSOLE_BUFFER_LINES))
+
+# NOTE on quoting below: _body_src is ast.unparse output, and ast.unparse
+# renders every string literal single-quoted whatever the file says. Tokens
+# matched against a *_src therefore use 'single' quotes; tokens matched against
+# SOURCE, which is the file's own text, use "double".
 log_src = _body_src(_method("App", "log"))
-check("the console bounds its CONTENT by that number, then fits what remains",
-      "trim_text_to_lines(c, CONSOLE_RETAINED_LINES)" in log_src
-      and "fit_text_height(c)" in log_src, log_src)
-check("trimming deletes from the TOP, so the newest output survives",
+check("every line lands in the buffer, unconditionally",
+      "self._console_lines.append(line)" in log_src, log_src)
+check("the buffer is bounded by the one constant, and by nothing else",
+      "collections.deque(maxlen=CONSOLE_BUFFER_LINES)" in SOURCE)
+check("the timestamp is taken when the line happens, not when it is painted",
+      "time.strftime('%H:%M:%S ')" in log_src, log_src)
+paint_src = _body_src(_method("App", "_console_paint"))
+check("painting an open window is the SECOND half, and is skipped when there "
+      "is no window", "self._console_text" in paint_src
+      and "if widget is None" in paint_src, paint_src)
+check("the widget is kept the same length as the buffer that feeds it",
+      "trim_text_to_lines(widget, CONSOLE_BUFFER_LINES)" in paint_src)
+check("trimming still deletes from the TOP, so the newest output survives",
       'widget.delete("1.0", f"{lines - retained + 1}.0")' in SOURCE)
-check("no output yanks the page by chasing its own tail",
+
+console_src = _body_src(open_console) if open_console else ""
+replay_src = _body_src(_method("App", "_console_replay"))
+check("a reopened console is rebuilt from the buffer, from empty",
+      "widget.delete('1.0', 'end')" in replay_src
+      and "self._console_paint(tuple(self._console_lines))" in replay_src,
+      replay_src)
+check("opening the window replays the buffer into it",
+      "self._console_replay()" in console_src, console_src)
+clear_src = _body_src(_method("App", "_console_clear"))
+check("Clear clears BOTH copies, or the console refills itself on reopen",
+      "self._console_lines.clear()" in clear_src
+      and "widget.delete('1.0', 'end')" in clear_src, clear_src)
+
+# TAIL-FOLLOWING, which is lawful here and was not lawful on the page.
+tail_src = _body_src(_method("App", "_console_at_tail"))
+check("at-the-tail is decided from yview(), not from a flag we set",
+      "yview()" in tail_src and "self._console_text" in tail_src, tail_src)
+_decided = paint_src.find("at_tail = self._console_at_tail()")
+_inserted = paint_src.find("widget.insert(")
+check("the decision is made BEFORE the insert, never after",
+      0 <= _decided < _inserted, f"decided at {_decided}, inserted at "
+                                 f"{_inserted}")
+check("new output follows the tail ONLY when the view is already at it",
+      "if at_tail:" in paint_src and "widget.see('end')" in paint_src,
+      paint_src)
+check("nothing on the PAGE chases its own tail",
       not any(token in SOURCE for token in
-              ('self.out.see("end")', 'self.console.see("end")',
-               'c.see("end")')))
+              ('self.out.see("end")', 'c.see("end")')))
+# Every see("end") in the module, by the method it lives in. Chasing the tail
+# is exactly the yank law 10 is about, so the set of methods allowed to do it
+# is the assertion, and both are the console window's. (BtPanel.rename's
+# tree.see(mac) is not tail-chasing -- it realises one row before measuring it
+# -- so the pattern matched here is the literal "end", not see() at large.)
+seers = {node.name for node in ast.walk(MODULE)
+         if isinstance(node, ast.FunctionDef)
+         and any(isinstance(call, ast.Call)
+                 and isinstance(call.func, ast.Attribute)
+                 and call.func.attr == "see"
+                 and len(call.args) == 1
+                 and isinstance(call.args[0], ast.Constant)
+                 and call.args[0].value == "end"
+                 for call in ast.walk(node))}
+check("the only tail-chasing see('end') calls belong to the console window",
+      seers == {"_console_paint", "_console_replay"}, repr(sorted(seers)))
 
 
 section_locals = ("pane_desk", "pane_devices", "pane_bluetooth",
-                  "pane_system", "pane_console")
-check("all five section frames are direct children of the document",
+                  "pane_system")
+check("all four section frames are direct children of the document",
       all(parent.get(local) == "bridge" for local in section_locals),
       repr({local: parent.get(local) for local in section_locals}))
+check("there is no fifth section frame left behind",
+      "pane_console" not in SOURCE and len(section_locals) == len(A.PAGE_KEYS))
 check("all sections are registered under PAGE keys",
       "self._page_sections =" in init_src
       and all(f'"{key}": pane_{key}' in SOURCE for key in A.PAGE_KEYS))
@@ -240,9 +348,29 @@ check("the build footer is the document's last row",
       parent.get("foot") == "bridge")
 check("the footer states the canonical copyleft license",
       "AGPL-3.0-or-later" in init_src and "open source · MIT" not in init_src)
-check("Console is an anchor shortcut, not a visibility toggle",
-      "show_section" in ast.unparse(toggle) and "console" in ast.unparse(toggle)
-      and "select_pane" not in ast.unparse(toggle))
+# CONSOLE IS NO LONGER A PAGE ANCHOR. The control in the header used to scroll
+# the page to a Console section; it opens the console WINDOW now, and the
+# window is closable -- deliberately unlike the main window, which refuses
+# WM_CLOSE on the surface.
+check("the Console control opens a window, not a section",
+      "command=self._open_console_window" in init_src
+      and "show_section" not in console_src
+      and "_toggle_console" not in SOURCE)
+check("the Console control no longer promises a place further down the page",
+      '"↓  Console"' not in SOURCE and "self._cons_btn" in init_src)
+check("the console window is closable, and closing it is its own handler",
+      "protocol('WM_DELETE_WINDOW', self._close_console_window)"
+      in console_src, console_src)
+check("a second open reuses or rebuilds -- it never makes a second window",
+      "if win is not None" in console_src
+      and "self._console_win = win" in console_src
+      and console_src.count("tk.Toplevel(") == 1, console_src)
+close_src = _body_src(_method("App", "_close_console_window"))
+check("closing drops the references it destroys, so none can go stale",
+      "self._console_win = self._console_text = None" in close_src
+      and "win.destroy()" in close_src, close_src)
+check("closing the console never touches the app's own window",
+      "self.root" not in close_src, close_src)
 
 
 class FakeCanvas:
@@ -303,8 +431,7 @@ app._page_body = FakeBody()
 app._page_window = "document"
 app._page_sections = {
     "desk": FakeSection(0), "devices": FakeSection(300),
-    "bluetooth": FakeSection(600), "system": FakeSection(900),
-    "console": FakeSection(1250),
+    "bluetooth": FakeSection(600), "system": FakeSection(1250),
 }
 
 app._sync_page_scrollregion()
@@ -315,8 +442,13 @@ check("viewport resize sets embedded document width", app._page_canvas.width
       == 777, repr(app._page_canvas.width))
 check("unknown anchors are rejected without moving", app.show_section("nope")
       is False and app._page_canvas.fraction is None)
-check("Console anchor scrolls to the furthest reachable top",
-      app.show_section("console") is True
+check("'console' is not an anchor any more -- it is a window",
+      app.show_section("console") is False
+      and app._page_canvas.fraction is None)
+# The LAST section cannot be scrolled past the end of the document, so its
+# anchor lands on the furthest reachable top rather than on its own y.
+check("the last section's anchor scrolls to the furthest reachable top",
+      app.show_section("system") is True
       and abs(app._page_canvas.fraction - (1000 / 1500)) < 1e-9,
       repr(app._page_canvas.fraction))
 
@@ -332,6 +464,102 @@ check("wheel outside the page is untouched",
       app._on_page_mousewheel(SimpleNamespace(
           widget=outside, delta=-120, num=None)) is None
       and app._page_canvas.scrolls == before)
+
+
+print("\n---- the log outlives its window ----")
+
+
+class FakeConsoleText:
+    """Enough of tk.Text for the console's own methods, and no window.
+
+    The buffer/window split is the whole point of the change, so it is driven
+    here rather than described: no Toplevel is built, and the app on Doug's
+    desk is not touched.
+    """
+
+    def __init__(self, tail=1.0):
+        self.rows = []        # one entry per inserted line
+        self.state = "disabled"
+        self.tail = tail      # what yview() reports as the visible end
+        self.saw_end = 0      # how many times see("end") was called
+
+    def config(self, **kwargs):
+        self.state = kwargs.get("state", self.state)
+
+    def insert(self, _where, text, _tag=None):
+        if not self.rows or self.rows[-1].endswith("\n"):
+            self.rows.append(text)
+        else:
+            self.rows[-1] += text
+
+    def delete(self, _start, _end=None):
+        self.rows = []
+
+    def index(self, _spec):
+        return f"{max(1, len(self.rows))}.0"
+
+    def yview(self):
+        return (0.0, self.tail)
+
+    def see(self, _where):
+        self.saw_end += 1
+
+
+console = A.App.__new__(A.App)
+console._console_lines = collections.deque(maxlen=4)
+console._console_win = None
+console._console_text = None          # the window is CLOSED
+
+for _n in range(6):
+    console.log("event", f"line {_n}")
+check("with no window open, output still lands in the buffer",
+      len(console._console_lines) == 4, repr(len(console._console_lines)))
+check("the buffer keeps the NEWEST lines when it is full",
+      [row[2] for row in console._console_lines]
+      == ["line 2", "line 3", "line 4", "line 5"],
+      repr([row[2] for row in console._console_lines]))
+check("each buffered line carries the moment it happened",
+      all(len(row) == 3 and row[0][2] == ":" for row in console._console_lines),
+      repr(console._console_lines[0]))
+
+# ...and now Doug reopens it. The window is rebuilt from the buffer alone.
+console._console_text = FakeConsoleText()
+console._console_replay()
+check("a reopened console shows the history it was closed with",
+      [row.split(" ", 1)[1].rstrip("\n")
+       for row in console._console_text.rows]
+      == ["line 2", "line 3", "line 4", "line 5"],
+      repr(console._console_text.rows))
+check("a freshly opened console opens at the tail",
+      console._console_text.saw_end >= 1)
+
+# TAIL-FOLLOWING: at the bottom, follow. Scrolled up to read, do not yank.
+console._console_text = FakeConsoleText(tail=1.0)
+console._console_replay()
+following = console._console_text.saw_end
+console.log("event", "arrived while at the bottom")
+check("new output follows the tail when the view is already at the bottom",
+      console._console_text.saw_end == following + 1,
+      f"{following} -> {console._console_text.saw_end}")
+
+console._console_text = FakeConsoleText(tail=0.42)   # scrolled up, reading
+console._console_text.saw_end = 0
+console.log("event", "arrived while he was reading")
+check("new output does NOT yank a console he has scrolled up in",
+      console._console_text.saw_end == 0,
+      f"see(end) called {console._console_text.saw_end} times")
+check("...but the line is there waiting, in the widget and in the buffer",
+      any("arrived while he was reading" in row
+          for row in console._console_text.rows)
+      and console._console_lines[-1][2] == "arrived while he was reading")
+
+console._console_clear()
+check("Clear empties BOTH the buffer and the open widget",
+      not console._console_lines and not console._console_text.rows)
+console._console_text = FakeConsoleText()
+console._console_replay()
+check("and a console reopened after Clear is empty, not refilled",
+      console._console_text.rows == [])
 
 root = tk.Tk()
 root.withdraw()
