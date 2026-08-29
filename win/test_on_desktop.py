@@ -118,6 +118,24 @@ check("a window wider than the work area is trimmed to fit, never past the "
 check("the height never goes negative on an absurd work area",
       on_desktop.dock_rect((0, 0, 800, 10), 600)[3] >= 1)
 
+# THE FLOOR IS AN ARGUMENT, since 2026-08-29. MIN_WIDTH protects a window that
+# still has a pane in it, and it was the wrong number for one that deliberately
+# has none: Doug collapsed the dock and got a full-width window holding nothing
+# but the rail, because on the desktop every move but this module's own is
+# refused and this module widened everything to 560 regardless.
+check("a caller may say what the floor is, and the rect honours it",
+      on_desktop.dock_rect((0, 0, 1920, 1040), 130, min_width=130)
+      == (1920 - 16 - 130, 16, 130, 1008))
+check("...and the right edge still holds: a thin dock hugs the same edge a "
+      "wide one does",
+      on_desktop.dock_rect((0, 0, 1920, 1040), 130, min_width=130)[0]
+      + 130 == on_desktop.dock_rect((0, 0, 1920, 1040), 700)[0] + 700)
+check("saying nothing still gets the ordinary floor, so every existing caller "
+      "is unchanged",
+      on_desktop.dock_rect((0, 0, 1920, 1040), 130)[2] == on_desktop.MIN_WIDTH)
+check("the absolute floor is named, positive, and well below the ordinary one",
+      0 < on_desktop.COLLAPSED_MIN_WIDTH < on_desktop.MIN_WIDTH)
+
 
 # ---- the refusal ------------------------------------------------------------
 
@@ -312,6 +330,61 @@ check("'show window' from the tray puts it back at its docked place and "
       shown[1] == on_desktop.HWND_BOTTOM
       and shown[2:6] == (1920 - 16 - 640, 16, 640, 1008)
       and names(fake2)[-1] == "SetForegroundWindow")
+
+
+# ---- a dock that is allowed to be thin, and only then ----------------------
+# `geometry()` cannot resize a window on the desktop -- refuse_move is the
+# whole point of this module -- so set_width IS the resize, and set_min_width
+# is the declaration that makes a narrow one legitimate. The floor is CACHED
+# rather than asked for, because the re-dock that has to respect it runs inside
+# the window procedure, where a Tk read is the reentrancy fault this file
+# already exists to avoid.
+
+thin = FakeBindings(styles={on_desktop.GWL_STYLE: STYLE,
+                            on_desktop.GWL_EXSTYLE: EXSTYLE})
+dock = on_desktop.OnDesktop(lambda: 909,
+                            lambda: on_desktop.dock_rect(thin._work, 1120),
+                            bindings=thin, monitor_name="\\\\.\\DISPLAY2")
+dock.apply()
+check("a fresh controller starts at the ordinary floor",
+      dock.min_width == on_desktop.MIN_WIDTH)
+thin.calls.clear()
+check("asking for a narrow width WITHOUT lowering the floor gets the floor, "
+      "not the ask -- an ordinary window cannot be made unusable this way",
+      dock.set_width(130) and dock.docked_width == on_desktop.MIN_WIDTH
+      and args_of(thin, "SetWindowPos")[-1][2:6]
+      == (1920 - 16 - 560, 16, 560, 1008))
+check("lowering the floor moves nothing on its own; it only says what is now "
+      "allowed",
+      dock.set_min_width(130) == 130 and dock.min_width == 130
+      and len(args_of(thin, "SetWindowPos")) == 1)
+thin.calls.clear()
+check("AND THEN the narrow width is placed, right edge kept, at the bottom",
+      dock.set_width(130) and dock.docked_width == 130
+      and args_of(thin, "SetWindowPos")[-1][2:6]
+      == (1920 - 16 - 130, 16, 130, 1008))
+thin.calls.clear()
+thin._work = (0, 0, 1600, 900)
+thin.proc(909, on_desktop.WM_SETTINGCHANGE, 0, 0)
+check("A SHELL BAR APPEARING DOES NOT UNDO THE COLLAPSE: the wndproc re-docks "
+      "against the cached floor, so the thin dock stays thin",
+      args_of(thin, "SetWindowPos")[-1][2:6]
+      == (1600 - 16 - 130, 16, 130, 868))
+thin.calls.clear()
+check("the floor goes back up as easily as it came down, and the width with it",
+      dock.set_min_width(on_desktop.MIN_WIDTH) == on_desktop.MIN_WIDTH
+      and dock.set_width(1120) and dock.docked_width == 1120
+      and args_of(thin, "SetWindowPos")[-1][2:6]
+      == (1600 - 16 - 1120, 16, 1120, 868))
+check("no floor may go below the absolute one, whatever is asked for",
+      dock.set_min_width(0) == on_desktop.COLLAPSED_MIN_WIDTH
+      and dock.set_min_width(-500) == on_desktop.COLLAPSED_MIN_WIDTH)
+check("...and a floor that is not a number at all leaves the last one standing",
+      dock.set_min_width("thin") == on_desktop.COLLAPSED_MIN_WIDTH
+      and dock.set_width(None) is False)
+dock.release()
+check("neither of them moves a window that is no longer on the desktop",
+      dock.set_width(400) is False)
 
 
 # ---- a failing apply leaves an ordinary window ------------------------------

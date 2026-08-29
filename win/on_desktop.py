@@ -51,6 +51,16 @@ SPI_GETWORKAREA = 0x0030
 
 INSET = 16                        # breathing room on all four sides
 MIN_WIDTH = 560                   # narrower than this and the panes stop working
+# ...and the floor under THAT floor. MIN_WIDTH protects a window that still has
+# a pane in it; it is the wrong number for a window that deliberately has none.
+# A collapsed dock is exactly that case -- the rail and nothing else -- and
+# before 2026-08-29 it could not happen on the desktop at all, because
+# MIN_WIDTH was applied whether or not there was anything left to be too narrow
+# for. So the floor is now a per-controller value that a caller may LOWER to
+# this absolute one, which is not a taste: below roughly this a rail entry no
+# longer draws and there is nothing left on screen to click the dock back open
+# with. Nothing may be placed narrower, in any state, ever.
+COLLAPSED_MIN_WIDTH = 48
 
 
 # ---- pure geometry ---------------------------------------------------------
@@ -61,6 +71,13 @@ def dock_rect(work_area, width, inset=INSET, min_width=MIN_WIDTH):
     `work_area` is (left, top, right, bottom). The result is (x, y, w, h):
     flush to the RIGHT edge inset by `inset`, `inset` down from the top, and
     `2 * inset` shorter than the work area so it clears the bottom too.
+
+    `min_width` is a PARAMETER rather than the constant, because the right
+    floor depends on what the window is currently holding: MIN_WIDTH for a
+    window with panes in it, the rail's own width for a collapsed one. Callers
+    that do not care get the ordinary floor; the collapsed dock is the one that
+    asks for less, and never gets less than COLLAPSED_MIN_WIDTH -- see
+    OnDesktop.set_min_width, which is where that clamp lives.
     """
     left, top, right, bottom = work_area
     w = max(int(width), min_width)
@@ -259,6 +276,7 @@ class OnDesktop:
         self._old_exstyle = None
         self._old_rect = None      # the framed geometry, to come back to
         self._docked_width = None  # what a re-dock re-uses; no Tk read needed
+        self._min_width = MIN_WIDTH   # the floor for the state it is in now
         self._placing = False      # True only inside our own SetWindowPos
         self._monitor_name = str(monitor_name or "")
         self.active = False
@@ -272,6 +290,14 @@ class OnDesktop:
     @property
     def monitor_name(self):
         return self._monitor_name
+
+    @property
+    def min_width(self):
+        return self._min_width
+
+    @property
+    def docked_width(self):
+        return self._docked_width
 
     def set_monitor(self, device_name):
         """Choose the EsotericOS Desktop monitor and re-dock if it is live.
@@ -382,18 +408,56 @@ class OnDesktop:
             self._placing = False
         return True
 
+    def set_min_width(self, width):
+        """Lower (or restore) the floor this dock may be placed at. CACHE ONLY.
+
+        Nothing moves here. It is separate from set_width because the floor has
+        to be known in a place that must not read Tk: the window procedure
+        re-docks on a display or work-area change, and if the floor were asked
+        for at that moment a collapsed dock would be snapped back up to
+        MIN_WIDTH by the next shell bar that appeared. So the caller pushes it
+        from the Tk thread, exactly as it pushes the docked width.
+
+        COLLAPSED_MIN_WIDTH is the clamp, and it is what stops "the dock may be
+        thin" from becoming "any window may be unusable".
+        """
+        try:
+            wanted = int(width)
+        except (TypeError, ValueError):
+            return self._min_width
+        self._min_width = max(wanted, COLLAPSED_MIN_WIDTH)
+        return self._min_width
+
+    def set_width(self, width):
+        """Re-place the dock at a new width, right edge kept. THE RESIZER.
+
+        `geometry()` cannot do this job: every move that is not our own is
+        refused in _wndproc, which is the whole point of the refusal, so a
+        window on the desktop is resized by asking the controller and in no
+        other way. The result is clamped to the CURRENT floor, so a caller
+        cannot get a narrow window without having said, through set_min_width,
+        why it is allowed to be narrow.
+        """
+        try:
+            self._docked_width = max(int(width), self._min_width)
+        except (TypeError, ValueError):
+            return False
+        return self.redock_from_work_area()
+
     def redock_from_work_area(self):
         """Re-dock using only Win32 -- safe to call from inside the wndproc.
 
-        The width comes from the cached docked width, never from a Tk read: the
-        window procedure runs inside Windows' message dispatch, where touching
-        Tk is the reentrancy fault this codebase has already paid for twice.
+        The width and the floor both come from cached values, never from a Tk
+        read: the window procedure runs inside Windows' message dispatch, where
+        touching Tk is the reentrancy fault this codebase has already paid for
+        twice.
         """
         if not self.active or self._hwnd is None:
             return False
-        width = self._docked_width or MIN_WIDTH
+        width = self._docked_width or self._min_width
         x, y, w, h = dock_rect(
-            self._bindings.work_area(self._monitor_name), width)
+            self._bindings.work_area(self._monitor_name), width,
+            min_width=self._min_width)
         self._docked_width = w
         self._placing = True
         try:

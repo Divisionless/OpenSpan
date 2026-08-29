@@ -588,6 +588,9 @@ class FakeSection:
 class FakeRoot:
     def __init__(self):
         self.minimums = [(940, 680)]
+        self.width = 1120
+        self.height = 930
+        self.geometries = []
 
     def update_idletasks(self):
         pass
@@ -597,6 +600,19 @@ class FakeRoot:
             return self.minimums[-1]
         self.minimums.append((width, height))
         return None
+
+    # Invoking a surface now places the window as well as packing it -- see
+    # App._dock_place, and test_dock_surfaces for the contract. Nothing here
+    # should reach these; they exist so that if something does, it is recorded
+    # rather than raising an AttributeError that reads like a different bug.
+    def geometry(self, spec):
+        self.geometries.append(spec)
+
+    def winfo_width(self):
+        return self.width
+
+    def winfo_height(self):
+        return self.height
 
 
 class FakeWidget:
@@ -635,6 +651,8 @@ app._dock_entries = {}
 app._dock_rail = None
 app._dock_active = "console"
 app._dock_collapsed = True
+app._dock_expanded_w = None
+app._desktop = None
 _saved = []
 A.save_setting = lambda key, value: _saved.append((key, value))
 

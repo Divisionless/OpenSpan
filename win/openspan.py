@@ -1200,8 +1200,14 @@ PAGE_MIN_WINDOW_H = 680
 # The width floor while a surface is showing. It is a WIDTH the same way the
 # height above is a viewport: wide enough for the Dashboard's two-column rows
 # and the in-frame dialogs, and it is restated whenever the dock expands.
-# Collapsed, the floor drops to the rail -- see App._render_dock.
+# Collapsed, the floor drops to the rail -- see App._dock_floor.
 PAGE_MIN_WINDOW_W = 940
+# The width the window opens at, and the width an expand falls back to when
+# there is no remembered one -- a session that ended collapsed has no earlier
+# width to give back. It was written as a bare 1120 in two geometry() calls
+# until 2026-08-29; the collapse path needed a third reader, and a number three
+# places have to agree on is a constant.
+PAGE_PREFERRED_WINDOW_W = 1120
 
 
 def work_area_height(default=1080, device_name=None):
@@ -7810,7 +7816,8 @@ class App:
         # Provisional, so the window does not flash at a silly size while it is
         # being built. BOTH heights are replaced at the end of __init__ with the
         # measured content height -- see the layout-budget block down there.
-        root.geometry("1120x930")   # multi-target canvas; dock rail on the right
+        root.geometry(f"{PAGE_PREFERRED_WINDOW_W}x{PAGE_PREFERRED_WINDOW_H}")
+        #                             multi-target canvas; dock rail on the right
         root.minsize(PAGE_MIN_WINDOW_W, PAGE_MIN_WINDOW_H)
         root.configure(bg=BG)
         try:
@@ -7883,6 +7890,10 @@ class App:
         self._dock_rail = None
         self._dock_active = DOCK_KEYS[0]
         self._dock_collapsed = False
+        # The width the window had when it was collapsed, so expanding gives
+        # back exactly that and not an approximation of it. None means "nothing
+        # was taken away", which is the state at startup and after every expand.
+        self._dock_expanded_w = None
         # Every portal control in the window, in build order. There is more than
         # one of them now -- see _portal_button -- and this list is the ONLY
         # thing _render_portal_button and _busy_portal iterate, so a surface
@@ -8572,7 +8583,7 @@ class App:
         geom_h, min_h = page_window_plan(avail_h)
         self._content_h = content_h
         self.root.minsize(PAGE_MIN_WINDOW_W, min_h)
-        self.root.geometry(f"1120x{geom_h}")
+        self.root.geometry(f"{PAGE_PREFERRED_WINDOW_W}x{geom_h}")
         self._sync_page_scrollregion()
         self.root.after_idle(lambda: self._page_canvas.yview_moveto(0.0))
         _emit("info", f"layout: one scrolling page, {content_h}px of content "
@@ -9026,15 +9037,28 @@ class App:
 
     def _desktop_geometry(self):
         """(x, y, w, h) for the dock. The only Tk read in the whole path, and
-        it happens on the Tk thread -- never from inside the window proc."""
+        it happens on the Tk thread -- never from inside the window proc.
+
+        The floor is the DOCK's, not on_desktop's default: a session that comes
+        back collapsed is placed collapsed, rather than being widened to
+        on_desktop.MIN_WIDTH on the way in and then shrunk again a frame later.
+        """
         import on_desktop
         width = self.root.winfo_width() or 0
         work = on_desktop.Win32Bindings().work_area(
             self._desktop_monitor_name())
-        return on_desktop.dock_rect(work, width)
+        return on_desktop.dock_rect(work, width,
+                                    min_width=self._dock_floor())
 
     def _apply_window_placement(self):
-        """Put the window where the setting says. Both directions, live."""
+        """Put the window where the setting says. Both directions, live.
+
+        _dock_place last, in BOTH directions, because the dock's state outlives
+        the placement: crossing between floating and the desktop must not be a
+        way to arrive expanded at the desktop's floor while the rail says
+        collapsed. It is the same call _render_dock makes, so the two agree by
+        being the same code rather than by both being remembered.
+        """
         ctl = self._desktop_controller()
         if ctl is None:
             return
@@ -9042,6 +9066,7 @@ class App:
             ctl.release()
         else:
             ctl.apply()
+        self._dock_place()
         self._render_float_state()
 
     def _render_float_state(self):
@@ -9163,13 +9188,23 @@ class App:
             pass       # torn down mid-repaint; nothing to paint on
 
     def _render_dock(self):
-        """THE ONE WRITER of what the surface region shows.
+        """THE ONE WRITER of what the surface region shows, AND of how wide the
+        window is while it shows it.
 
         Forget first, then pack, so two surfaces are never in the cavity at the
         same instant. Collapsed means nothing is packed at all: the rail is
-        still there, and the window's minimum width drops to it, so it can be
-        dragged down to a thin dock. (On the desktop the placement is
-        on_desktop's, and on_desktop.MIN_WIDTH is its own floor.)
+        still there, and the window shrinks to it.
+
+        THE TWO HALVES ARE ONE ACT, and that is the fix for what Doug saw on
+        2026-08-29 -- a window at its full width with nothing in it but the
+        rail: *"This should be fully collapsed, this is not a valid state."*
+        Until then this method unpacked the surfaces and only LOWERED the Tk
+        minimum, so the window was merely ALLOWED to be thin; on the desktop it
+        could not even be that, because every move not on_desktop's own is
+        refused. Now the pack and the placement are written together by
+        _dock_place, in the same call, so there is no ordering in which they can
+        disagree and no path that does one without the other. The invalid state
+        is not guarded against -- it is unreachable.
         """
         showing = None if self._dock_collapsed else self._dock_active
         for key, frame in self._dock_surfaces.items():
@@ -9194,13 +9229,7 @@ class App:
                          padx=10, pady=PAD_SM)
         for key in self._dock_surfaces:
             self._paint_dock_entry(key)
-        floor = PAGE_MIN_WINDOW_W
-        if self._dock_collapsed:
-            floor = max(DOCK_COLLAPSED_MIN_W, self._rail_width())
-        try:
-            self.root.minsize(floor, self.root.minsize()[1])
-        except (tk.TclError, IndexError, TypeError):
-            pass
+        self._dock_place()
         return showing
 
     def _rail_width(self):
@@ -9212,6 +9241,86 @@ class App:
             return int(rail.winfo_reqwidth())
         except (tk.TclError, ValueError, TypeError):
             return DOCK_COLLAPSED_MIN_W
+
+    def _dock_floor(self):
+        """The narrowest this window may be, in the state the dock is in NOW.
+
+        ONE floor, read by all three places that need one: the Tk minimum, the
+        rect on_desktop places the window at, and the clamp on_desktop applies
+        when the work area changes underneath it. Two floors is how a collapsed
+        dock ends up thin in Tk's opinion and 560px wide in Windows'.
+        """
+        if self._dock_collapsed:
+            return max(DOCK_COLLAPSED_MIN_W, self._rail_width())
+        return PAGE_MIN_WINDOW_W
+
+    def _dock_claim_width(self):
+        """The width the window must be for this dock state, or None.
+
+        CLAIM, not read: collapsing takes a width away and remembers it, and
+        expanding hands back exactly that number and forgets it, so the memory
+        cannot be spent twice. None is returned only when expanding with
+        nothing remembered -- a fresh launch, or a click from one surface to
+        another -- because that is a state where the width was never the dock's
+        to choose and resizing would be the app arguing with wherever Doug had
+        dragged the edge to.
+        """
+        if self._dock_collapsed:
+            if self._dock_expanded_w is None:
+                self._dock_expanded_w = self._window_width()
+            return self._dock_floor()
+        remembered, self._dock_expanded_w = self._dock_expanded_w, None
+        return remembered
+
+    def _window_width(self):
+        """What to give back on expand: the live width, or the opening one.
+
+        A window that has never been mapped reports 1, and Tk reports the
+        provisional geometry for a moment after every geometry() -- so a width
+        that is not plausibly a window is not remembered as one.
+        """
+        try:
+            live = int(self.root.winfo_width())
+        except (tk.TclError, ValueError, TypeError):
+            live = 0
+        return live if live >= PAGE_MIN_WINDOW_W else PAGE_PREFERRED_WINDOW_W
+
+    def _dock_place(self):
+        """Make the WINDOW match the dock's state. THE ONE RESIZER.
+
+        Both placements go through here, because "collapsed" has to mean the
+        same thing in both and there is only one caller. Floating, a resize is
+        geometry(); on the desktop geometry() is REFUSED by design -- the
+        refusal in on_desktop._wndproc is what stops a drag, a snap or a stray
+        geometry() from moving the dock -- so the controller is asked instead,
+        and its floor is lowered first so the ask is not clamped straight back
+        up to on_desktop.MIN_WIDTH.
+
+        Returns the width it placed, or None when it placed nothing.
+        """
+        floor = self._dock_floor()
+        try:
+            self.root.minsize(floor, self.root.minsize()[1])
+        except (tk.TclError, IndexError, TypeError):
+            pass
+        width = self._dock_claim_width()
+        desktop = getattr(self, "_desktop", None)
+        if desktop is not None and getattr(desktop, "active", False):
+            # The floor is pushed on EVERY render, not only when the width
+            # changes: the window procedure re-docks on a display or work-area
+            # change from cached values alone, and a stale floor there would
+            # quietly widen a collapsed dock the next time a shell bar appeared.
+            desktop.set_min_width(floor)
+            if width is None:
+                return None
+            return width if desktop.set_width(width) else None
+        if width is None:
+            return None
+        try:
+            self.root.geometry(f"{width}x{self.root.winfo_height()}")
+        except (tk.TclError, ValueError, TypeError):
+            return None
+        return width
 
     def _dock_state(self, active, collapsed):
         """The ONE writer of the dock's persisted state.

@@ -1,6 +1,10 @@
-# eos-domain — standing handoff record
+# eos-overseer — standing handoff record
 
-This file is the named `handoffRecord` for every guarded generation change of the `eos-domain`
+*Role id corrected 2026-08-29: the roster now reads `eos-overseer` (the Architect landed the
+uncrossing; the seat key is `keeper`, the name is Overseer). References to `eos-domain` below
+are historical and describe the same seat before the rename.*
+
+This file is the named `handoffRecord` for every guarded generation change of the Overseer's
 Chair. `prepare()` in the Forge's `kernel/leapfrog.js` hashes it into the packet; when it is
 named, no transcript is carried, by design. It is therefore the **entire inheritance** of the
 next generation.
@@ -109,6 +113,67 @@ No source, build, startup contract, or running process has changed.
   consolidated carry (see below); `eos-builder` re-sits only under the fork rule. The
   Asking's contract stays Overseer-side: questions at `forge-architect/asking/questions.md`
   (Set 1 verbatim), answers due durably under `forge-architect/asking/answers/`.
+
+## The arming procedure — all three steps, every time
+
+Delivery is the **named-candidate route**: build a named exe, point the launcher at it, Doug
+restarts into it. The previous candidate stays on disk untouched and IS the rollback. This is
+not `swap-build.ps1`, which is a hot swap for a different job.
+
+1. `ESOTERICOS_BUILD_NAME=<stack> python build_exe.py` — a new name per candidate, so the
+   previous one survives as rollback.
+2. **Repoint the firewall**: `tools\app-firewall.ps1 -ExePath <new candidate>` (elevated). The
+   LAN rules bind a PROGRAM PATH, so a new filename is a new application to Windows and earns a
+   fresh Security Alert. The tool repoints the two managed rules and sweeps the per-build rules
+   Windows accumulates. **Skipping this is why Doug got a firewall prompt on every restart**
+   (2026-08-29: nine candidates, six junk rules). Board row v3.150.
+3. Arm: set the `EsotericOS App (elevated)` task's Execute to the new path. For the shell,
+   stage a `stable-<timestamp>` folder and set `HKCU\...\Winlogon\Shell` — **not** `stable\`,
+   which is a stale directory nothing launches.
+
+## Direction: Cairo is leaving
+
+Doug, 2026-08-29: *"First of all I want Cairo out of this thing, that's old crap that we need to
+replace."* The shell is a Cairo Desktop fork; `EsotericOS.Files` and `EsotericOS.DeskPanel` are
+ours, the taskbar / menu bar / desktop / appbar plumbing (and `ManagedShell`) are Cairo's.
+**Do not invest in Cairo's internals.** Anything that would deepen the dependency — making its
+taskbar vertical, teaching it to drive our surfaces — is work thrown away when it goes.
+
+The consequence, ruled the same day: the taskbar is **not** merged into the EsotericOS dock.
+A cross-process Medium-to-High pipe plus a protocol plus vertical-appbar work would exist only
+to let *Cairo's* taskbar drive our surfaces, and its expensive unknown sat in the part being
+deleted. The dock stays **ours and separate, living above the taskbar**, and grows into the
+thing that eventually replaces it — so Cairo's taskbar is deleted rather than modified.
+
+Note `v3.136 de-cairo-identity` is a **naming** migration, not this. This is replacement.
+
+**Standing rule (Doug, 2026-08-29): "we should always strive to upgrade and replace Cairo
+machinery."** When work touches a Cairo component, the default is to replace that component
+with ours rather than extend theirs. Cairo comes out in layers, cheapest and most visible
+first, and each piece of work is an opportunity to take one. The exception is plumbing we do
+not yet want to rewrite — `ManagedShell` (window enumeration, appbars, tray) can stay while its
+UI skins are replaced, because **Cairo's taskbar UI and ManagedShell's window tracking are
+separable**: our dock can be written against ManagedShell's task list and Cairo's taskbar
+deleted, without first replacing the library underneath.
+
+**The dock separation, confirmed 2026-08-29.** Two floating docks on the right edge, a gap
+between them:
+- **Surfaces dock** (upper) — EsotericOS logo, then Dashboard / Console / Scripts. **It leaves
+  the app's window** and becomes its own borderless strip. The app becomes a plain window the
+  dock shows and hides. This dissolves the collapse problem rather than solving it: there is no
+  rail left inside the window to collapse around.
+- **App-icons dock** (mid-height, Tahoe-style) — running windows. Shell-side, **ours**,
+  replacing Cairo's taskbar rather than reconfiguring it.
+
+Each dock is owned by whoever already owns its content, so **no IPC crosses the integrity
+line** — which is the whole reason this shape was chosen over merging them. Measured
+2026-08-29: the shell manifest is `asInvoker` (Medium), the app self-elevates (High), so a
+merged dock would have required a Medium-to-High pipe, a protocol, and vertical-appbar work
+inside the component being deleted.
+
+**Clicking the Files hub must raise it** above the windows in front, and drop back when focus
+leaves. `DesktopOverlay` already raises the hosted surface to `HWND_TOPMOST` for Show Desktop;
+wire that to a click rather than inventing a second mechanism.
 
 ## Doug rulings on record
 

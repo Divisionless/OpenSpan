@@ -121,10 +121,36 @@ check("final geometry height is computed", isinstance(last_geometry.args[0],
                                                        ast.JoinedStr))
 check("final minsize height is computed from min_h",
       _name(last_minsize.args[1]) == "min_h")
-check("minimum width remains 940, and is now the one named constant that "
-      "_render_dock restates when the dock expands",
+check("minimum width remains 940, and is the one named constant that "
+      "App._dock_floor restates whenever the dock expands",
       _name(last_minsize.args[0]) == "PAGE_MIN_WINDOW_W"
-      and A.PAGE_MIN_WINDOW_W == 940)
+      and A.PAGE_MIN_WINDOW_W == 940
+      and "return PAGE_MIN_WINDOW_W"
+      in ast.unparse(_method("App", "_dock_floor")))
+# The opening width was a bare 1120 in both geometry() calls until 2026-08-29,
+# when the collapse path needed a third reader of it: expanding a dock that was
+# already collapsed when the app started has no earlier width to give back, and
+# falls back to this. Three places had to agree on the number, so it stopped
+# being a literal.
+check("the opening width is a named constant, wider than the floor, and both "
+      "geometry() calls in __init__ use it rather than a literal",
+      A.PAGE_PREFERRED_WINDOW_W == 1120
+      and A.PAGE_PREFERRED_WINDOW_W > A.PAGE_MIN_WINDOW_W
+      and "1120" not in init_src
+      and init_src.count("PAGE_PREFERRED_WINDOW_W") == 2,
+      repr(init_src.count("PAGE_PREFERRED_WINDOW_W")))
+# THE MINIMUM IS NEVER LOWERED ON ITS OWN. Doug, on a full-width window holding
+# nothing but the rail: *"This should be fully collapsed, this is not a valid
+# state."* It was reachable because lowering minsize only PERMITS a thin
+# window; the same method now also places one. See test_dock_surfaces.
+minsize_owners = {node.name for node in ast.walk(module)
+                  if isinstance(node, ast.FunctionDef)
+                  and "self.root.minsize(" in ast.unparse(node)}
+check("only __init__ and the dock's placer write the window's minimum, and the "
+      "placer resizes in the same call",
+      minsize_owners == {"__init__", "_dock_place"}
+      and "self.root.geometry(" in ast.unparse(_method("App", "_dock_place")),
+      repr(sorted(minsize_owners)))
 check("work area uses the selected EsotericOS Desktop monitor",
       "self._desktop_monitor_name()" in init_src
       and "work_area_height" in init_src)

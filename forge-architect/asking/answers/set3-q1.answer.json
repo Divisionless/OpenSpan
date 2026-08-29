@@ -1,0 +1,13 @@
+{
+  "schema": "forge.asking.answer.v1",
+  "set": 3,
+  "position": 1,
+  "questionHash": "ccec76efa4279a4617516c14192f92bf5fc8d4ee4b4ceb04ea9b2ea0ffe88b61",
+  "questionLabel": "The proof that was never asked for",
+  "questionText": "**The proof that was never asked for.** A leapfrog handoff has five stages — prepare, commit,\n   prove, rollback, archive — and `prove()` is where a new generation is declared successful.\n   Measured, not remembered: it takes a transaction id, checks the revision has not moved, stamps\n   `provenAt` with the current time, and returns. **It requires no evidence of any kind.** A lane is\n   proven because something called the function. Until that call happens `lanes.<vendor>.provenAt`\n   stays null, the canary generation runs indefinitely, and the rollback to the previous vendor\n   stays armed the whole time — so a handoff that is going perfectly well is indistinguishable, to\n   the machinery, from one that is silently failing. The SysAd found this and raised it as its own\n   question, which is worth noting: it cannot fix it, because the leapfrog kernel is the Forge's.\n\n   You have already asked for the answer from the other end. You wanted to see **five clean messages\n   in a row** as proof a generation is working rather than merely seated. That is a satisfaction\n   test, and it is exactly what `prove()` is missing.\n\n   So: what evidence marks a lane proven? Five clean turns — and if so, what makes a turn clean,\n   given the kernel currently records only whether it was aborted, and the one measure that tracks\n   whether the *work* was good is whether you had to correct me? A named check passing, which is\n   objective and cheap but says nothing about judgement? Your explicit word, which is always\n   available and always correct but does not scale past the seats you are watching? Or any of the\n   three, with `prove()` refusing only when it has none of them?\n\n   Whatever you name, `prove()` stops trusting its caller and starts requiring it.",
+  "answeredAt": "2026-08-29T04:49:56.637Z",
+  "revision": 1,
+  "priorAnsweredAt": null,
+  "body": "Give me a button in the top right that is orange until used which ratifies the seat",
+  "images": []
+}
