@@ -146,9 +146,16 @@ busy = _method("App", "_busy_portal")
 factory_src = ast.unparse(factory)
 render_src = ast.unparse(render)
 busy_src = ast.unparse(busy)
-check("both shipped buttons use the one factory",
-      "self.portal_btn = self._portal_button(" in SOURCE
-      and "self.desk_portal_btn = self._portal_button(" in SOURCE)
+check("the shipped portal control uses the one factory",
+      "self.desk_portal_btn = self._portal_button(" in SOURCE)
+# The System section's copy is GONE with the "Bridge VM ✓" button it shared a
+# row with. One surface now -- but the factory, the registry and the renderer
+# are unchanged, which is the whole point of them: the count is data, not shape.
+check("the System section's second copy is gone, not merely unpacked",
+      "self.portal_btn" not in SOURCE)
+check("exactly one portal control is built in the window",
+      SOURCE.count("self._portal_button(") == 1,
+      str(SOURCE.count("self._portal_button(")))
 check("the factory owns command binding and registration",
       "toggle_portal_by_user" in factory_src
       and "self._portal_btns.append" in factory_src)
@@ -199,13 +206,17 @@ app._portal_btns = []
 canvas = tk.Canvas(root, width=800, height=300)
 desk_button = A.App._portal_button(app, canvas, **(factory_kwargs or {}))
 desk_button.place(**(place_kwargs or {}))
-system = tk.Frame(root)
-system_button = A.App._portal_button(app, system)
-system_button.pack()
+# A SECOND control is still driven here even though the window ships one. The
+# registry, the renderer and the parked wait are the machinery that made adding
+# the Desk copy safe and removing the System copy a one-line change; a test that
+# only ever drives one button stops proving any of it, and the two-surfaces-
+# one-state bug it guards against is exactly what would come back.
+second = tk.Frame(root)
+second_button = A.App._portal_button(app, second)
+second_button.pack()
 app.desk_portal_btn = desk_button
-app.portal_btn = system_button
 check("the factory registered both controls in build order",
-      app._portal_btns == [desk_button, system_button])
+      app._portal_btns == [desk_button, second_button])
 
 for state, text, style in ((False, "Start portal", "Warn.TButton"),
                            (True, "Stop portal", "TButton")):
@@ -229,7 +240,7 @@ restore()
 check("one restore releases both controls",
       all("disabled" not in button.state() for button in app._portal_btns))
 desk_button.invoke()
-system_button.invoke()
+second_button.invoke()
 check("both controls reach the same backend exactly once",
       called == ["toggle", "toggle"], repr(called))
 

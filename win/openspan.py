@@ -2943,7 +2943,12 @@ def why_not_ready(config=None):
     """
     config = config or {}
     if not vm_running():
-        return False, ("The VM is not running. Start it on the Bridge tab.")
+        # It said "Start it on the Bridge tab." until that button was
+        # deleted. The app starts the VM itself at launch when the bridge is
+        # available, so a VM that is down after launch is a restart, not a
+        # click somebody forgot.
+        return False, ("The VM is not running. It starts with the app; "
+                       "restart the machine if it stays down.")
 
     state = read_radio_state()
     if state["captured"]:
@@ -2986,15 +2991,18 @@ def why_not_ready(config=None):
     if adapters == "0":
         return False, ("The VM has the radios but BlueZ has not registered any "
                        "adapter yet. If this does not clear in a minute, "
-                       "restart the VM.")
+                       "restart the machine.")
     if btready != "active":
         return False, (f"Waiting on the guest's radio-ready helper "
                        f"(openspan-btready, up to 200s). {adapters} adapter(s) "
                        f"are present; the device daemons start behind it.")
     if ports == "0" or daemons == "0":
+        # It used to end "Try Restart keyboard." -- naming a button that has
+        # since been deleted. A sentence that points at a control the window
+        # does not have is worse than one that points at nothing.
         return False, (f"The radios are ready and the boot helper has "
                        f"finished, but {daemons} of {wanted} device daemons are "
-                       f"running. Try Restart keyboard.")
+                       f"running. Restart the machine if it does not clear.")
     return True, (f"Ready — {adapters} radio(s), {daemons} daemon(s), "
                   f"{ports} lane(s) listening.")
 
@@ -3710,12 +3718,26 @@ def custody_fault(row, module):
     ABSENT is not here either. It is a real fault, but its remedy is to plug
     the radio in -- the banner carries an action, and there is no button for
     that.
+
+    A RADIO THE VM IS HOLDING IS NEVER A FAULT, whatever the host-side node
+    read says. ``vm_holds`` is the VM's own USBAttachActive list -- the same
+    evidence the Repair check counts, read in the same sweep (RadioCustody
+    fills it straight out of read_radio_state) -- and it is the stronger of the
+    two: VirtualBox cannot be delivering a device to the guest that is
+    "registered but not enumerated". Without this guard the two banners could
+    contradict each other on screen, and did: on 2026-08-28 Repair reported
+    nothing wrong while custody called two delivered dongles PHANTOM, because
+    their proxy nodes had not yet appeared to SetupAPI. The WINDOWS_OWNED
+    branch already refused to fault a VM-held radio; this makes PHANTOM agree
+    with it instead of being the exception.
     """
+    if row.get("vm_holds"):
+        return False
     state = row.get("verdict")
     if state == module.PHANTOM:
         return True
     if state == module.WINDOWS_OWNED:
-        return bool(row.get("present")) and not row.get("vm_holds")
+        return bool(row.get("present"))
     return False
 
 
@@ -6120,6 +6142,28 @@ class BtPanel(tk.Frame):
     RADIO_WAIT_MS = 5000
     RADIO_WAIT_TRIES = 36        # 36 x 5s = 180s, then it stops for good
 
+    # The confirmation. A FAULT IS NOT SHOWN UNTIL IT HAS BEEN SEEN TWICE, on
+    # two audits a real interval apart. Doug restarted on 2026-08-28 and the
+    # banner said two working dongles were PHANTOM; measured minutes later all
+    # three read verdict=WINDOWS-OWNED, proxy_present=True, vbox_state=Captured,
+    # which custody_fault() correctly lets past. The audit had sampled ONCE, at
+    # +1.8s, before the two VBoxUSB proxies had stood up -- and froze a mid-boot
+    # reading into a red banner. Same class as v3.156's "The VM is not running":
+    # the VM being up is NOT the same as the USB captures having landed, so the
+    # vm_running() guard cannot catch it.
+    #
+    # 6000ms is not a guess. explicit_handoff() already waits ATTACH_SETTLE * 4
+    # -- exactly six seconds -- for a VirtualBox capture to land, because that
+    # is how long this desk was measured to take. A proxy still missing six
+    # seconds after the first sighting is not mid-boot, it is stuck.
+    #
+    # The budget is spent only by faults that are PROVISIONAL, so a healthy desk
+    # never touches it and a real fault costs exactly one of the ten. Ten is
+    # 60s, which fits inside the 180s boot wait: a confirmation that starts when
+    # the VM finally answers still finishes.
+    FAULT_CONFIRM_MS = 6000
+    FAULT_CONFIRM_TRIES = 10     # 10 x 6s = 60s of re-auditing, for good
+
     def __init__(self, master, app=None):
         super().__init__(master, bg=BG)
         self.app = app
@@ -6186,6 +6230,13 @@ class BtPanel(tk.Frame):
         self._faults = {}          # key -> True while that fault stands
         self._fault_rows = {}      # key -> {"row", "text", "button"}
         self._fault_shown = False
+        # The confirmation memory. A finding seen ONCE is provisional and is
+        # shown to nobody; seen on the next audit too, it is real. Both dicts
+        # belong to the UI thread and to nothing else.
+        self._fault_seen = {}        # key -> {identity: sentence}, last audit
+        self._fault_provisional = {}  # key -> identities awaiting a second look
+        self._confirm_job = None     # pending re-audit; the UI thread owns it
+        self._confirm_left = self.FAULT_CONFIRM_TRIES
         self.fault_box = tk.Frame(self, bg=BG)   # NOT packed: see _show_faults
         # A capture that did not land. A dongle unplugged and plugged back in
         # is claimed by Windows, and VirtualBox only auto-captures at the moment
@@ -6393,6 +6444,105 @@ class BtPanel(tk.Frame):
         else:
             self.fault_box.pack_forget()
 
+    # ---- a fault has to be CONFIRMED before it is shown --------------------
+    # One audit is a photograph, not a diagnosis. Everything below turns a
+    # single sighting into a provisional note, re-audits until a second sighting
+    # agrees with it, and only then lets _set_fault raise anything. The console
+    # is not gated by any of it.
+    def _confirm_faults(self, key, findings):
+        """Which of this audit's findings have now been seen TWICE.
+
+        `findings` is {identity: sentence}, one entry per faulted thing --
+        identity being whatever makes two audits' findings comparable (for the
+        radios, the device instance ID and the verdict together, so a radio that
+        changes its fault between audits starts over rather than inheriting the
+        other fault's confirmation).
+
+        Returns the confirmed sentences, in the order the audit reported them.
+        A finding that is here for the first time is remembered and returned to
+        nobody; a finding that has GONE is forgotten outright, so one healthy
+        reading clears a provisional fault with no lingering. UI THREAD ONLY.
+        """
+        findings = dict(findings)
+        seen = self._fault_seen.get(key) or {}
+        confirmed = [text for identity, text in findings.items()
+                     if identity in seen]
+        self._fault_seen[key] = findings
+        self._fault_provisional[key] = {identity for identity in findings
+                                        if identity not in seen}
+        if any(self._fault_provisional.values()):
+            self._confirm_retry()
+        else:
+            self._confirm_cancel()
+        return confirmed
+
+    def _confirm_cancel(self):
+        """Drop a pending re-audit. Callable from any thread.
+
+        after_cancel is a Tk call like every other one here, so it is marshaled
+        through app.ui rather than made from a worker; the TclError is the panel
+        already being gone, which is not a fault. Same shape as
+        _radio_wait_cancel, deliberately.
+        """
+        def drop():
+            job, self._confirm_job = self._confirm_job, None
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+        if self.app:
+            self.app.ui(drop)
+
+    def _confirm_retry(self):
+        """Look again shortly, while there is budget left to look with.
+
+        Created inside app.ui, because a background after() racing the UI thread
+        is the interpreter-level crash App.ui exists to prevent.
+
+        The bound is _radio_wait_retry's bound: a plain countdown only the UI
+        thread touches, never refilled, so however many times a fault flaps --
+        and however often Doug clicks Repair or Take custody, both of which
+        re-audit -- the panel spends at most FAULT_CONFIRM_TRIES re-audits in
+        its whole lifetime on confirming faults. When it runs out it simply
+        stops: an unconfirmed fault is never promoted, so the budget expiring
+        leaves NOTHING on screen.
+        """
+        def again():
+            if self._confirm_job is not None:
+                return          # a re-audit is already pending; one chain only
+            if self._confirm_left <= 0:
+                return
+            self._confirm_left -= 1
+            try:
+                self._confirm_job = self.after(self.FAULT_CONFIRM_MS,
+                                               self._confirm_fire)
+            except tk.TclError:              # the panel went away mid-wait
+                self._confirm_job = None
+        if self.app:
+            self.app.ui(again)
+
+    def _confirm_fire(self):
+        """One re-audit, on the UI thread, of whatever is still provisional.
+
+        Tk registers an after() job on the interpreter and not on the widget, so
+        a panel destroyed while a fault was awaiting confirmation is still
+        called here -- and a dead widget must not raise out of an after().
+        """
+        self._confirm_job = None
+        try:
+            alive = self.winfo_exists()
+        except tk.TclError:
+            return
+        if not alive:
+            return
+        outstanding = {key for key, identities
+                       in self._fault_provisional.items() if identities}
+        if "custody" in outstanding:
+            self._custody_check()
+        if "layout" in outstanding:
+            self._audit_radio_layout()
+
     # ---- radios the VM has lost ------------------------------------------
     def _radio_usb_apply(self, text, repairable):
         def apply():
@@ -6436,8 +6586,8 @@ class BtPanel(tk.Frame):
         def work():
             if not vm_running():
                 self._radio_usb_apply(
-                    "The VM is not running, so it holds no radios. Start it on "
-                    "the Bridge tab.", 0)
+                    "The VM is not running, so it holds no radios. It starts "
+                    "with the app; restart the machine if it stays down.", 0)
                 self._radio_wait_retry()     # it may simply not be up YET
                 return
             state = read_radio_state()
@@ -6486,8 +6636,8 @@ class BtPanel(tk.Frame):
             if self._radio_wait_left <= 0:
                 self._radio_usb_apply(
                     "The VM did not come up while this panel waited for it, so "
-                    "it holds no radios. Start it on the Bridge tab, then use "
-                    "Repair radios.", 0)
+                    "it holds no radios. Restart the machine, then use Repair "
+                    "radios.", 0)
                 return
             self._radio_wait_left -= 1
             try:
@@ -6517,15 +6667,30 @@ class BtPanel(tk.Frame):
     def _custody_apply_text(self, text):
         """Raise the custody fault, or drop it when `text` is empty.
 
-        The always-on label this used to write is gone. Every audit still
-        produces its full report -- into the console, where a history belongs
-        -- and only a NAMED FAULT reaches the banner.
+        The always-on label this used to write is gone: only a NAMED, CONFIRMED
+        fault reaches the banner.
+
+        UI THREAD ONLY. _custody_report is the only caller and it is what
+        marshals -- painting and confirming have to happen in the same closure,
+        or a second audit could overtake the first one's paint.
+        """
+        if text:
+            self._set_fault("custody", text)
+        else:
+            self._clear_fault("custody")
+
+    def _custody_report(self, findings):
+        """Put one audit's findings through the confirmation gate, then paint.
+
+        `findings` is {(instance_id, verdict): sentence} for the faulted radios
+        and {} for a clean audit -- an empty audit being what CLEARS a
+        provisional fault, which is why the VM-is-down and audit-unavailable
+        paths report {} rather than skipping the gate. Callable from a worker:
+        everything it does is inside app.ui.
         """
         def apply():
-            if text:
-                self._set_fault("custody", text)
-            else:
-                self._clear_fault("custody")
+            self._custody_apply_text(
+                "\n".join(self._confirm_faults("custody", findings)))
         if self.app:
             self.app.ui(apply)
 
@@ -6535,18 +6700,25 @@ class BtPanel(tk.Frame):
         Runs at launch and after every custody action. Two SetupAPI sweeps and
         two VBoxManage reads, on a worker -- the UI must not wait on either.
 
-        What reaches the banner is narrower than what reaches the log:
         custody_fault() picks out the phantom and the Windows-Update re-bind
         and lets an ordinary runtime capture past, because that is what a
         healthy radio on this desk looks like and a banner nobody can clear is
         a banner nobody reads.
+
+        THE PER-RADIO REPORT NO LONGER GOES TO THE CONSOLE. It used to print
+        custody_line() for every configured radio on every audit -- three
+        multi-line paragraphs at launch, three more after every custody action
+        -- and with the audit now re-running to confirm a fault, that would only
+        multiply. Doug: he does not want the spam. A fault that matters is on
+        the banner, in the same words; only an audit that could not RUN still
+        says anything here, because that has no banner row to appear in.
         """
         def work():
             if not vm_running():
                 # Windows legitimately owns every radio while the bridge is
                 # down. That is the machine at rest, not a fault -- and this
                 # sample fires 1.8s after launch, in front of a cold boot.
-                self._custody_apply_text("")
+                self._custody_report({})
                 return
             try:
                 import radio_custody
@@ -6557,14 +6729,16 @@ class BtPanel(tk.Frame):
                 # Bluetooth panel down with it. It is not a radio fault
                 # either, and it has no remedy button, so it stays in the log.
                 self._log(f"custody: audit unavailable: {exc}")
-                self._custody_apply_text("")
+                self._custody_report({})
                 return
-            for row in rows:
-                self._log("custody: " + radio_custody.custody_line(row))
-            faulted = [row for row in rows
-                       if custody_fault(row, radio_custody)]
-            self._custody_apply_text(
-                "\n".join(radio_custody.custody_line(row) for row in faulted))
+            # Keyed by the device node and the verdict together: that is what
+            # makes "the same fault for the same radio" comparable across two
+            # audits, and what stops a radio whose fault CHANGED between them
+            # from inheriting the other fault's confirmation.
+            self._custody_report({
+                (row.get("instance_id") or row.get("label") or "",
+                 row.get("verdict")): radio_custody.custody_line(row)
+                for row in rows if custody_fault(row, radio_custody)})
         threading.Thread(target=work, daemon=True).start()
 
     def _take_custody(self):
@@ -6965,13 +7139,23 @@ class BtPanel(tk.Frame):
         on. There is no mode any more, so there is nothing to say -- until the
         machine has three radios and is not using them as three, which is a
         fault with exactly one button behind it. UI THREAD ONLY.
+
+        Confirmed like the other two. This one reads only local state, so a
+        second look costs nothing but the interval -- and it buys the case that
+        matters: a refresh that has landed some of the radios but not all of
+        them briefly looks exactly like two lanes sharing one.
         """
         if len(self._radios) >= 3 and not self._lanes_laid_out():
-            self._set_fault(
-                "layout",
-                f"{len(self._radios)} radios are present, but the iPad "
-                "keyboard, the managed Mac and scanning are not on three "
-                "separate ones — so two of them are sharing a radio.")
+            findings = {
+                "lanes": f"{len(self._radios)} radios are present, but the "
+                         "iPad keyboard, the managed Mac and scanning are not "
+                         "on three separate ones — so two of them are sharing "
+                         "a radio."}
+        else:
+            findings = {}
+        confirmed = self._confirm_faults("layout", findings)
+        if confirmed:
+            self._set_fault("layout", "\n".join(confirmed))
         else:
             self._clear_fault("layout")
 
@@ -7176,8 +7360,8 @@ class BtPanel(tk.Frame):
                         msg = ("VM is starting up (~90s)… refreshes "
                                "automatically when ready.")
                     else:
-                        msg = ("VM isn't running — Start VM on the iPad "
-                               "Bridge tab.")
+                        msg = ("VM isn't running — it starts with the app; "
+                               "restart the machine if it stays down.")
 
                     def apply_unreachable():
                         self.info.set(msg)
@@ -8042,6 +8226,53 @@ class App:
             command=self.canvas.identify_screens)
         self.identify_btn.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
 
+        # ---- the three crossing options, DIRECTLY UNDER THE ARRANGEMENT -----
+        # They were in the System section's ctl grid, two page-sections away
+        # from the picture they describe. Every one of them is a statement about
+        # what happens when the pointer crosses between the rectangles drawn
+        # immediately above, so this is where they are read and this is where
+        # they are set. Doug asked for them here.
+        #
+        # PLACEMENT ONLY. The variables, the commands and the persistence are
+        # untouched -- invert_scroll still reads and writes the "scroll_invert"
+        # setting, and the two crossing flags still live in the arrangement
+        # config -- because a widget that moved and also changed what it does is
+        # two changes reported as one.
+        #
+        # A sibling of arr_wrap in pane_desk, not a child of it: the arrangement
+        # card is CARD-coloured and the ttk TCheckbutton style is configured
+        # with background=BG, so a checkbutton inside the card would paint a BG
+        # rectangle on a CARD field. Packed after arr_wrap, and pack order is
+        # creation order, so it lands under the canvas.
+        deskopts = tk.Frame(pane_desk, bg=BG)
+        deskopts.pack(fill="x", padx=16, pady=(0, PAD_SM))
+        self.invert_scroll = tk.BooleanVar(
+            value=bool(load_setting("scroll_invert", False)))
+        ttk.Checkbutton(deskopts, text="⇅  Invert scroll wheel",
+                        variable=self.invert_scroll,
+                        command=self._on_invert_scroll).pack(
+            anchor="w", padx=5, pady=(PAD_XS, PAD_XS))
+        self.cross_button = tk.BooleanVar(
+            value=bool(self.canvas.config.get(
+                "cross_requires_side_button", False)))
+        ttk.Checkbutton(
+            deskopts,
+            text="🖱  Hold a mouse side button to move between machines",
+            variable=self.cross_button,
+            command=self._on_cross_button).pack(
+            anchor="w", padx=5, pady=(0, PAD_XS))
+        # Indented under the one above it, because it only means anything while
+        # that one is on. The 26px inset is the one it carried in the grid.
+        self.button_jumps = tk.BooleanVar(
+            value=bool(self.canvas.config.get(
+                "side_button_jumps_nearest", False)))
+        ttk.Checkbutton(
+            deskopts, text="↦  …and jump straight to the nearest screen  "
+                           "(recommended for complex arrangements)",
+            variable=self.button_jumps,
+            command=self._on_button_jumps).pack(
+            anchor="w", padx=(26, 5), pady=(0, PAD_XS))
+
         # The global row that stood here -- "iPad: [model]  Rotate  Configure
         # Mac displays...  Screen sizes..." -- is DELETED, and two standing bugs
         # went with it rather than moving somewhere else:
@@ -8064,45 +8295,22 @@ class App:
         # Devices section -- there is deliberately no second global copy of them
         # here. A duplicate row kept its own separate paired-state, so unpairing
         # via one left the other still showing the device as paired.
+        # WHAT IS LEFT OF THIS ROW. It carried "Start VM"/"Bridge VM ✓" beside
+        # the System copy of the portal button; both are GONE at Doug's word,
+        # and with them toggle_vm and the SECOND portal surface. The floating
+        # portal button on the Desk canvas is the survivor and is now the only
+        # one: _portal_btns has one element instead of two, which is exactly the
+        # single-surface case _render_portal_button was written to handle.
+        #
+        # The three crossing checkboxes that filled rows 1-3 have moved to the
+        # Desk section, directly under the arrangement they describe.
+        #
+        # A grid of one is not a grid: Edit keymap keeps its natural width
+        # rather than stretching across a row it no longer shares.
         ctl = tk.Frame(pane_system, bg=BG)
         ctl.pack(fill="x", padx=16, pady=(PAD_XS, PAD_SM))
-        self.vm_btn = ttk.Button(ctl, text="Start VM", command=self.toggle_vm)
-        self.vm_btn.grid(row=0, column=0, sticky="ew", padx=3, pady=PAD_XS)
-        # Built through the same factory as the floating Desk copy, so both are
-        # registered with the one writer and both carry the one command.
-        self.portal_btn = self._portal_button(ctl)
-        self.portal_btn.grid(row=0, column=1, sticky="ew", padx=3, pady=PAD_XS)
         ttk.Button(ctl, text="Edit keymap",
-                   command=lambda: os.startfile(KEYMAP)).grid(
-            row=0, column=2, sticky="ew", padx=3, pady=PAD_XS)
-        self.invert_scroll = tk.BooleanVar(
-            value=bool(load_setting("scroll_invert", False)))
-        ttk.Checkbutton(ctl, text="⇅  Invert scroll wheel",
-                        variable=self.invert_scroll,
-                        command=self._on_invert_scroll).grid(
-            row=1, column=0, columnspan=3, sticky="w", padx=5,
-            pady=(PAD_XS, PAD_XS))
-        self.cross_button = tk.BooleanVar(
-            value=bool(self.canvas.config.get(
-                "cross_requires_side_button", False)))
-        ttk.Checkbutton(
-            ctl, text="🖱  Hold a mouse side button to move between machines",
-            variable=self.cross_button,
-            command=self._on_cross_button).grid(
-            row=2, column=0, columnspan=3, sticky="w", padx=5,
-            pady=(0, PAD_XS))
-        self.button_jumps = tk.BooleanVar(
-            value=bool(self.canvas.config.get(
-                "side_button_jumps_nearest", False)))
-        ttk.Checkbutton(
-            ctl, text="↦  …and jump straight to the nearest screen  "
-                      "(recommended for complex arrangements)",
-            variable=self.button_jumps,
-            command=self._on_button_jumps).grid(
-            row=3, column=0, columnspan=3, sticky="w", padx=(26, 5),
-            pady=(0, PAD_XS))
-        for c in range(3):
-            ctl.columnconfigure(c, weight=1)
+                   command=lambda: os.startfile(KEYMAP)).pack(side="left")
 
         # ---- Devices section: one row per device, built from the config -----
         # Nothing here is per-device-type. Every device the user has added gets
@@ -8147,40 +8355,48 @@ class App:
         _node_note.pack(fill="x", pady=(PAD_XS, 0))
         bind_wraplength(_node_note)
 
-        # ---- System control: every backend action, nothing hidden ----
-        # The title names what the line under it actually reports. It used to
-        # say "System control" over a readout claiming five things, four of
-        # which were said better somewhere else and one of which ("Mac ● up")
-        # could never be true. What is left is the daemon roll-up, so that is
-        # what the title says.
+        # ---- System control: a READOUT, and nothing to press ----------------
+        # This used to be headed "every backend action, nothing hidden" and it
+        # is now the opposite: there are no actions here at all, only the daemon
+        # roll-up. The title has said "device daemons" since the readout was
+        # narrowed to what it can actually report -- it used to claim five
+        # things, four said better elsewhere and one ("Mac ● up") that could
+        # never be true -- and the five buttons under it are now gone too, so
+        # the title finally describes the whole section.
         sysf = _section(pane_system, "System control — device daemons")
         self._bridge_notice(sysf)
         self.sys_status = tk.StringVar(value="…")
         tk.Label(sysf, textvariable=self.sys_status, bg=BG, fg=MUTED,
                  font=("Consolas", 8), anchor="w", justify="left").pack(
             fill="x", pady=(0, PAD_SM))
-        sg = tk.Frame(sysf, bg=BG)
-        sg.pack(fill="x")
-        sysbtns = [("Stop VM", self.stop_vm),
-                   ("Cold-restart VM", self.cold_restart_vm),
-                   ("Restart keyboard", self.restart_keyboard),
-                   ("Restart audio", self.restart_audio_btn),
-                   ("⏻ Shut down everything", self.shutdown_all)]
-        # Kept by label, not built anonymously: every one of these spawns a
-        # worker that takes seconds, and busy() needs the widget to say so on.
-        self._sysbtn = {}
-        for i, (label, fn) in enumerate(sysbtns):
-            _b = ttk.Button(sg, text=label, command=fn)
-            _b.grid(row=i // 3, column=i % 3, sticky="ew", padx=3, pady=PAD_XS)
-            self._sysbtn[label] = _b
-        for c in range(3):
-            sg.columnconfigure(c, weight=1)
-        if not bridge_available():
-            # Disabled, not hidden. A control that vanishes teaches nothing;
-            # a greyed one beside the sentence above says exactly what is
-            # missing and what would bring it back.
-            for _b in self._sysbtn.values():
-                _b.state(["disabled"])
+        # THERE IS DELIBERATELY NO SHUTDOWN OR VM CONTROL HERE. Five buttons
+        # stood in this frame -- Stop VM, Cold-restart VM, Restart keyboard,
+        # Restart audio, ⏻ Shut down everything -- and they are gone with their
+        # handlers, not hidden. Doug: *"Those buttons have never worked very
+        # well due to just how complex everything is that we are doing. I would
+        # always rather restart the machine than try to deal with all the race
+        # conditions that spawn with those buttons."*
+        #
+        # A MACHINE RESTART IS THE SUPPORTED RECOVERY PATH, and the app does not
+        # attempt orchestrated teardown. That is not a missing feature and it
+        # must not be restored as one. It is also not a gap: VirtualBox saves
+        # the VM's state when the host shuts down, and start_vm_clean() DISCARDS
+        # that saved state on the way back up, so a restart is precisely a cold
+        # guest boot -- the same thing Cold-restart VM was trying to arrange
+        # against a live device stack, and losing.
+        #
+        # What still reaches a graceful stop, and all of it by a route Doug
+        # takes on purpose rather than a button he might hit: the window's X
+        # (_confirm_close -> _full_stop) and the tray's "⏻ Shut down
+        # everything" (which opens that same _confirm_close). Restarting audio
+        # is still one click, on the Bluetooth panel's own "⟳ Restart audio",
+        # which is where the headphones are.
+        #
+        # The bridge_available() guard that greyed these five out went with
+        # them. The sentence _bridge_notice puts above still says what is
+        # missing on a machine with no bridge.
+        # What is left under this heading is the daemon roll-up above: a
+        # readout, which is what the title now promises.
 
         # ---- Radio ownership mode (switched via a clean reboot) ----
         mode = _section(pane_system, "Bluetooth radio")
@@ -8266,17 +8482,15 @@ class App:
         tk.Label(zrow, textvariable=self.zoom_state, bg=BG, fg=MUTED,
                  font=(FONT_UI, 8), anchor="w").pack(side="left", padx=(10, 0))
 
-        # ---- Modules -------------------------------------------------------
-        # EsotericOS's optional modules, drawn by the HOST. A module publishes
-        # rows and never touches Tk, so nothing built here can be reached by
-        # module code -- which is the only reason "an optional module can fail
-        # without taking the host down" is a true statement rather than a hope.
-        # The AI usage readout used to be two hardcoded labels right here; it
-        # is now the agent-monitor module, and this section would draw a second
-        # module the same way without knowing anything about it.
-        self.modules_box = _section(pane_system, "Modules")
-        self.module_rows = {}
-        self._module_host = None
+        # ---- Modules: THE SECTION IS GONE ----------------------------------
+        # It was a titled section whose only content was the agent-monitor
+        # module's rows -- the Codex and Claude usage lines. Doug asked for it
+        # off the page, so the section, the host that drove it, the worker that
+        # polled it and the painter that drew it are all deleted rather than
+        # hidden. modules/, module_host.py and plugin_system.py are untouched on
+        # disk and keep their own tests: nothing here forecloses re-wiring a
+        # module surface later, and re-wiring it is a builder, a worker and a
+        # painter, which is what was just removed.
 
         # Map every section in reading order. None is ever hidden, destroyed or
         # rebuilt by scrolling; background work keeps the same widget owners.
@@ -8371,8 +8585,6 @@ class App:
         # screen, never what the page was measured to be.
         self._restore_dock()
         self._tick()
-        threading.Thread(target=self._module_worker,
-                         name="esotericos-modules", daemon=True).start()
         self._wm_host = None
         self._zoom = None
         self._spaces = None
@@ -8882,101 +9094,6 @@ class App:
         self.zoom_state.set("ON — hold Alt and scroll to zoom")
         self.zoom_btn.config(text="Turn off Alt+scroll zoom")
         _emit("ok", "screen zoom on — hold Alt and scroll the wheel.")
-
-    def _module_settings_path(self):
-        """Where a module's settings persist.
-
-        On ROOT, which is the exe's own folder -- never __file__, which in a
-        frozen build points into a temp bundle Windows deletes on exit. A
-        module that records what it observed must find it again next launch.
-        """
-        return os.path.join(ROOT, "module_settings.json")
-
-    def _load_module_settings(self):
-        try:
-            with open(self._module_settings_path(), encoding="utf-8") as fh:
-                data = json.load(fh)
-            return data if isinstance(data, dict) else {}
-        except Exception:  # noqa: BLE001
-            return {}
-
-    def _save_module_settings(self, settings):
-        try:
-            path = self._module_settings_path()
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(settings, fh, indent=2, sort_keys=True)
-            os.replace(tmp, path)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _module_worker(self):
-        """Run the optional modules and draw what they publish.
-
-        Every module call below is already behind plugin_system's fault
-        barrier, so a module that raises becomes a faulted row rather than an
-        exception on this thread. The broad except here is for the mods's own
-        mistakes -- discovery, disk, Tk teardown mid-refresh -- not the
-        modules'.
-        """
-        settings = self._load_module_settings()
-        try:
-            import module_host
-            import plugin_system
-            faulted = plugin_system.PluginState.FAULTED
-            mods = module_host.ModuleHost(
-                settings=settings,
-                enabled=settings.get("_enabled", {}),
-                on_log=lambda line: _emit("event", line))
-            mods.discover()
-            mods.start()
-            self._module_host = mods
-        except Exception as exc:  # noqa: BLE001
-            self.ui(lambda: self._draw_modules(
-                [("Modules", f"could not start: {type(exc).__name__}")]))
-            return
-
-        while not self._closing:
-            rows = []
-            try:
-                for record, reported in mods.reports():
-                    rows.append((record.display_name.upper(), ""))
-                    for label, value in reported or []:
-                        rows.append((label, value))
-                    if reported is None:
-                        rows.append(("", "reported nothing this cycle"))
-                for record in mods.records:
-                    # A module that failed to load is SHOWN, with its reason.
-                    # Silently omitting it is how a module you rely on goes
-                    # missing without anyone noticing.
-                    if record.state is faulted:
-                        rows.append((record.display_name.upper(),
-                                     record.reason or "faulted"))
-                if not rows:
-                    rows = [("Modules", "none installed")]
-            except Exception as exc:  # noqa: BLE001
-                rows = [("Modules", f"refresh failed: {type(exc).__name__}")]
-            if self._closing:
-                return
-            self.ui(lambda r=rows: self._draw_modules(r))
-            self._save_module_settings(settings)
-            time.sleep(600)
-
-    def _draw_modules(self, rows):
-        """Paint module rows. The ONLY place module output reaches a widget."""
-        box = getattr(self, "modules_box", None)
-        if box is None:
-            return
-        try:
-            for child in box.winfo_children():
-                child.destroy()
-            for label, value in rows:
-                text = f"{label:<10}{value}" if label else f"{'':<10}{value}"
-                tk.Label(box, text=text, bg=BG, fg=MUTED,
-                         font=("Consolas", 8), anchor="w",
-                         justify="left").pack(fill="x")
-        except tk.TclError:
-            pass          # the window went away mid-refresh; nothing to draw on
 
     # ---- the right-side dock and the surfaces it invokes -------------------
     # DIALOGS ARE BANNED; SURFACES ARE INVOKED FROM THE DOCK. That is the whole
@@ -9588,9 +9705,12 @@ class App:
             pass
         # padding=(10, 3), not 8. Symmetric 8 spends the same generous pad
         # vertically as horizontally, and this column stacks button ROWS:
-        # measured at 96 DPI with Segoe UI 10, "Restart keyboard" is 39px tall
-        # at padding=8 and 29px at padding=(10, 3) -- 10px back per stacked row,
-        # with the horizontal pad slightly widened so the labels do not tighten.
+        # measured at 96 DPI with Segoe UI 10, a single-line ttk button is 39px
+        # tall at padding=8 and 29px at padding=(10, 3) -- 10px back per stacked
+        # row, with the horizontal pad slightly widened so labels do not tighten.
+        # (The measurement was taken on the System grid's "Restart keyboard",
+        # which no longer exists; the geometry is a property of the style, not
+        # of that button, and every remaining ttk.Button inherits it.)
         st.configure("TButton", background=CARD, foreground=FG,
                      bordercolor=CARD, focuscolor=CARD, relief="flat",
                      padding=(10, 3), font=(FONT_UI, 10))
@@ -10271,9 +10391,13 @@ class App:
         keyboard daemon (openspanble) -- audio and the iPad keyboard are
         independent, so restarting audio must never drop the keyboard.
 
-        `button` is whichever control the user actually pressed: there are two
-        (System control's "Restart audio" and the Bluetooth panel's "⟳ Restart
-        audio"), and the one that waits should be the one that was clicked."""
+        `button` is whichever control the user actually pressed. There used to be
+        two -- System control's "Restart audio" and the Bluetooth panel's "⟳
+        Restart audio" -- and only the Bluetooth one is left: the System grid was
+        deleted whole, and this remedy belongs beside the headphones it fixes
+        rather than in a block of VM teardown verbs. The parameter stays, because
+        the one that waits should be the one that was clicked and this method is
+        deliberately ignorant of which surface that is."""
         done = self.busy(button, "Restarting audio…")
 
         def say(m):
@@ -10487,87 +10611,32 @@ class App:
         self._auto_conn_last = 0.0
         self._auto_reconnect_audio("connection was lost after connecting")
 
-    # ---- System control (full manual control, nothing hidden) ----
-    def stop_vm(self):
-        if not dark_confirm(
-                self.root, "Stop VM?",
-                "Power off the audio/keyboard VM. Audio and the iPad keyboard "
-                "stop until you start it again.\n\nStop now?"):
-            return
-        self.status.set("Stopping VM…")
-        done = self.busy(self._sysbtn["Stop VM"], "Stopping VM…")
-
-        def work():
-            try:
-                ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
-                gentle_release()
-                vbox("controlvm", VM, "poweroff")
-            finally:
-                done()
-        threading.Thread(target=work, daemon=True).start()
-
-    def cold_restart_vm(self):
-        if not dark_confirm(
-                self.root, "Cold-restart VM?",
-                "Reboot the bridge VM cleanly (~2min): radios handed back "
-                "one at a time, guest shut down properly, then a fresh boot "
-                "and re-delivery. The radios themselves never power-cycle — "
-                "that takes a replug or a host reboot.\n\nRestart now?"):
-            return
-        self.status.set("Cold-restarting VM…")
-        done = self.busy(self._sysbtn["Cold-restart VM"], "Restarting VM…")
-
-        def work():
-            try:
-                if vm_running():
-                    ssh_guest("journalctl --sync; sync", timeout=12, quiet=True)
-                    # Ordered radio handback first, then a REAL guest
-                    # shutdown. The old flow pulled the virtual plug with
-                    # radios attached: a mass USB release (the 2026-08-08
-                    # injury event) plus a hard filesystem stop, in exchange
-                    # for a "cold boot" the radios never actually got.
-                    gentle_release()
-                    vbox("controlvm", VM, "acpipowerbutton")
-                    for _ in range(30):
-                        if not vm_running():
-                            break
-                        threading.Event().wait(1)
-                    if vm_running():
-                        _emit("event", "guest ignored ACPI — hard poweroff")
-                        vbox("controlvm", VM, "poweroff")
-                        for _ in range(15):
-                            if not vm_running():
-                                break
-                            threading.Event().wait(1)
-                start_vm_clean()
-            finally:
-                done()
-        threading.Thread(target=work, daemon=True).start()
-
-    def restart_keyboard(self):
-        self.status.set("Restarting keyboard daemon…")
-        done = self.busy(self._sysbtn["Restart keyboard"], "Restarting…")
-
-        def work():
-            try:
-                ssh_guest("systemctl restart openspanble", timeout=25)
-                self.ui(lambda: self.status.set(
-                    "Keyboard restarted — forget + re-pair on the iPad."))
-            finally:
-                done()
-        threading.Thread(target=work, daemon=True).start()
-
-    def restart_audio_btn(self):
-        self.restart_everything(button=self._sysbtn["Restart audio"])
-
-    def shutdown_all(self):
-        if not dark_confirm(
-                self.root, "Shut down everything?",
-                "Power off the VM and close the app. Audio, keyboard, portal, "
-                "and sender all stop — nothing keeps running.\n\nShut down "
-                "now?"):
-            return
-        self._full_stop()
+    # ---- System control: THE MANUAL TEARDOWN VERBS ARE GONE ----------------
+    # stop_vm, cold_restart_vm, restart_keyboard, restart_audio_btn and
+    # shutdown_all stood here, one per button in the System section's five-button
+    # grid. All five are deleted with the buttons, deliberately and at Doug's
+    # word: *"Those buttons have never worked very well due to just how complex
+    # everything is that we are doing. I would always rather restart the machine
+    # than try to deal with all the race conditions that spawn with those
+    # buttons."*
+    #
+    # A MACHINE RESTART IS THE SUPPORTED RECOVERY PATH. The app orchestrates no
+    # teardown of its own, and this absence is the feature -- every one of those
+    # five raced a live Windows device stack, and cold_restart_vm's own comment
+    # already recorded the 2026-08-08 injury event it was written to avoid.
+    #
+    # What SURVIVES, and why each one had to:
+    #   * _full_stop, below -- reached by the window's X (_confirm_close) and by
+    #     the tray's "⏻ Shut down everything", which opens that same dialog. It
+    #     is also what takes the keyboard hook out, and a low-level hook that
+    #     outlives its process leaves the machine with dead chords.
+    #   * gentle_release() and stop_virtualbox_backend(), because _full_stop is
+    #     what calls them.
+    #   * restart_everything(), because the Bluetooth panel's own "⟳ Restart
+    #     audio" calls it -- that button is beside the headphones it fixes.
+    #   * start_vm_clean(), which is startup's and _pair_device_attempt's, not
+    #     these buttons'. It DISCARDS saved state, which is exactly what makes a
+    #     host restart a cold guest boot.
 
     # ---- close / tray ----
     def _boot_why_probe(self, force=False):
@@ -10631,18 +10700,6 @@ class App:
         if _spc is not None and getattr(_spc, "enabled", False):
             try:
                 _spc.disable()
-            except Exception:  # noqa: BLE001
-                pass
-        # Modules get their deactivate() called, and their settings written.
-        # A module records what it OBSERVED -- the agent monitor remembers
-        # resets it actually watched happen -- and losing that on exit would
-        # leave only the provider's claims, which is the thing it exists to
-        # cross-check.
-        _mods = getattr(self, "_module_host", None)
-        if _mods is not None:
-            try:
-                _mods.stop()
-                self._save_module_settings(_mods._settings)
             except Exception:  # noqa: BLE001
                 pass
         if getattr(self, "clip_server", None):
@@ -10836,34 +10893,12 @@ class App:
             self._start_portal_process()
             self.log("event", "portal geometry reloaded from the arrangement.")
 
-    def toggle_vm(self):
-        # Both branches go through busy() and both run on a worker. The stop
-        # branch used to call vbox() straight from the click, on the UI thread,
-        # after writing "Stopping VM…" -- so Tk could not repaint until the
-        # VBoxManage call it was reporting had already finished. A pending label
-        # the UI thread is too blocked to draw is not feedback.
-        if vm_running():
-            if dark_confirm(self.root, "Stop VM?",
-                            "Stop the bridge VM? The iPad will disconnect "
-                            "until you start it again."):
-                done = self.busy(self.vm_btn, "Stopping VM…")
-
-                def stop():
-                    try:
-                        gentle_release()
-                        vbox("controlvm", VM, "acpipowerbutton")
-                    finally:
-                        done()
-                threading.Thread(target=stop, daemon=True).start()
-        else:
-            done = self.busy(self.vm_btn, "Starting VM…")
-
-            def start():
-                try:
-                    start_vm_clean()
-                finally:
-                    done()
-            threading.Thread(target=start, daemon=True).start()
+    # toggle_vm IS GONE with the "Start VM"/"Bridge VM ✓" button that was its
+    # only caller. Starting the VM is not a thing anyone has to ask for: the app
+    # starts it at launch when the bridge is available and the machine is in
+    # station mode, and _pair_device_attempt starts it if a pair arrives with the
+    # bridge down. Stopping it is the machine restart Doug asked for -- see the
+    # System control comment above.
 
     def _portal_button(self, master, **kw):
         """Build a portal control AND register it with the one writer.
@@ -10873,11 +10908,13 @@ class App:
         a second route to the backend: the command is bound once, in this
         method, to the same toggle_portal every other copy calls.
 
-        There are two of them today -- the ctl grid's, in the System section, and
-        the floating one over the Desk arrangement. The list is what
-        _render_portal_button and _busy_portal iterate; with a single element
-        their behaviour is identical to what shipped before the second button
-        existed.
+        There is ONE of them today: the floating button over the Desk
+        arrangement. The System section's copy went with the "Bridge VM ✓"
+        button it shared a row with. The factory, the registration list and the
+        renderer all stay exactly as they were -- _portal_btns simply has one
+        element, which is the case _render_portal_button and _busy_portal were
+        written to handle before the second button ever existed, and the factory
+        is still the only door a third one could come in through.
         """
         button = ttk.Button(master, text="Start portal",
                             command=self.toggle_portal_by_user, **kw)
@@ -13654,12 +13691,12 @@ class App:
                 self.status.set("Ready — pair or connect a device.")
         # the Pair button stays a static "Pair"; connection state is shown by the
         # indicator colours + which of Connect/Disconnect/Unpair are enabled.
-        # button_is_busy is the guard that makes the pending state survive: this
-        # tick rewrites the VM button's label every 3 seconds and would
-        # otherwise paint straight over "Starting VM…".
-        if not button_is_busy(self.vm_btn):
-            self.vm_btn.config(text="Bridge VM ✓" if running
-                               else "Start Bridge VM")
+        #
+        # The VM button's relabel used to live here -- "Bridge VM ✓" when it was
+        # up, "Start Bridge VM" when it was not, rewritten every three seconds
+        # behind a button_is_busy guard so the tick could not paint over
+        # "Starting VM…". The button is gone; whether the bridge is up is still
+        # said, in words, by self.status above.
         self._render_portal_button(on)
 
 

@@ -692,11 +692,28 @@ if audit_fn:
     # did.
     check("it is silent while the VM is down, so a cold boot shows nothing",
           "if not vm_running():" in src, src[:0])
-    check("every audit still reports IN FULL to the console; only a named "
-          "fault reaches the screen",
+    # THE PER-RADIO CONSOLE PARAGRAPH IS GONE (2026-08-28). It printed
+    # custody_line() for every configured radio on every audit -- three
+    # multi-line paragraphs at launch, three more after every custody action --
+    # and with the audit now re-running to CONFIRM a fault before showing it,
+    # that would only multiply. Doug does not want the spam. The banner already
+    # says it, in the same words; only an audit that could not run still logs,
+    # because that has no banner row to appear in.
+    check("the per-radio custody paragraph no longer goes to the console",
           "self._log('custody: ' + radio_custody.custody_line(row))"
-          in ast.unparse(audit_fn)
-          and "custody_fault(row, radio_custody)" in src, src[:0])
+          not in ast.unparse(audit_fn)
+          and "for row in rows:" not in src, src[:0])
+    check("an audit that could not RUN still says so",
+          "custody: audit unavailable" in src, src[:0])
+    check("only a named fault reaches the screen, and it is quoted in "
+          "custody_line's own words",
+          "custody_fault(row, radio_custody)" in src
+          and "radio_custody.custody_line(row)" in src, src[:0])
+    # A single sighting is a photograph, not a diagnosis: the 1.8s launch
+    # sample caught two working dongles mid-capture and called them PHANTOM.
+    check("and it reaches the screen through the confirmation gate, never "
+          "straight onto the banner",
+          "_custody_report" in src and "_set_fault" not in src, src[:0])
 
 
 # ---- 12. bake-in.ps1 and the docs ------------------------------------------

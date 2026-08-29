@@ -2,10 +2,18 @@ r"""Power the bridge VM off the way the app does it, from the command line.
 
 Ordered handback first -- each VM-held radio detached one at a time and
 verified -- then an ACPI power button so the guest shuts down cleanly, then a
-hard poweroff only if the guest ignores ACPI for 30 s. This mirrors
-openspan.py's cold_restart_vm()/_full_stop() so a custody take or a Windows
-restart can be prepared without the GUI (the app must already be closed; a
-running app would notice the VM going down and try to bring it back).
+hard poweroff only if the guest ignores ACPI for 30 s, so a custody take or a
+Windows restart can be prepared without the GUI (the app must already be
+closed; a running app would notice the VM going down and try to bring it back).
+
+This used to be described as mirroring openspan.py's cold_restart_vm() and
+_full_stop(). cold_restart_vm is GONE -- Doug removed the VM buttons on
+2026-08-29 because they raced a live Windows device stack, and a machine
+restart is the supported recovery path now. _full_stop() survives (the window's
+X and the tray reach it) and still calls the same gentle_release(). So this is
+the operator's copy of that ordered handback, deliberately kept: it is a
+command a person runs on purpose, not a button that can be hit by accident,
+which was the whole objection to the buttons.
 
     C:\Python313\python.exe win\vm_off_gently.py            # do it
     C:\Python313\python.exe win\vm_off_gently.py --status   # read-only

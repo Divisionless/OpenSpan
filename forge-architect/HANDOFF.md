@@ -112,6 +112,25 @@ No source, build, startup contract, or running process has changed.
 
 ## Doug rulings on record
 
+- 2026-08-29 **a machine restart is the supported recovery path; the app does not attempt
+  orchestrated teardown.** Doug: *"those buttons have never worked very well due to just how
+  complex everything is that we are doing. I would always rather restart the machine than try
+  to deal with all the race conditions that spawn with those buttons."* Stop VM, Cold-restart
+  VM, Restart keyboard, Restart audio and Shut down everything were removed and their
+  now-unreachable helpers deleted with them. **This is a deliberate absence, not a missing
+  feature — do not restore a shutdown control.** What must keep working is the session-end
+  chain: `WM_QUERYENDSESSION`/`WM_ENDSESSION`, VirtualBox saving VM state at host shutdown, and
+  `start_vm_clean()` discarding it to force a cold guest boot. That chain is what makes "just
+  restart" correct.
+- 2026-08-29 **a radio is owned by the device that claims it.** No mode toggle: the arrangement
+  is derived from the assignments-by-controller-MAC. A stored `radio_mode` that disagreed with
+  the assignments beside it was the cause of the empty-dropdown bug, and a toggle that can go
+  stale against reality is the defect.
+- 2026-08-29 **fault remedies are not settings.** Repair, custody and layout controls appear
+  only when an audit finds a fault, and a fault must be **confirmed across two consecutive
+  audits** before it is shown — a transient PHANTOM during boot is normal, a persistent one is
+  the fault. A healthy desk shows nothing.
+
 - 2026-08-27 **law 10 — no nested scrollers.** One vertical scroller per window; containers
   adapt to contents; where adapting is infeasible bound the **content** and raise the
   objection. Charter law 10, board row v3.154.

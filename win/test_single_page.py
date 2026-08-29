@@ -373,6 +373,147 @@ check("Bluetooth and Desk service widgets are still constructed once",
       and parent.get("arr_wrap") == "pane_desk")
 
 
+# ---- the three crossing options moved to the picture they describe ---------
+# They were rows 1-3 of the System section's ctl grid, two page sections away
+# from the arrangement every one of them is a statement about. Doug asked for
+# them directly under the canvas. PLACEMENT ONLY -- the variables, the commands
+# and the persistence are the same objects they always were.
+print("\n---- the crossing options sit under the arrangement ----")
+
+checkbuttons = [node for node in ast.walk(init)
+                if isinstance(node, ast.Call)
+                and _name(node.func) == "ttk.Checkbutton"]
+masters = [_name(node.args[0]) if node.args else None
+           for node in checkbuttons]
+labels = ["".join(part.value for part in ast.walk(word.value)
+                  if isinstance(part, ast.Constant)
+                  and isinstance(part.value, str))
+          for node in checkbuttons for word in node.keywords
+          if word.arg == "text"]
+check("the Desk options frame is a sibling of the arrangement card, in the "
+      "Desk section -- not a child of it, because the card is CARD-coloured "
+      "and the ttk TCheckbutton style is configured on BG",
+      parent.get("deskopts") == "pane_desk",
+      repr(parent.get("deskopts")))
+check("EVERY checkbutton in the window is in that frame",
+      masters and set(masters) == {"deskopts"}, repr(masters))
+check("...and it is the three crossing options, by name",
+      len(checkbuttons) == 3
+      and any("Invert scroll wheel" in text for text in labels)
+      and any("mouse side button" in text for text in labels)
+      and any("nearest screen" in text for text in labels), repr(labels))
+ctl_children = [_name(node.args[0]) for node in ast.walk(init)
+                if isinstance(node, ast.Call)
+                and _name(node.func) in ("ttk.Button", "tk.Button",
+                                         "ttk.Checkbutton", "self._portal_button")
+                and node.args and _name(node.args[0]) == "ctl"]
+check("none of them is left in the System section's ctl grid, and what is left "
+      "of that row is the single Edit keymap button",
+      "ttk.Checkbutton(ctl" not in SOURCE and len(ctl_children) == 1
+      and "Edit keymap" in init_src, repr(ctl_children))
+check("a grid of one is not a grid -- the row's columnconfigure went with the "
+      "buttons that shared it",
+      "ctl.columnconfigure" not in SOURCE and "ctl.grid" not in SOURCE)
+# The third is only meaningful while the second is on, and said so with an
+# indent. A pack has no columnspan to lose, so the inset is the padx.
+jump = next((node for node in checkbuttons
+             if any(word.arg == "text" and isinstance(word.value, ast.Constant)
+                    and "nearest screen" in word.value.value
+                    for word in node.keywords)), None)
+inset = None
+for node in ast.walk(init):
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "pack" and node.func.value is jump):
+        inset = next((ast.literal_eval(word.value) for word in node.keywords
+                      if word.arg == "padx"), None)
+check("the jump option is still visually indented under the option it "
+      "qualifies", isinstance(inset, tuple) and inset[0] >= 20, repr(inset))
+check("all three still carry their own variable and their own command",
+      all(len({word.arg for word in node.keywords} & {"variable", "command"})
+          == 2 for node in checkbuttons))
+check("and their persistence is untouched: the scroll flag is still a setting "
+      "and the two crossing flags still live in the arrangement",
+      'load_setting("scroll_invert", False)' in init_src.replace("'", '"')
+      and '"cross_requires_side_button"' in init_src.replace("'", '"')
+      and '"side_button_jumps_nearest"' in init_src.replace("'", '"'))
+
+
+# ---- what Doug asked to be gone is GONE ------------------------------------
+# Not hidden, not disabled: deleted, with the handlers that served them. Doug on
+# the VM and shutdown buttons: *"Those buttons have never worked very well due
+# to just how complex everything is that we are doing. I would always rather
+# restart the machine than try to deal with all the race conditions that spawn
+# with those buttons."* A machine restart is the supported recovery path.
+print("\n---- the removed controls ----")
+
+# Asked precisely, of the WIDGETS, not of the file. A substring sweep over
+# openspan.py would trip on the paragraphs recording why these are gone -- and
+# deleting the record to make a test pass is how the removal comes back as a
+# "missing feature". So: every string this window ever puts on a button, and
+# every string it ever relabels one to.
+def button_labels(function):
+    seen = set()
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _name(node.func) or ""
+        is_button = target in ("ttk.Button", "tk.Button")
+        is_relabel = target.endswith(".config") or target.endswith(".configure")
+        if not (is_button or is_relabel):
+            continue
+        for word in node.keywords:
+            if word.arg != "text":
+                continue
+            seen.update(part.value for part in ast.walk(word.value)
+                        if isinstance(part, ast.Constant)
+                        and isinstance(part.value, str))
+    return seen
+
+
+labels_anywhere = set()
+for _node in ast.walk(MODULE):
+    if isinstance(_node, ast.FunctionDef):
+        labels_anywhere |= button_labels(_node)
+for label in ("Bridge VM ✓", "Start Bridge VM", "Start VM", "Stop VM",
+              "Cold-restart VM", "Restart keyboard", "Restart audio",
+              "⏻ Shut down everything"):
+    check(f"no button in the window is labelled “{label}”",
+          label not in labels_anywhere, label)
+# The Bluetooth panel's own audio remedy is a DIFFERENT control from the System
+# grid's "Restart audio", and it survives: it sits beside the headphones it
+# fixes, and restart_everything -- which it calls -- was never one of the VM
+# teardown verbs.
+check("the Bluetooth panel keeps its own “⟳ Restart audio”",
+      "⟳ Restart audio" in labels_anywhere
+      and 'self.btn_restart_audio = ttk.Button(bar, text="⟳ Restart audio"'
+      in SOURCE)
+# The tray entry is not a button and must NOT go: it is one of the two routes
+# left to a graceful stop, and it reaches it through the same close dialog the
+# window's X opens.
+check("the tray's shut-down entry survives, and goes through the close dialog",
+      'label="⏻  Shut down everything"' in SOURCE
+      and "self._confirm_close" in SOURCE)
+check("the System section's portal copy went with the row it shared",
+      "self.portal_btn" not in SOURCE and "self.vm_btn" not in SOURCE)
+check("...and the floating Desk portal control is the survivor",
+      "self.desk_portal_btn" in SOURCE)
+check("the five-button System grid and its registry are gone",
+      "_sysbtn" not in SOURCE and "sysbtns" not in SOURCE)
+check("the Modules section is gone, host, worker, painter and all",
+      '_section(pane_system, "Modules")' not in SOURCE
+      and "modules_box" not in SOURCE and "_module_worker" not in SOURCE
+      and "_draw_modules" not in SOURCE and "module_host" not in init_src)
+# The absence has to be documented where the widgets were, or it comes back as
+# a "missing feature".
+check("the source records WHY there is no shutdown or VM control",
+      "restart the machine" in SOURCE
+      and "supported recovery path" in SOURCE.lower())
+# The one graceful stop that survives is not a button: it is the window's X and
+# the tray entry that opens the same dialog.
+check("the close dialog still reaches the full stop",
+      "self._full_stop()" in SOURCE and "def _full_stop" in SOURCE)
+
+
 print("\n---- fixed safety header, scrolling footer ----")
 check("readiness remains above the page Canvas in fixed chrome",
       parent.get("self.ready_lbl") == "full"

@@ -1,19 +1,30 @@
-"""The Modules panel: the host draws, modules publish.
+"""The Modules section is GONE, and this file is what stops it drifting back.
 
-This file used to guard the AI-usage readout when it was two hardcoded
-tk.StringVars and a `_usage_worker` welded into openspan.py. That readout is
-now the agent-monitor MODULE, and the panel is generic -- it would draw a
-second module the same way without knowing anything about it. So the checks
-moved with it: what matters is no longer "are the two usage labels there" but
-"can module output reach a widget anywhere except the one place allowed".
+The history in three steps. It began as a hardcoded AI-usage readout welded
+into openspan.py: two tk.StringVars, two labels and a `_usage_worker`. That was
+replaced by the agent-monitor MODULE behind a generic host, and this file
+became the seam test -- "can module output reach a widget anywhere except the
+one place allowed". On 2026-08-28 Doug asked for the section itself off the
+page: it was a titled section whose only content was that module's Codex and
+Claude usage lines.
 
-Behaviour of the modules themselves is in test_module_host.py. This is only
-about the seam between them and the window.
+So the whole chain is deleted rather than hidden -- the builder, the host, the
+worker, the painter and the settings that persisted what a module observed.
+What is NOT deleted is `modules/`, `module_host.py` and `plugin_system.py`,
+which keep their own tests (test_module_host.py, test_module_deps.py,
+test_plugin_system.py). Nothing about this removal forecloses a module surface
+later; re-wiring one is a builder, a worker and a painter, which is exactly the
+shape that was taken out.
+
+The checks below are therefore absence checks, and they are deliberately about
+the WINDOW rather than about the module system. A module that fails must still
+fail loudly in its own tests; it simply has nowhere in this window to say so.
+
+RUNS HEADLESS AND TOUCHES NOTHING: openspan.py is parsed, never imported.
 """
 
 import ast
 import pathlib
-import re
 
 
 def check(name, condition):
@@ -34,71 +45,46 @@ def method(name):
                  if isinstance(n, ast.FunctionDef) and n.name == name), None)
 
 
-check("the old hardcoded usage readout is gone, not merely hidden",
+print("\n---- the readout, in all three of its lives ----")
+
+check("the original hardcoded usage readout is still gone",
       "usage_codex" not in source and "usage_claude" not in source
       and method("_usage_worker") is None)
-check("there is a Modules section", '_section(pane_system, "Modules")' in source)
+check("and so is the generic section that replaced it",
+      '_section(pane_system, "Modules")' not in source
+      and "modules_box" not in source and "module_rows" not in source)
 
-worker = method("_module_worker")
-check("a worker refreshes modules off the UI thread", worker is not None)
-body = ast.get_source_segment(source, worker)
-check("module_host is imported lazily, inside the worker",
-      "import module_host" in body
-      and not re.search(r"^import module_host", source, re.M))
-check("the worker never touches a widget directly -- it hands rows to ui()",
-      "self.ui(" in body and "tk.Label" not in body)
+print("\n---- nothing is left half-removed ----")
 
-draw = method("_draw_modules")
-check("exactly one method paints module output", draw is not None)
-paint = ast.get_source_segment(source, draw)
-# `box` is an ordinary local name all over this file, so counting tk.Label(box
-# proves nothing. The precise question is who can reach the MODULES box.
-touchers = {n.name for n in ast.walk(app)
-            if isinstance(n, ast.FunctionDef)
-            and "modules_box" in (ast.get_source_segment(source, n) or "")}
-check("only the builder and the painter can reach the modules box",
-      len(touchers) == 2 and "_draw_modules" in touchers)
-check("the painter is what actually makes the widgets", "tk.Label(box" in paint)
-check("a window destroyed mid-refresh is survivable, not a traceback",
-      "tk.TclError" in paint)
+for name in ("_module_worker", "_draw_modules", "_load_module_settings",
+             "_save_module_settings", "_module_settings_path"):
+    check(f"{name} is deleted, not orphaned", method(name) is None
+          and f"self.{name}" not in source)
+check("no thread is started for modules any more",
+      "esotericos-modules" not in source
+      and "target=self._module_worker" not in source)
+check("the host is neither imported nor built",
+      "ModuleHost(" not in source and "import module_host" not in source
+      and "import plugin_system" not in source)
+check("_module_host is not left as an attribute nobody sets",
+      "self._module_host" not in source)
+check("shutdown no longer deactivates a host it never started",
+      "_module_host" not in (ast.get_source_segment(
+          source, method("_full_stop")) or ""))
 
-# A module that failed to load must be VISIBLE. Silently omitting it is how
-# something you rely on goes missing without anyone noticing.
-check("a faulted module is shown with its reason",
-      "faulted" in body and "record.reason" in body)
-check("a module that reports nothing says so rather than leaving a blank",
-      "reported nothing" in body)
-check("no modules at all is a sentence, not an empty box",
-      "none installed" in body)
+print("\n---- the module system itself is untouched on disk ----")
 
-# The single-hook law counts `host.start()`. The module host is deliberately
-# NOT called `host` here, so it cannot dilute that count.
-check("the module host does not shadow the keyboard hook's name",
-      "mods = module_host.ModuleHost(" in body and "host = module_host" not in body)
-
-# What a module OBSERVED has to outlive the process, or only the provider's
-# claims survive -- which is the thing the agent monitor exists to check.
-check("module settings are persisted", method("_save_module_settings") is not None
-      and method("_load_module_settings") is not None)
-# Read the CODE, not the comment: the docstring here explains why __file__ is
-# wrong, and a naive substring search would trip on the explanation itself.
-node = method("_module_settings_path")
-statements = [s for s in node.body
-              if not (isinstance(s, ast.Expr)
-                      and isinstance(s.value, ast.Constant)
-                      and isinstance(s.value.value, str))]
-path = "\n".join(ast.get_source_segment(source, s) for s in statements)
-check("settings anchor on ROOT, never __file__ (frozen builds delete that)",
-      "ROOT" in path and "__file__" not in path)
-check("the write is atomic, so a crash cannot truncate what was observed",
-      "os.replace" in ast.get_source_segment(source, method("_save_module_settings")))
-
-stop = ast.get_source_segment(source, method("_full_stop"))
-check("shutdown deactivates modules and saves what they observed",
-      "_module_host" in stop and "_save_module_settings" in stop)
-
-# The build has to carry the module FOLDER: discovery reads plugin.json off
-# disk, so a hidden-import would ship code nobody ever imports by name.
+for name in ("module_host.py", "plugin_system.py"):
+    check(f"{name} still exists, so re-wiring is a builder and a worker",
+          (ROOT / "win" / name).is_file())
+check("and the modules folder is still there",
+      (ROOT / "win" / "modules").is_dir())
+# The build shipping the folder is now dead weight in the exe, but removing it
+# is a build change and not a window change, and a hidden-import would ship code
+# nobody imports by name. Left as-is, deliberately, and recorded here.
 build = (ROOT / "build_exe.py").read_text(encoding="utf-8")
-check("the build ships the modules folder as data",
+check("the build still ships the modules folder as data (harmless, and the "
+      "one line that has to change if a module surface returns)",
       "--add-data" in build and '"modules"' in build)
+
+print("\nRESULT: ALL PASS")

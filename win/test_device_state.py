@@ -691,16 +691,36 @@ check("clearing twice is harmless", A.clear_button_busy(probe_btn) is None)
 probe_btn.destroy()
 
 # Every long threaded action a user waits on now says so.
-for method, button in (("stop_vm", '_sysbtn["Stop VM"]'),
-                       ("cold_restart_vm", '_sysbtn["Cold-restart VM"]'),
-                       ("restart_keyboard", '_sysbtn["Restart keyboard"]'),
-                       ("restart_everything", "button"),
-                       ("toggle_vm", "vm_btn")):
+#
+# The list used to have four more entries: stop_vm, cold_restart_vm,
+# restart_keyboard and toggle_vm, one per button in the System section's grid.
+# All four are DELETED with their buttons. Doug: *"Those buttons have never
+# worked very well due to just how complex everything is that we are doing. I
+# would always rather restart the machine than try to deal with all the race
+# conditions that spawn with those buttons."* A machine restart is the supported
+# recovery path and the app orchestrates no teardown of its own.
+for method, button in (("restart_everything", "button"),):
     src = ast.get_source_segment(SOURCE, _method("App", method)) or ""
     check(f"{method} reports its wait on the button",
           "self.busy(" in src, "no busy() call")
     check(f"{method} restores the button in a finally, not on the happy path",
           "finally:" in src and "done()" in src)
+for gone in ("stop_vm", "cold_restart_vm", "restart_keyboard",
+             "restart_audio_btn", "shutdown_all", "toggle_vm"):
+    check(f"{gone} is gone with the button that was its only caller",
+          _method("App", gone) is None and f"self.{gone}" not in SOURCE)
+check("and no System-control button registry survives them",
+      "_sysbtn" not in SOURCE and "self.vm_btn" not in SOURCE)
+# The one graceful stop that is left is not a button: it is the window's X and
+# the tray entry that opens the same dialog. Deleting it would leave a low-level
+# keyboard hook outliving its process, which is how a machine ends up with dead
+# chords until a reboot.
+check("_full_stop survives, because the close dialog is what calls it",
+      _method("App", "_full_stop") is not None
+      and "self._full_stop()" in SOURCE)
+check("...and the tray's shut-down entry reaches it through that same dialog",
+      "self._confirm_close" in SOURCE
+      and "Shut down everything" in SOURCE)
 src = ast.get_source_segment(SOURCE, _method("BtPanel", "_reclaim_radios")) or ""
 check("Repair radios reports its wait too (it was a bare state='disabled')",
       "busy(" in src and "Repairing" in src)
@@ -914,31 +934,33 @@ check("the portal button switches to Warn.TButton when the portal is down",
 # through busy() and the guard is load-bearing.
 #
 # The button is REGISTERED rather than assigned: _render_portal_button drives
-# the registry now, because there is a second portal control floating on the
-# Desk section. One writer, one builder, one list -- test_single_page.py drives the pair
-# and proves they cannot disagree; this file keeps exercising the guard.
-app.portal_btn = ttk.Button(root, text="Start portal")
-app._portal_btns = [app.portal_btn]
+# the registry, never a named attribute. There is ONE portal control shipped now
+# -- the floating one over the Desk arrangement; the System section's copy went
+# with the "Bridge VM ✓" button it shared a row with -- and the registry is what
+# makes that a one-line change rather than a rewrite. One writer, one builder,
+# one list; this file keeps exercising the guard.
+app.desk_portal_btn = ttk.Button(root, text="Start portal")
+app._portal_btns = [app.desk_portal_btn]
 app._render_portal_button(False)
 check("portal down: the button reads Start portal in the alarm style",
-      app.portal_btn.cget("text") == "Start portal"
-      and str(app.portal_btn.cget("style")) == "Warn.TButton",
-      f"{app.portal_btn.cget('text')!r} / {app.portal_btn.cget('style')!r}")
+      app.desk_portal_btn.cget("text") == "Start portal"
+      and str(app.desk_portal_btn.cget("style")) == "Warn.TButton",
+      f"{app.desk_portal_btn.cget('text')!r} / {app.desk_portal_btn.cget('style')!r}")
 app._render_portal_button(True)
 check("portal up: it reads Stop portal as an ordinary button",
-      app.portal_btn.cget("text") == "Stop portal"
-      and str(app.portal_btn.cget("style")) == "TButton",
-      f"{app.portal_btn.cget('text')!r} / {app.portal_btn.cget('style')!r}")
-A.set_button_busy(app.portal_btn, "Stopping portal…")
+      app.desk_portal_btn.cget("text") == "Stop portal"
+      and str(app.desk_portal_btn.cget("style")) == "TButton",
+      f"{app.desk_portal_btn.cget('text')!r} / {app.desk_portal_btn.cget('style')!r}")
+A.set_button_busy(app.desk_portal_btn, "Stopping portal…")
 app._render_portal_button(False)      # the 3-second tick, mid-stop
 check("a poll tick does NOT paint over the portal button's pending state",
-      app.portal_btn.cget("text") == "Stopping portal…"
-      and "disabled" in app.portal_btn.state(),
-      repr(app.portal_btn.cget("text")))
-A.clear_button_busy(app.portal_btn)
+      app.desk_portal_btn.cget("text") == "Stopping portal…"
+      and "disabled" in app.desk_portal_btn.state(),
+      repr(app.desk_portal_btn.cget("text")))
+A.clear_button_busy(app.desk_portal_btn)
 check("clearing hands the portal button back to the renderer",
-      app.portal_btn.cget("text") == "Stop portal"
-      and "disabled" not in app.portal_btn.state())
+      app.desk_portal_btn.cget("text") == "Stop portal"
+      and "disabled" not in app.desk_portal_btn.state())
 
 toggle_src = ast.get_source_segment(SOURCE, _method("App", "toggle_portal")) or ""
 check("toggle_portal really parks a wait on the portal buttons -- the guard "
