@@ -196,31 +196,49 @@ check("wait_window returns when the modal closes", done[0] == "returned",
 # dialogs they replaced, and a text search cannot tell that from a call.
 here = os.path.dirname(os.path.abspath(__file__))
 BANNED = {"Toplevel", "messagebox", "filedialog", "simpledialog"}
-# THE EXEMPTION, BY NAME, AND THERE IS ONE AGAIN.
+# THE EXEMPTIONS, BY NAME, AND THERE ARE TWO SINCE 2026-08-29.
 #
-# _identify_card (2026-08-15) puts a number on each real monitor for a moment,
-# the way Windows Settings does. That is not a dialog -- it takes no focus and
-# asks nothing -- and it cannot be done from inside the frame, because its
-# whole point is to appear on the OTHER screens.
-#
-# A DIALOG IS BANNED. A SURFACE IS NOT, AND A SURFACE IS NOT A WINDOW. This is
+# A DIALOG IS BANNED. A SURFACE IS NOT, AND A SURFACE IS NOT A DIALOG. This is
 # the distinction Doug drew on 2026-08-28: *"no pop out but we can replace
-# surfaces and invoke entire new ones in the side."* A dialog is an OS window
-# that Windows places, on a screen he was not looking at; a surface is a region
-# of the app's own window, invoked by name from the right-side dock, replacing
-# whatever was showing there. So a new surface needs no exemption here and must
-# never ask for one: it is built as a Frame in the surface region, registered
-# in openspan.DOCK_SPEC, and switched by App._render_dock.
+# surfaces and invoke entire new ones in the side."* The line is WHO PLACES IT.
+# A dialog is an OS window that WINDOWS places, at a moment of its choosing, on
+# a screen he was not looking at -- that is the 28 July complaint, verbatim:
+# *"if i click into something i want it right there, this just popped up on
+# another screen."* A surface is placed by this process, on a screen this
+# process chose, in the same place every time, and it asks nothing.
 #
-# _open_console_window was the second exemption for exactly one day
-# (2026-08-27 to 2026-08-28). The console is a dock surface now -- law 10 asks
-# only that a scroller not be inside another scroller on the same axis, and a
-# sibling surface is inside nothing -- so the Toplevel went, and so did the
-# exemption. Nothing about the rule changed; the layout stopped needing it.
+# Almost every surface is therefore a Frame inside the app's window and needs no
+# exemption at all -- it is registered in openspan.DOCK_SPEC and switched by
+# App._render_dock, and a new one must never ask for a line here. The two below
+# are the cases where what the thing HAS TO BE is something one window cannot
+# contain, and in both the app still owns the placement to the pixel:
 #
-# The one exemption lives in exactly one method, so it is exactly one method
-# wide; a Toplevel anywhere else in these files is still an offender.
-EXEMPT_FUNCTIONS = {"_identify_card"}
+#   _identify_card (2026-08-15) puts a number on each real monitor for a
+#     moment, the way Windows Settings does. It takes no focus, answers no
+#     input, destroys itself -- and it cannot be drawn from inside the frame
+#     because its whole point is to appear on the OTHER screens.
+#
+#   _build_dock_strip (2026-08-29) is the dock. Doug: *"The column doesn't need
+#     to be that high for the sidebar, it needs to be just to Scripts and then
+#     below it our new vertical dock."* The rail left the app's window that day
+#     and became a strip on the Desktop screen's right edge, above the shell's
+#     app-icons dock. It cannot be inside the app's window because its job is to
+#     SHOW AND HIDE that window -- a dock drawn inside the thing it hides is
+#     gone at exactly the moment it is needed. It is placed by
+#     on_desktop.OnDesktop, the same controller and the same right edge the app
+#     window uses, refusing every move that is not its own; nothing about it is
+#     left to Windows. It is built once, at startup, and never opened again.
+#
+# _open_console_window was a third exemption for exactly one day (2026-08-27 to
+# 2026-08-28). The console is a dock surface now -- law 10 asks only that a
+# scroller not be inside another scroller on the same axis, and a sibling
+# surface is inside nothing -- so the Toplevel went, and so did the exemption.
+# Nothing about the rule changed; the layout stopped needing it. That is the
+# shape a name on this list is meant to have: it comes off again.
+#
+# Each exemption lives in exactly one method, so it is exactly one method wide;
+# a Toplevel anywhere else in these files is still an offender.
+EXEMPT_FUNCTIONS = {"_identify_card", "_build_dock_strip"}
 offenders = []
 for name in ("openspan.py", "openspan_setup.py", "openspan_portal.py",
              "openspan_launcher.py"):
@@ -245,8 +263,47 @@ _app_funcs = [n for n in ast.walk(_app_tree) if isinstance(n, ast.FunctionDef)]
 for _exempt in sorted(EXEMPT_FUNCTIONS):
     check(f"the {_exempt} exemption exists and is one method wide",
           len([n for n in _app_funcs if n.name == _exempt]) == 1)
-check("the exemption list is back to one -- the console needs none",
-      EXEMPT_FUNCTIONS == {"_identify_card"}, repr(sorted(EXEMPT_FUNCTIONS)))
+check("the exemption list is exactly these two -- the console still needs none",
+      EXEMPT_FUNCTIONS == {"_identify_card", "_build_dock_strip"},
+      repr(sorted(EXEMPT_FUNCTIONS)))
+# AN EXEMPTION IS NOT A LICENCE. Each is one Toplevel, and the widening on
+# 2026-08-29 has to be provably a widening by one: a method that quietly opened
+# two windows would satisfy the name list and break the rule behind it.
+_toplevels = [n for n in ast.walk(_app_tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "Toplevel"]
+check("there are exactly as many Toplevel calls in the app as there are names "
+      "on the list, so no exempt method opens a second window",
+      len(_toplevels) == len(EXEMPT_FUNCTIONS), f"{len(_toplevels)} calls")
+# ...and the dock is a surface by the test that decides it: THIS process places
+# it, at a rect it computed, and refuses every move it did not make. A dialog is
+# a window Windows places. Doug, 28 July: *"this just popped up on another
+# screen."* Nothing about the strip can pop up anywhere.
+_strip = next((n for n in _app_funcs if n.name == "_build_dock_strip"), None)
+check("the dock strip exists and is built exactly once, at startup",
+      _strip is not None
+      and _app_source.count("self._build_dock_strip()") == 1)
+if _strip is not None:
+    _strip_stmts = (_strip.body[1:] if (_strip.body
+                                        and isinstance(_strip.body[0], ast.Expr))
+                    else _strip.body)
+    _strip_src = "\n".join(ast.unparse(n) for n in _strip_stmts)
+    check("the builder itself places nothing: no geometry, no overrideredirect, "
+          "no topmost attribute -- on_desktop owns where it goes",
+          not any(token in _strip_src for token in
+                  ("geometry(", "overrideredirect", "-topmost", "attributes(")),
+          _strip_src)
+    check("...and it does not raise, focus or grab, because a dock that steals "
+          "focus is a dialog wearing a dock's shape",
+          not any(token in _strip_src for token in
+                  ("focus_force", "grab_set", "lift(", "wait_window")),
+          _strip_src)
+check("the app window's placement is what shows and hides it, and the strip is "
+      "not touched by that: one method withdraws or deiconifies the root",
+      len([n for n in _app_funcs
+           if "self.root.withdraw()" in ast.unparse(n)]) == 1
+      and "_dock_place" in [n.name for n in _app_funcs
+                            if "self.root.withdraw()" in ast.unparse(n)])
 # THE WINDOW IS GONE, NOT MERELY UNUSED. A console Toplevel that still exists
 # behind a dead call site is a pop-out waiting to be re-wired, so the two
 # methods that owned it must be absent by name.

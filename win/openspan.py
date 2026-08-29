@@ -1199,14 +1199,13 @@ PAGE_PREFERRED_WINDOW_H = 930
 PAGE_MIN_WINDOW_H = 680
 # The width floor while a surface is showing. It is a WIDTH the same way the
 # height above is a viewport: wide enough for the Dashboard's two-column rows
-# and the in-frame dialogs, and it is restated whenever the dock expands.
-# Collapsed, the floor drops to the rail -- see App._dock_floor.
+# and the in-frame dialogs. It is the ONLY width floor this window has again,
+# since 2026-08-29: the rail is no longer inside it, so there is no longer a
+# state in which the window is legitimately too thin for a pane.
 PAGE_MIN_WINDOW_W = 940
-# The width the window opens at, and the width an expand falls back to when
-# there is no remembered one -- a session that ended collapsed has no earlier
-# width to give back. It was written as a bare 1120 in two geometry() calls
-# until 2026-08-29; the collapse path needed a third reader, and a number three
-# places have to agree on is a constant.
+# The width the window opens at. It was written as a bare 1120 in two
+# geometry() calls until 2026-08-29; a number two places have to agree on is a
+# constant.
 PAGE_PREFERRED_WINDOW_W = 1120
 
 
@@ -1402,8 +1401,19 @@ PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 # a window Windows places on a screen he was not looking at; a surface is a
 # region of THIS window that he asks for by name and that replaces whatever
 # was showing. So the console stopped being a Toplevel on 2026-08-28 and became
-# the second entry in this list. There is now no tk.Toplevel in the app outside
-# _identify_card.
+# the second entry in this list.
+#
+# THE RAIL LEFT THE WINDOW on 2026-08-29. Doug: *"The column doesn't need to be
+# that high for the sidebar, it needs to be just to Scripts and then below it
+# our new vertical dock."* The rail is now a strip of its own on the Desktop
+# screen's right edge -- the wordmark, then these three entries, and it is
+# exactly as tall as they are -- with the shell's app-icons dock below it and a
+# gap between the two. That strip is the app's SECOND and last tk.Toplevel, and
+# it is a surface rather than a dialog by every part of the distinction above:
+# it is placed by this process on a screen chosen by this process, it asks
+# nothing, it is always in the same place, and it is the only way back to an
+# app window it has hidden. The exemption is recorded by name, with this
+# reason, where the rule is enforced -- test_frame_modal.EXEMPT_FUNCTIONS.
 #
 # LAW 10 IS WHY THIS IS A LIST OF SIBLINGS AND NOT A TREE. Doug's definition:
 # *"nested scrolling is a scrolling surface inside another surface that
@@ -1419,19 +1429,21 @@ PAGE_KEYS = tuple(key for key, _label in PAGE_SPEC)
 # can grow without bound (files, problems, bindings, resolutions) is inside
 # that one scroller.
 #
-# NAMING: `on_desktop.dock_rect` docks this WINDOW to the right edge of the
-# desktop. THIS dock is the rail INSIDE the window. They are unrelated, and
-# both are "the dock" in Doug's usage.
+# NAMING: `on_desktop.dock_rect` places BOTH of them now -- the app window on
+# the right edge of the Desktop screen, and the strip on the band the app
+# window leaves free for it. One rect function, one refusal, one re-dock.
 DOCK_SPEC = (
     ("dashboard", "Dashboard"),
     ("console", "Console"),
     ("scripts", "Scripts"),
 )
 DOCK_KEYS = tuple(key for key, _label in DOCK_SPEC)
-# The width floor while the dock is COLLAPSED: the rail alone, and nothing
-# else, so the window can be dragged down to a thin dock. The rail's own
-# requested width wins when it is larger; this is only the floor under it.
-DOCK_COLLAPSED_MIN_W = 96
+# The floors for the STRIP, under whatever the rail asks for. They are floors
+# and not sizes: the rail's own requested width and height win whenever they
+# are larger, which is the normal case. Below roughly this a rail entry stops
+# drawing and there is nothing left on screen to click the app back open with.
+DOCK_STRIP_MIN_W = 96
+DOCK_STRIP_MIN_H = 96
 # The hover background for a rail entry. The literal is the TButton "active"
 # colour from App._theme, so a rail entry lights up exactly like every other
 # button in the app rather than inventing a second hover.
@@ -7817,7 +7829,10 @@ class App:
         # being built. BOTH heights are replaced at the end of __init__ with the
         # measured content height -- see the layout-budget block down there.
         root.geometry(f"{PAGE_PREFERRED_WINDOW_W}x{PAGE_PREFERRED_WINDOW_H}")
-        #                             multi-target canvas; dock rail on the right
+        #                             wide enough for the multi-target canvas;
+        #                             the dock rail is NOT in here -- see
+        #                             _build_dock_strip -- so nothing beside a
+        #                             surface is taking width from it.
         root.minsize(PAGE_MIN_WINDOW_W, PAGE_MIN_WINDOW_H)
         root.configure(bg=BG)
         try:
@@ -7880,20 +7895,19 @@ class App:
         self._theme()
 
         # The whole UI lives inside self._full: a pinned safety header, then a
-        # body split into the surface region and the dock rail on its right.
-        # Every Dashboard section is built and mapped once; scrolling changes
-        # only the viewport, and switching surfaces changes only which one is
-        # packed -- never service lifetime.
+        # body holding the surfaces and nothing else. THE RAIL IS NOT IN HERE
+        # any more -- it is a window of its own, see _build_dock_strip -- so the
+        # body is the surface region entire. Every Dashboard section is built
+        # and mapped once; scrolling changes only the viewport, and switching
+        # surfaces changes only which one is packed -- never service lifetime.
         self._page_sections = {}
         self._dock_surfaces = {}   # key -> the surface's own Frame
         self._dock_entries = {}    # key -> (accent mark, rail button)
-        self._dock_rail = None
+        self._dock_rail = None     # the rail Frame, inside the strip
+        self._dock_strip = None    # the strip Toplevel that holds the rail
+        self._strip = None         # its OnDesktop controller, built on first place
         self._dock_active = DOCK_KEYS[0]
         self._dock_collapsed = False
-        # The width the window had when it was collapsed, so expanding gives
-        # back exactly that and not an approximation of it. None means "nothing
-        # was taken away", which is the state at startup and after every expand.
-        self._dock_expanded_w = None
         # Every portal control in the window, in build order. There is more than
         # one of them now -- see _portal_button -- and this list is the ONLY
         # thing _render_portal_button and _busy_portal iterate, so a surface
@@ -8009,15 +8023,19 @@ class App:
                  font=("Consolas", 10), anchor="w").pack(
             fill="x", padx=16, pady=(0, PAD_MD))
 
-        # ---- the body: surfaces on the left, the dock rail on the right -----
-        # `body` is the whole cavity below the pinned header. The rail claims
-        # the right edge FIRST and keeps it: side="right" packs before any
-        # surface, so a surface arriving later takes only what is left. The
-        # rail is always visible and never scrolls; `_render_dock` is the one
-        # writer of what sits beside it.
+        # ---- the body: the surface region, and nothing else ------------------
+        # `body` is the whole cavity below the pinned header, and since
+        # 2026-08-29 the surface showing has all of it: the rail moved out of
+        # this window into a strip of its own on the desktop's right edge, so
+        # there is nothing beside a surface to take width from it.
+        # `_render_dock` is still the one writer of which surface is in here.
         body = tk.Frame(full, bg=BG)
         body.pack(fill="both", expand=True)
-        self._dock_rail = self._build_dock_rail(body)
+        # THE STRIP IS BUILT HERE, not lazily: it is the only way back to a
+        # window it can hide, so a dock that is built on first use is a dock
+        # that does not exist in the one state that needs it. It is withdrawn
+        # until _strip_place puts it on the Desktop screen.
+        self._build_dock_strip()
 
         # ---- surface 1 of 3: the Dashboard, one scrolling document ---------
         # Canvas is the viewport, `bridge` is its one embedded document, and a
@@ -8999,7 +9017,14 @@ class App:
             enum_monitors(), load_setting("desktop_monitor", ""))
 
     def _sync_desktop_monitor(self):
-        """Re-resolve and publish Desktop after the display set changes."""
+        """Re-resolve and publish Desktop after the display set changes.
+
+        BOTH WINDOWS FOLLOW THE ROLE. This is the one funnel every Desktop-role
+        change passes through -- the display watcher's automatic re-read, the
+        monitor picker, the arrangement editor -- so the strip follows the
+        chosen screen by being told here, in the same breath as the app window,
+        rather than by a second watcher that could disagree with this one.
+        """
         canvas = getattr(self, "canvas", None)
         if canvas is None:
             return ""
@@ -9008,6 +9033,8 @@ class App:
         self._publish_desktop_role(name)
         if self._desktop is not None:
             self._desktop.set_monitor(name)
+        if self._strip is not None:
+            self._strip.set_monitor(name)
         return name
 
     def _publish_desktop_role(self, name):
@@ -9036,32 +9063,51 @@ class App:
         return self._desktop
 
     def _desktop_geometry(self):
-        """(x, y, w, h) for the dock. The only Tk read in the whole path, and
-        it happens on the Tk thread -- never from inside the window proc.
+        """(x, y, w, h) for the APP window. The only Tk read in the whole path,
+        and it happens on the Tk thread -- never from inside the window proc.
 
-        The floor is the DOCK's, not on_desktop's default: a session that comes
-        back collapsed is placed collapsed, rather than being widened to
-        on_desktop.MIN_WIDTH on the way in and then shrunk again a frame later.
+        The floor is the page's, and it is the only one this window has again:
+        the rail left on 2026-08-29, so there is no state in which this window
+        legitimately holds nothing and may be thin.
+
+        `reserve` is what is new. The strip stands in the outermost band of this
+        edge, so the app window is placed against the strip rather than against
+        the screen, and a window wide enough to fill the work area still stops
+        where the dock begins.
         """
         import on_desktop
         width = self.root.winfo_width() or 0
         work = on_desktop.Win32Bindings().work_area(
             self._desktop_monitor_name())
         return on_desktop.dock_rect(work, width,
-                                    min_width=self._dock_floor())
+                                    min_width=PAGE_MIN_WINDOW_W,
+                                    reserve=self._strip_reserve())
 
     def _apply_window_placement(self):
-        """Put the window where the setting says. Both directions, live.
+        """Put the app window where the setting says. Both directions, live.
+
+        THE STRIP IS PLACED FIRST, and unconditionally: `float_window` is about
+        the app window and says nothing about the dock, and the app window's own
+        rect is computed against the band the strip is standing in
+        (_strip_reserve), so a strip that had not been measured yet would hand
+        the window a reserve read off an unmapped rail.
 
         _dock_place last, in BOTH directions, because the dock's state outlives
         the placement: crossing between floating and the desktop must not be a
-        way to arrive expanded at the desktop's floor while the rail says
-        collapsed. It is the same call _render_dock makes, so the two agree by
-        being the same code rather than by both being remembered.
+        way to arrive showing while the rail says collapsed. It is the same call
+        _render_dock makes, so the two agree by being the same code rather than
+        by both being remembered.
         """
+        self._strip_place()
         ctl = self._desktop_controller()
         if ctl is None:
             return
+        # ...and the app's controller is TOLD about that band, for the same
+        # reason it is told its floor: the window procedure re-docks on a
+        # display or work-area change from cached values alone, and a reserve
+        # it did not know about would slide the window back under the dock the
+        # next time a shell bar appeared.
+        ctl.set_reserve(self._strip_reserve())
         if self._floating():
             ctl.release()
         else:
@@ -9120,32 +9166,94 @@ class App:
         self.zoom_btn.config(text="Turn off Alt+scroll zoom")
         _emit("ok", "screen zoom on — hold Alt and scroll the wheel.")
 
-    # ---- the right-side dock and the surfaces it invokes -------------------
+    # ---- the right-edge dock and the surfaces it invokes -------------------
     # DIALOGS ARE BANNED; SURFACES ARE INVOKED FROM THE DOCK. That is the whole
-    # distinction, and it is the reason there is no tk.Toplevel below. A dialog
-    # is an OS window Windows places wherever it likes, on a screen Doug was not
-    # looking at (28 July). A surface is a region of THIS window that he asks
-    # for by name from the rail, that replaces whatever was showing, and that
-    # he can put away with a second click on the same entry. Doug, 28 August:
-    # *"no pop out but we can replace surfaces and invoke entire new ones in
-    # the side."*
+    # distinction. A dialog is an OS window Windows places wherever it likes, on
+    # a screen Doug was not looking at (28 July). A surface is a region he asks
+    # for by name from the rail, that replaces whatever was showing, and that he
+    # can put away with a second click on the same entry. Doug, 28 August: *"no
+    # pop out but we can replace surfaces and invoke entire new ones in the
+    # side."*
+    #
+    # THE ONE tk.Toplevel BELOW IS THE STRIP, and it is that distinction rather
+    # than an exception to it: the dock is placed by this process, on the screen
+    # this process chose, in the same place every time, and it asks nothing. It
+    # is a surface that happens to need its own HWND for the same reason the
+    # identify card does -- what it has to be is a thing the app's own window
+    # does not contain. See _build_dock_strip, and the exemption recorded in
+    # test_frame_modal.EXEMPT_FUNCTIONS.
     #
     # LAW 10 lives in this shape rather than in a rule anyone has to remember:
-    # the rail does not scroll, the surfaces are siblings, and exactly one of
+    # the strip does not scroll, the surfaces are siblings, and exactly one of
     # them is packed at a time, so no scroller in this app is ever inside
     # another scroller on the same axis. See DOCK_SPEC.
+
+    def _build_dock_strip(self):
+        """The dock's OWN WINDOW: a borderless strip on the Desktop screen.
+
+        THE SECOND AND LAST tk.Toplevel IN THE APP, exempt by name in
+        test_frame_modal beside _identify_card, and the reason is written there
+        and in DOCK_SPEC: a dialog is banned because Windows places it; this is
+        placed by us, on the screen we chose, in the one place it is ever in.
+
+        It is a plain Toplevel and NOT overrideredirect(True) -- the same
+        decision on_desktop records for the app window, taken for the same
+        reason: overrideredirect cost this app focus and a native drag, and the
+        style strip in OnDesktop.apply does the frameless job without either.
+        So the strip is framed for the few hundred milliseconds before
+        _strip_place runs, and withdrawn for all of them.
+
+        Nothing closes it. WM_DELETE_WINDOW is answered with silence rather
+        than left to Tk's default destroy, because the strip is the only way
+        back to an app window it has hidden and a dock that can be closed is a
+        way to lose the app.
+        """
+        strip = tk.Toplevel(self.root, bg=PANEL)
+        strip.withdraw()
+        strip.title(f"{APP_LABEL} dock")
+        strip.protocol("WM_DELETE_WINDOW", lambda: None)
+        try:
+            strip.iconbitmap(ICON)
+        except Exception:  # noqa: BLE001 -- cosmetic; a caption-less strip
+            pass
+        self._dock_strip = strip
+        self._dock_rail = self._build_dock_rail(strip)
+        return strip
 
     def _build_dock_rail(self, parent):
         """The rail itself: always visible, never scrolling, one entry each.
 
-        It claims the right edge before any surface exists, so the surface
-        region is whatever the rail does not want. Deliberately word-labelled
-        rather than iconified: every other control in this app says what it
-        does in words, and a rail of glyphs would be the one place a reader has
-        to guess.
+        AS TALL AS ITS CONTENT AND NO TALLER. Doug, 2026-08-29: *"The column
+        doesn't need to be that high for the sidebar, it needs to be just to
+        Scripts and then below it our new vertical dock."* It packed
+        side="right", fill="y" while it lived inside the app window, where full
+        height was the only height available; it is a block now -- the wordmark,
+        then one row per surface -- and everything below it on that edge belongs
+        to the shell's app-icons dock. `fill="x"` and NOT `fill="y"` is the
+        whole of that: the strip is sized from winfo_reqheight, so a rail that
+        stretched would be a rail that reported the window's height back as its
+        own content height and grew forever.
+
+        Deliberately word-labelled rather than iconified: every other control in
+        this app says what it does in words, and a rail of glyphs would be the
+        one place a reader has to guess.
         """
         rail = tk.Frame(parent, bg=PANEL)
-        rail.pack(side="right", fill="y")
+        rail.pack(side="top", fill="x")
+        # THE WORDMARK, the same lockup the app's own header carries: "Esoteric"
+        # in Lunar and "OS" in Arcane, because Tk has no text gradients. It is
+        # the top of the dock and the only thing in it that is not a control,
+        # and it honours a custom app_label exactly as the header does.
+        brand = tk.Frame(rail, bg=PANEL)
+        brand.pack(fill="x", padx=10, pady=(PAD_MD, PAD_SM))
+        if APP_LABEL == "EsotericOS":
+            tk.Label(brand, text="Esoteric", bg=PANEL, fg=FG,
+                     font=(FONT_UI_SEMI, 11)).pack(side="left")
+            tk.Label(brand, text="OS", bg=PANEL, fg=PORTAL,
+                     font=(FONT_UI_SEMI, 11)).pack(side="left")
+        else:
+            tk.Label(brand, text=APP_LABEL, bg=PANEL, fg=FG,
+                     font=(FONT_UI_SEMI, 11)).pack(side="left")
         for key, label in DOCK_SPEC:
             row = tk.Frame(rail, bg=PANEL)
             row.pack(fill="x", pady=(0, 1))
@@ -9188,23 +9296,24 @@ class App:
             pass       # torn down mid-repaint; nothing to paint on
 
     def _render_dock(self):
-        """THE ONE WRITER of what the surface region shows, AND of how wide the
-        window is while it shows it.
+        """THE ONE WRITER of what the surface region shows, AND of whether the
+        app's window is on screen at all while it shows it.
 
         Forget first, then pack, so two surfaces are never in the cavity at the
-        same instant. Collapsed means nothing is packed at all: the rail is
-        still there, and the window shrinks to it.
+        same instant. Collapsed means nothing is packed AND the window is
+        hidden: the strip is a window of its own and stays exactly where it is,
+        so what is left on the desk is the dock and nothing else.
 
-        THE TWO HALVES ARE ONE ACT, and that is the fix for what Doug saw on
-        2026-08-29 -- a window at its full width with nothing in it but the
-        rail: *"This should be fully collapsed, this is not a valid state."*
-        Until then this method unpacked the surfaces and only LOWERED the Tk
-        minimum, so the window was merely ALLOWED to be thin; on the desktop it
-        could not even be that, because every move not on_desktop's own is
-        refused. Now the pack and the placement are written together by
-        _dock_place, in the same call, so there is no ordering in which they can
-        disagree and no path that does one without the other. The invalid state
-        is not guarded against -- it is unreachable.
+        THE TWO HALVES ARE ONE ACT, and that is what keeps Doug's 2026-08-29
+        complaint unreachable -- a window at its full width with nothing in it
+        but the rail: *"This should be fully collapsed, this is not a valid
+        state."* Before that day this method unpacked the surfaces and only
+        LOWERED the Tk minimum, so the window was merely ALLOWED to be thin.
+        Then it shrank the window to the rail. Now the rail is not in the window
+        at all, so there is nothing left to shrink TO and the window is simply
+        hidden -- a stronger form of the same fix, and written in the same
+        place: the pack and the placement are one call to _dock_place, so there
+        is no ordering in which they can disagree.
         """
         showing = None if self._dock_collapsed else self._dock_active
         for key, frame in self._dock_surfaces.items():
@@ -9221,9 +9330,10 @@ class App:
             self._scripts_refresh()
         if showing is not None:
             # padx/pady are the Dashboard's original ones: a surface occupies
-            # exactly the cavity the single page used to occupy. side="left"
-            # takes whatever the rail did not want, and nothing else in the app
-            # packs a surface -- this line is the whole of "one at a time".
+            # exactly the cavity the single page used to occupy. It takes the
+            # whole body now that the rail is a window of its own, and nothing
+            # else in the app packs a surface -- this line is the whole of "one
+            # at a time".
             surface = self._dock_surfaces[showing]
             surface.pack(side="left", fill="both", expand=True,
                          padx=10, pady=PAD_SM)
@@ -9232,95 +9342,160 @@ class App:
         self._dock_place()
         return showing
 
+    # WHAT SURVIVED THE MOVE, AND WHAT DID NOT. Three methods existed only
+    # because the rail was inside the window and a collapse therefore had to be
+    # a RESIZE of it: _dock_floor (the narrowest the window might be in the
+    # state the dock was in), _dock_claim_width (the width a collapse took away
+    # and an expand handed back) and _window_width (what to give back when
+    # nothing had been remembered), over the slot self._dock_expanded_w. All
+    # four are deleted. A collapse takes no width now -- it hides the window
+    # whole, at whatever size Doug last left it, and showing it again gives that
+    # size back by never having touched it. Keeping the memory would have been a
+    # second, quieter idea of how wide the window "should" be.
+    #
+    # _rail_width survives, and its meaning moved with the rail: it was the
+    # collapsed window's floor, and it is now the STRIP's width. _rail_height
+    # joins it, because the strip's whole point is to be content-tall. And
+    # on_desktop's COLLAPSED_MIN_WIDTH / set_min_width survive untouched -- they
+    # were built so that a window with no pane in it could be placed narrower
+    # than MIN_WIDTH, and the strip is exactly that window.
+
     def _rail_width(self):
-        """What the rail asks for, or the floor if it cannot say yet."""
+        """What the rail asks for across, or the floor if it cannot say yet."""
         rail = self._dock_rail
         if rail is None:
-            return DOCK_COLLAPSED_MIN_W
+            return DOCK_STRIP_MIN_W
         try:
-            return int(rail.winfo_reqwidth())
+            return max(DOCK_STRIP_MIN_W, int(rail.winfo_reqwidth()))
         except (tk.TclError, ValueError, TypeError):
-            return DOCK_COLLAPSED_MIN_W
+            return DOCK_STRIP_MIN_W
 
-    def _dock_floor(self):
-        """The narrowest this window may be, in the state the dock is in NOW.
+    def _rail_height(self):
+        """What the rail asks for down: the wordmark plus one row per surface.
 
-        ONE floor, read by all three places that need one: the Tk minimum, the
-        rect on_desktop places the window at, and the clamp on_desktop applies
-        when the work area changes underneath it. Two floors is how a collapsed
-        dock ends up thin in Tk's opinion and 560px wide in Windows'.
+        THIS IS THE NUMBER DOUG ASKED FOR. It is winfo_reqheight and never
+        winfo_height, because the second is what the strip was placed at and
+        reading it back would make the strip's height a function of its own
+        last placement -- a loop that only ever grows.
         """
-        if self._dock_collapsed:
-            return max(DOCK_COLLAPSED_MIN_W, self._rail_width())
-        return PAGE_MIN_WINDOW_W
-
-    def _dock_claim_width(self):
-        """The width the window must be for this dock state, or None.
-
-        CLAIM, not read: collapsing takes a width away and remembers it, and
-        expanding hands back exactly that number and forgets it, so the memory
-        cannot be spent twice. None is returned only when expanding with
-        nothing remembered -- a fresh launch, or a click from one surface to
-        another -- because that is a state where the width was never the dock's
-        to choose and resizing would be the app arguing with wherever Doug had
-        dragged the edge to.
-        """
-        if self._dock_collapsed:
-            if self._dock_expanded_w is None:
-                self._dock_expanded_w = self._window_width()
-            return self._dock_floor()
-        remembered, self._dock_expanded_w = self._dock_expanded_w, None
-        return remembered
-
-    def _window_width(self):
-        """What to give back on expand: the live width, or the opening one.
-
-        A window that has never been mapped reports 1, and Tk reports the
-        provisional geometry for a moment after every geometry() -- so a width
-        that is not plausibly a window is not remembered as one.
-        """
+        rail = self._dock_rail
+        if rail is None:
+            return DOCK_STRIP_MIN_H
         try:
-            live = int(self.root.winfo_width())
+            return max(DOCK_STRIP_MIN_H, int(rail.winfo_reqheight()))
         except (tk.TclError, ValueError, TypeError):
-            live = 0
-        return live if live >= PAGE_MIN_WINDOW_W else PAGE_PREFERRED_WINDOW_W
+            return DOCK_STRIP_MIN_H
+
+    def _strip_reserve(self):
+        """The right-edge band the app window must leave for the strip.
+
+        The strip's own width plus one INSET of air, so the two read as two
+        docked things rather than as one window with a seam down it. The app
+        window is placed against THIS, not against the screen edge, which is
+        what stops a full-width app from sliding underneath the dock.
+        """
+        import on_desktop
+        return self._rail_width() + on_desktop.INSET
+
+    def _strip_geometry(self):
+        """(x, y, w, h) for the dock strip. The only Tk read in its path, and
+        it happens on the Tk thread -- never from inside the window proc.
+
+        Same rect function as the app window, with two arguments the app does
+        not pass: a HEIGHT, because the strip is as tall as its entries, and
+        the gap that keeps it clear of the shell's app-icons dock below.
+        """
+        import on_desktop
+        work = on_desktop.Win32Bindings().work_area(
+            self._desktop_monitor_name())
+        return on_desktop.dock_rect(work, self._rail_width(),
+                                    min_width=DOCK_STRIP_MIN_W,
+                                    height=self._rail_height())
+
+    def _strip_controller(self):
+        """The strip's on-desktop controller, built on first use. None if it
+        is unavailable -- in which case the strip stays an ordinary window
+        rather than the app losing its dock.
+
+        THE SAME CLASS THE APP WINDOW USES, with two arguments flipped: pinned
+        to HWND_TOPMOST instead of HWND_BOTTOM, because a dock that sinks behind
+        Chrome is a dock nobody can click and it is the only way back to a
+        hidden window; and fixed_height, so the re-dock the window procedure
+        performs on a display or work-area change keeps the strip's content
+        height instead of stretching it to the new work area.
+        """
+        if self._strip is None:
+            strip = self._dock_strip
+            if strip is None:
+                return None
+            try:
+                import on_desktop
+                self._strip = on_desktop.OnDesktop(
+                    lambda: on_desktop.toplevel_hwnd(strip),
+                    self._strip_geometry,
+                    monitor_name=self._desktop_monitor_name(),
+                    pin=on_desktop.HWND_TOPMOST, fixed_height=True)
+            except Exception as exc:  # noqa: BLE001
+                _emit("err", f"dock strip placement unavailable: {exc}")
+                return None
+        return self._strip
+
+    def _strip_place(self):
+        """Put the dock strip on the Desktop-role screen's right edge.
+
+        ALWAYS, in both worlds. `float_window` frees the APP window; it does
+        not free the dock, because the dock is what shows the app window and a
+        floating dock would be one more thing to go and find. So there is no
+        release path here to match _apply_window_placement's.
+
+        The floor is pushed before every placement for the reason
+        on_desktop.set_min_width exists: the window procedure re-docks from
+        cached numbers alone, and a stale floor there would quietly widen the
+        strip the next time a shell bar appeared.
+        """
+        ctl = self._strip_controller()
+        if ctl is None:
+            return False
+        try:
+            self._dock_strip.deiconify()
+            self._dock_strip.update_idletasks()
+        except (tk.TclError, AttributeError):
+            return False
+        ctl.set_min_width(self._rail_width())
+        return ctl.apply() if not ctl.active else ctl.dock()
 
     def _dock_place(self):
-        """Make the WINDOW match the dock's state. THE ONE RESIZER.
+        """Make the app WINDOW match the dock's state. THE ONE SHOW/HIDE.
 
-        Both placements go through here, because "collapsed" has to mean the
-        same thing in both and there is only one caller. Floating, a resize is
-        geometry(); on the desktop geometry() is REFUSED by design -- the
-        refusal in on_desktop._wndproc is what stops a drag, a snap or a stray
-        geometry() from moving the dock -- so the controller is asked instead,
-        and its floor is lowered first so the ask is not clamped straight back
-        up to on_desktop.MIN_WIDTH.
+        Collapsed means hidden, since 2026-08-29. It used to mean "as wide as
+        the rail", because the rail was inside this window and something had to
+        be left on screen to click; the rail is its own window now, so there is
+        nothing left in here worth showing and the honest form of "put it away"
+        is to put it away. The strip does not move, does not resize, and is not
+        touched by this method at all -- see _strip_place.
 
-        Returns the width it placed, or None when it placed nothing.
+        Showing goes through show_at_dock rather than deiconify alone, because a
+        window pinned to HWND_BOTTOM cannot be raised: our own wndproc sinks
+        every lift. Without it, clicking Dashboard on a desk with a browser open
+        would deiconify the window UNDERNEATH the browser and look like nothing
+        happened -- the "presents as working" failure, exactly.
+
+        Returns True when the app window is showing, False when it is not.
         """
-        floor = self._dock_floor()
+        if self._dock_collapsed:
+            try:
+                self.root.withdraw()
+            except (tk.TclError, AttributeError):
+                pass
+            return False
         try:
-            self.root.minsize(floor, self.root.minsize()[1])
-        except (tk.TclError, IndexError, TypeError):
+            self.root.deiconify()
+        except (tk.TclError, AttributeError):
             pass
-        width = self._dock_claim_width()
         desktop = getattr(self, "_desktop", None)
         if desktop is not None and getattr(desktop, "active", False):
-            # The floor is pushed on EVERY render, not only when the width
-            # changes: the window procedure re-docks on a display or work-area
-            # change from cached values alone, and a stale floor there would
-            # quietly widen a collapsed dock the next time a shell bar appeared.
-            desktop.set_min_width(floor)
-            if width is None:
-                return None
-            return width if desktop.set_width(width) else None
-        if width is None:
-            return None
-        try:
-            self.root.geometry(f"{width}x{self.root.winfo_height()}")
-        except (tk.TclError, ValueError, TypeError):
-            return None
-        return width
+            desktop.show_at_dock()
+        return True
 
     def _dock_state(self, active, collapsed):
         """The ONE writer of the dock's persisted state.
@@ -9347,9 +9522,12 @@ class App:
     def _dock_click(self, key):
         """A rail entry was pressed: invoke it, or put away the one showing.
 
-        Clicking the ACTIVE entry collapses. The active key is kept across the
-        collapse rather than cleared, so the next click on it -- or a restart
-        -- comes back to the surface he was on rather than to a default.
+        Clicking the ACTIVE entry collapses, which since 2026-08-29 hides the
+        app window and leaves the strip alone on the edge. The active key is
+        kept across the collapse rather than cleared, so the next click on it
+        -- or a restart -- comes back to the surface he was on rather than to a
+        default. Nothing else in the app hides that window, and nothing else
+        shows it: this is the click and _dock_place is the act.
         """
         if key not in self._dock_surfaces:
             return False
@@ -10906,18 +11084,18 @@ class App:
         # arrives on the Tk thread (the tray window shares this thread's pump);
         # marshal anyway. The tray icon is PERSISTENT -- not destroyed here.
         def show():
-            self.root.deiconify()
-            self.root.lift()          # refused while on the desktop -- harmless
+            # THROUGH THE DOCK, not around it. Whether this window is on screen
+            # is the dock's state and has been since 2026-08-29, so a tray
+            # "Open" that merely deiconified would put up a window the rail
+            # still said was put away -- and the next click on the live entry
+            # would then "collapse" something that was already collapsed. One
+            # writer: invoking the active surface IS showing the window, and
+            # _dock_place does the desktop's show_at_dock inside it.
+            self._dock_show(self._dock_active)
             try:
                 self.root.focus_force()
             except tk.TclError:
                 pass
-            # On the desktop, lift() cannot make it visible (the wndproc sinks
-            # it again), so put it back at its docked place and give it focus
-            # there. That IS "show window" for a window that lives on the desk.
-            ctl = getattr(self, "_desktop", None)
-            if ctl is not None and ctl.active:
-                ctl.show_at_dock()
         self.ui(show)
 
     def _show_tray_menu(self):

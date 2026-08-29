@@ -121,17 +121,29 @@ check("final geometry height is computed", isinstance(last_geometry.args[0],
                                                        ast.JoinedStr))
 check("final minsize height is computed from min_h",
       _name(last_minsize.args[1]) == "min_h")
-check("minimum width remains 940, and is the one named constant that "
-      "App._dock_floor restates whenever the dock expands",
+check("minimum width remains 940, and it is the ONE width floor this window "
+      "has again -- the rail left it on 2026-08-29, so there is no state in "
+      "which it legitimately holds nothing and may be thin",
       _name(last_minsize.args[0]) == "PAGE_MIN_WINDOW_W"
       and A.PAGE_MIN_WINDOW_W == 940
-      and "return PAGE_MIN_WINDOW_W"
-      in ast.unparse(_method("App", "_dock_floor")))
-# The opening width was a bare 1120 in both geometry() calls until 2026-08-29,
-# when the collapse path needed a third reader of it: expanding a dock that was
-# already collapsed when the app started has no earlier width to give back, and
-# falls back to this. Three places had to agree on the number, so it stopped
-# being a literal.
+      and "min_width=PAGE_MIN_WINDOW_W"
+      in ast.unparse(_method("App", "_desktop_geometry")))
+# ASKED OF THE CODE, NOT OF THE FILE. A substring sweep would trip on the
+# paragraph in openspan.py that records what was deleted and why -- and
+# deleting that record to make a test pass is how a removal comes back as a
+# "missing feature". So: no such method, and no such attribute, anywhere.
+_gone_methods = {"_dock_floor", "_dock_claim_width", "_window_width"}
+_defined = {node.name for node in ast.walk(module)
+            if isinstance(node, ast.FunctionDef)}
+_attrs = {node.attr for node in ast.walk(module)
+          if isinstance(node, ast.Attribute)}
+check("the collapse-to-rail width machinery is gone: it existed only because "
+      "the rail was inside the window, and a collapse now hides the window",
+      not (_gone_methods & _defined) and "_dock_expanded_w" not in _attrs,
+      repr(sorted((_gone_methods & _defined)
+                  | ({"_dock_expanded_w"} & _attrs))))
+# The opening width was a bare 1120 in both geometry() calls until 2026-08-29.
+# A number two places have to agree on is a constant.
 check("the opening width is a named constant, wider than the floor, and both "
       "geometry() calls in __init__ use it rather than a literal",
       A.PAGE_PREFERRED_WINDOW_W == 1120
@@ -139,18 +151,23 @@ check("the opening width is a named constant, wider than the floor, and both "
       and "1120" not in init_src
       and init_src.count("PAGE_PREFERRED_WINDOW_W") == 2,
       repr(init_src.count("PAGE_PREFERRED_WINDOW_W")))
-# THE MINIMUM IS NEVER LOWERED ON ITS OWN. Doug, on a full-width window holding
-# nothing but the rail: *"This should be fully collapsed, this is not a valid
-# state."* It was reachable because lowering minsize only PERMITS a thin
-# window; the same method now also places one. See test_dock_surfaces.
+# THE MINIMUM IS NOT A DOCK CONCERN ANY MORE. Doug, on a full-width window
+# holding nothing but the rail: *"This should be fully collapsed, this is not a
+# valid state."* The fix that day lowered the minimum and resized in one act;
+# the rail leaving the window retired both halves, because a collapse now hides
+# the window instead of shrinking it and the floor never moves at all.
 minsize_owners = {node.name for node in ast.walk(module)
                   if isinstance(node, ast.FunctionDef)
                   and "self.root.minsize(" in ast.unparse(node)}
-check("only __init__ and the dock's placer write the window's minimum, and the "
-      "placer resizes in the same call",
-      minsize_owners == {"__init__", "_dock_place"}
-      and "self.root.geometry(" in ast.unparse(_method("App", "_dock_place")),
-      repr(sorted(minsize_owners)))
+check("__init__ is the only writer of the window's minimum: nothing lowers it "
+      "at runtime because nothing needs it lowered",
+      minsize_owners == {"__init__"}, repr(sorted(minsize_owners)))
+resizers = {node.name for node in ast.walk(module)
+            if isinstance(node, ast.FunctionDef)
+            and "self.root.geometry(" in ast.unparse(node)}
+check("...and only __init__ and the header drag reach geometry() at all -- the "
+      "dock resizes nothing, so a collapse cannot leave a width behind",
+      resizers == {"__init__", "_drag_move"}, repr(sorted(resizers)))
 check("work area uses the selected EsotericOS Desktop monitor",
       "self._desktop_monitor_name()" in init_src
       and "work_area_height" in init_src)
@@ -167,18 +184,35 @@ rail_packs = _packs(_method("App", "_build_dock_rail"))
 check("outer body cavity expands", app_packs.get("body", {}).get("expand")
       is True and app_packs.get("body", {}).get("fill") == "both",
       repr(app_packs.get("body")))
-check("the dock rail takes the right edge and only its own width",
-      rail_packs.get("rail", {}).get("side") == "right"
-      and rail_packs.get("rail", {}).get("fill") == "y"
+# THE RAIL IS SIZED TO ITS CONTENT, NOT TO A WINDOW. Doug, 2026-08-29: *"The
+# column doesn't need to be that high for the sidebar, it needs to be just to
+# Scripts and then below it our new vertical dock."* It packed fill="y" while
+# it lived in the app's window, where full height was the only height on offer.
+# It is a block in a window of its own now, and the strip is placed from
+# winfo_reqheight -- so a rail that filled vertically would report back the
+# height it was last placed at as its own content height and grow every pass.
+check("THE RAIL IS CONTENT-HEIGHT: it takes the top of its parent and its own "
+      "natural height, and never fills or expands vertically",
+      rail_packs.get("rail", {}).get("side") == "top"
+      and rail_packs.get("rail", {}).get("fill") == "x"
       and not rail_packs.get("rail", {}).get("expand"),
       repr(rail_packs.get("rail")))
-check("a surface fills whatever the rail left, and nothing in __init__ packs "
-      "one",
+check("...and nothing inside it expands either, or the block would stretch "
+      "from the inside",
+      not any(row.get("expand") is True and row.get("fill") in ("y", "both")
+              for row in rail_packs.values()), repr(rail_packs))
+check("a surface fills the whole body, and nothing in __init__ packs one",
       dock_packs.get("surface", {}).get("expand") is True
       and dock_packs.get("surface", {}).get("fill") == "both"
       and dock_packs.get("surface", {}).get("side") == "left"
       and "main" not in app_packs,
       repr(dock_packs))
+# The rail is no longer a child of the app's window at all, so `body` holds the
+# surfaces and nothing else. That is the layout half of "the dock left".
+check("the body holds no rail: nothing in __init__ builds one, it is built "
+      "into the strip instead",
+      "self._build_dock_rail(body)" not in init_src
+      and "self._build_dock_strip()" in init_src)
 check("page Canvas consumes the viewport",
       app_packs.get("page_canvas", {}).get("expand") is True
       and app_packs.get("page_canvas", {}).get("fill") == "both",

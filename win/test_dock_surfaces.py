@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The right-side dock, and the three surfaces it invokes.
+"""The right-edge dock, and the three surfaces it invokes.
 
 Doug, 2026-08-28: *"split this into Dashboard and Console -- invokable and
 collapsible from the right side dock (that you create now) -- add Scripts as a
@@ -9,29 +9,41 @@ pop out but we can replace surfaces and invoke entire new ones in the side."*
 DIALOGS ARE BANNED; SURFACES ARE INVOKED FROM THE DOCK. A dialog is an OS
 window Windows places wherever it likes, on a screen he was not looking at (28
 July). A surface is a region of the app's own window, asked for by name from
-the rail, replacing whatever was showing there. That is why there is no
-tk.Toplevel left in the app outside _identify_card, and why adding a fourth
-surface must never need one.
+the rail, replacing whatever was showing there. Adding a fourth surface must
+never need a window, and the two that exist are exempt by name in
+test_frame_modal, with the reason written where the rule is enforced.
+
+THE RAIL LEFT THE WINDOW on 2026-08-29. Doug: *"The column doesn't need to be
+that high for the sidebar, it needs to be just to Scripts and then below it our
+new vertical dock."* It is a strip of its own now -- a borderless window on the
+Desktop-role screen's right edge, holding the wordmark and one row per surface
+and nothing else, exactly as tall as those rows -- with the shell's app-icons
+dock below it and ``on_desktop.STRIP_GAP`` guaranteed between the two. The app
+becomes an ordinary window that the strip shows and hides.
+
+COLLAPSED THEREFORE MEANS HIDDEN. It meant "as wide as the rail" for one day.
+Doug, on a screenshot of a full-width window holding nothing but the rail:
+*"This should be fully collapsed, this is not a valid state."* That was fixed
+by making the pack and a resize one act; the rail leaving retires the resize
+entirely, because there is nothing left in the window worth showing and the
+honest form of "put it away" is to put it away. The invariant below survives
+the change with its two halves swapped: nothing packed IF AND ONLY IF the app
+window is off screen, over every reachable click sequence.
+
+WHAT THAT DELETED is asserted too. ``_dock_floor``, ``_dock_claim_width``,
+``_window_width`` and ``_dock_expanded_w`` existed only because a collapse had
+to be a resize. ``_rail_width`` survived and changed meaning -- it was the
+collapsed window's floor and is now the strip's width -- and
+``on_desktop.set_min_width`` / ``COLLAPSED_MIN_WIDTH`` survived untouched,
+because they were built so a window with no pane in it could be placed narrower
+than MIN_WIDTH and the strip is exactly that window.
 
 LAW 10 -- *"nested scrolling is a scrolling surface inside another surface that
 scrolls"* -- is a claim about CONTAINMENT on the same axis, so it is asserted
-here as containment: the rail does not scroll at all, the three surfaces are
-siblings of one another, exactly one is packed at a time, and each owns at most
-one vertical scroller. Two scrollers in one window are lawful precisely because
-neither can ever be inside the other.
-
-COLLAPSED MEANS THE WINDOW IS COLLAPSED, since 2026-08-29. Doug, on a
-screenshot of a full-width window holding nothing but the rail: *"This should
-be fully collapsed, this is not a valid state."* It was reachable because
-``_render_dock`` unpacked the surfaces and only LOWERED the Tk minimum -- the
-window was permitted to be thin and never asked to be -- and on the desktop it
-could not be thin at all, because ``OnDesktop`` refuses every move that is not
-its own and ``on_desktop.MIN_WIDTH`` was applied whether or not a pane was left
-to be too narrow for. So the pack and the placement are now ONE act
-(``_dock_place``), the floor is ONE number (``_dock_floor``) read by Tk, by the
-placed rect and by the wndproc's cached re-dock, and the invalid state is
-asserted below as an INVARIANT over every reachable sequence rather than as a
-behaviour of the one path that used to produce it.
+here as containment: neither the rail nor the strip scrolls at all, the three
+surfaces are siblings of one another, exactly one is packed at a time, and each
+owns at most one vertical scroller. Three scrollers across two windows are
+lawful precisely because none can ever be inside another.
 
 THE SCRIPTS SURFACE STOPPED BEING EMPTY on 2026-08-28. It is the face of
 ``script_engine`` now: what is on disk, what would not parse, and where to
@@ -131,6 +143,10 @@ def _calls(function, dotted):
 
 init = _method("App", "__init__")
 build_rail = _method("App", "_build_dock_rail")
+build_strip = _method("App", "_build_dock_strip")
+strip_place = _method("App", "_strip_place")
+strip_geometry = _method("App", "_strip_geometry")
+strip_controller = _method("App", "_strip_controller")
 render = _method("App", "_render_dock")
 state = _method("App", "_dock_state")
 click = _method("App", "_dock_click")
@@ -155,9 +171,12 @@ render_src = _body_src(render)
 
 print("\n---- three surfaces, registered once ----")
 check("every dock method exists",
-      all((init, build_rail, render, state, click, show, restore, paint_entry,
+      all((init, build_rail, build_strip, strip_place, strip_geometry,
+           strip_controller, render, state, click, show, restore, paint_entry,
            scripts_fn, console_mount)),
-      repr({"rail": bool(build_rail), "render": bool(render),
+      repr({"rail": bool(build_rail), "strip": bool(build_strip),
+            "place": bool(strip_place), "geometry": bool(strip_geometry),
+            "controller": bool(strip_controller), "render": bool(render),
             "state": bool(state), "click": bool(click), "show": bool(show),
             "restore": bool(restore), "paint": bool(paint_entry),
             "scripts": bool(scripts_fn), "console": bool(console_mount)}))
@@ -207,21 +226,91 @@ check("the body that holds them all is a plain Frame on the app's own frame "
       and _name(body_ctor[0].value.func) == "tk.Frame"
       and init_parents.get("body") == "full",
       repr([_name(node.value.func) for node in body_ctor]))
-check("the rail is built on whatever the body passes it, beside the surfaces",
-      _parents(build_rail).get("rail") == "parent",
+check("the rail is built on whatever it is handed, and what it is handed is "
+      "the STRIP -- not the body, which now holds surfaces and nothing else",
+      _parents(build_rail).get("rail") == "parent"
+      and _parents(build_strip).get("strip") is not None
+      and "self._build_dock_rail(strip)" in _body_src(build_strip),
       repr(_parents(build_rail).get("rail")))
+check("...so nothing in __init__ builds a rail into the body any more",
+      "self._build_dock_rail(body)" not in init_src
+      and "self._build_dock_strip()" in init_src)
 
 rail_src = _body_src(build_rail)
+strip_src = _body_src(build_strip)
 check("THE RAIL DOES NOT SCROLL: no scroller, no canvas, no scroll wiring",
       not _calls(build_rail, "ttk.Scrollbar")
       and not _calls(build_rail, "tk.Canvas")
       and not _calls(build_rail, "tk.Text")
       and "yscrollcommand" not in rail_src
       and "yview" not in rail_src, rail_src)
+# LAW 10 IN THE STRIP, which is where it could most easily have been broken: a
+# dock window with a scroller in it would be a scrolling surface holding the
+# only controls that reach the other surfaces.
+check("THE STRIP DOES NOT SCROLL EITHER, and holds nothing but the rail -- so "
+      "no surface is nested inside it and no wheel can be hijacked in it",
+      not _calls(build_strip, "ttk.Scrollbar")
+      and not _calls(build_strip, "tk.Canvas")
+      and not _calls(build_strip, "tk.Text")
+      and strip_src.count("self._build_") == 1, strip_src)
+check("no surface is built into the strip: the three are on the body, in the "
+      "app's own window, and containment is what law 10 is about",
+      not any(_name(node.args[0]) == "strip"
+              for node in _calls(init, "tk.Frame") if node.args))
 check("the rail is always visible: it is packed unconditionally, and nothing "
       "ever forgets it",
       "rail.pack(" in rail_src and "rail.pack_forget" not in SOURCE
       and "self._dock_rail.pack_forget" not in SOURCE, rail_src)
+
+# THE RAIL IS SIZED TO ITS CONTENT, NOT TO A WINDOW. This is the pack keyword
+# Doug's sentence comes down to: it was side="right", fill="y" while the rail
+# lived in the app's window, where full height was the only height available.
+# The strip is placed from winfo_reqheight, so a rail that filled vertically
+# would report the height it was last placed at back as its own content height
+# and grow on every pass.
+rail_packs = {}
+for _node in ast.walk(build_rail):
+    if (isinstance(_node, ast.Call) and isinstance(_node.func, ast.Attribute)
+            and _node.func.attr == "pack"):
+        _kw = {}
+        for _word in _node.keywords:
+            try:
+                _kw[_word.arg] = ast.literal_eval(_word.value)
+            except (ValueError, TypeError):
+                _kw[_word.arg] = "<expression>"
+        rail_packs[_name(_node.func.value)] = _kw
+check("THE RAIL IS CONTENT-HEIGHT: it takes the top of the strip and its own "
+      "natural height -- fill='x', never fill='y', and never expand",
+      rail_packs.get("rail", {}).get("side") == "top"
+      and rail_packs.get("rail", {}).get("fill") == "x"
+      and not rail_packs.get("rail", {}).get("expand"),
+      repr(rail_packs.get("rail")))
+# ...and nothing inside it CLAIMS SURPLUS HEIGHT, which is a narrower rule than
+# "nothing fills y" and is the one that matters. The accent stripe is packed
+# fill="y" on purpose: it fills the height its row was already given, and a row
+# is as tall as its button. What would stretch the block is expand=True with a
+# vertical fill -- a widget asking the packer for cavity it has not earned.
+check("...and nothing inside it claims surplus HEIGHT: fill='y' on a stripe "
+      "fills a row that is already content-tall, but expand with a vertical "
+      "fill would stretch the whole block from the inside",
+      not any(row.get("expand") is True and row.get("fill") in ("y", "both")
+              for name, row in rail_packs.items()),
+      repr(rail_packs))
+check("the strip's height comes from the rail's REQUESTED height, never from "
+      "the height it was last placed at -- that second reading is a loop that "
+      "only grows",
+      "winfo_reqheight()" in _body_src(_method("App", "_rail_height"))
+      and "winfo_height()" not in _body_src(_method("App", "_rail_height")),
+      _body_src(_method("App", "_rail_height")))
+check("the rail carries the wordmark above the entries, which is what makes it "
+      "the top of a dock rather than a floating list of three words",
+      any(keyword.arg == "text"
+          and isinstance(keyword.value, ast.Constant)
+          and keyword.value.value in ("Esoteric", "OS")
+          for node in _calls(build_rail, "tk.Label")
+          for keyword in node.keywords), rail_src)
+check("...and it is one row per surface under it, from DOCK_SPEC and not from "
+      "a second list", "for key, label in DOCK_SPEC:" in rail_src, rail_src)
 
 scroll_owners = {}
 for _cls in [n for n in ast.walk(MODULE) if isinstance(n, ast.ClassDef)]:
@@ -281,14 +370,28 @@ check("the wheel handler still claims only the page canvas -- the Console's "
 
 
 print("\n---- no pop-outs anywhere ----")
+# TWO WINDOWS, AND THE TEST FOR BOTH IS WHO PLACES IT. Windows places a dialog,
+# at a moment of its choosing, on a screen he was not looking at (28 July);
+# this process places these, at rects it computed, and refuses every move it
+# did not make. The strip is the second and it is a dock, not a dialog: it
+# cannot be inside the app's window because its job is to show and hide that
+# window, and a dock drawn inside the thing it hides is gone at exactly the
+# moment it is needed. The reason is written where the ban is enforced --
+# test_frame_modal.EXEMPT_FUNCTIONS -- and this is the same list from here.
 toplevel_owners = {node.name for node in ast.walk(MODULE)
                    if isinstance(node, ast.FunctionDef)
                    and any(isinstance(call, ast.Call)
                            and _name(call.func) == "tk.Toplevel"
                            for call in ast.walk(node))}
-check("the identify card is the only method in the app that opens a window",
-      toplevel_owners == {"_identify_card"}, repr(sorted(toplevel_owners)))
-check("no dock or surface method opens one",
+check("exactly two methods in the app open a window: the identify card and "
+      "the dock strip",
+      toplevel_owners == {"_identify_card", "_build_dock_strip"},
+      repr(sorted(toplevel_owners)))
+check("...one Toplevel each, so an exemption is a window and not a licence",
+      len([node for node in ast.walk(MODULE) if isinstance(node, ast.Call)
+           and _name(node.func) == "tk.Toplevel"]) == len(toplevel_owners))
+check("no SURFACE method opens one -- a fourth surface must never need a "
+      "window, and the rail that switches them does not have one of its own",
       not (toplevel_owners & {"_build_dock_rail", "_render_dock",
                               "_dock_click", "_dock_show", "_dock_state",
                               "_restore_dock", "_console_mount",
@@ -296,10 +399,94 @@ check("no dock or surface method opens one",
                               "_scripts_report", "_scripts_reload",
                               "_toggle_scripts", "_start_scripts",
                               "_script_host"}))
+check("the strip is built ONCE, at startup, and never opened again -- a dock "
+      "built on first use is a dock that does not exist in the one state that "
+      "needs it, which is a hidden app window",
+      SOURCE.count("self._build_dock_strip()") == 1
+      and "self._build_dock_strip()" in init_src, init_src[:0])
+check("the builder places nothing itself: no geometry, no overrideredirect, "
+      "no topmost attribute -- on_desktop owns where both windows go",
+      not any(token in strip_src for token in
+              ("geometry(", "overrideredirect", "-topmost", "attributes(")),
+      strip_src)
+check("...and it steals nothing: no focus_force, no grab, no lift, because a "
+      "dock that takes the keyboard is a dialog wearing a dock's shape",
+      not any(token in strip_src for token in
+              ("focus_force", "grab_set", "lift(", "wait_window")), strip_src)
+check("nothing closes the dock: WM_DELETE_WINDOW is answered rather than left "
+      "to Tk's destroy, because it is the only way back to a hidden window",
+      "protocol('WM_DELETE_WINDOW'" in strip_src, strip_src)
+check("it comes up withdrawn, so it never flashes at Tk's default position on "
+      "some other screen before _strip_place puts it on the edge",
+      "strip.withdraw()" in strip_src, strip_src)
 check("the console's window era is gone by name, not merely unreachable",
       "_open_console_window" not in SOURCE
       and "_close_console_window" not in SOURCE
       and "_console_win" not in SOURCE and "_console_geom" not in SOURCE)
+
+
+print("\n---- the strip is placed by the machinery that already places the app ----")
+# EXTENDED, NOT DUPLICATED. Everything the strip needs -- an edge, a work area,
+# a refusal of foreign moves, a re-dock when the desk changes underneath it --
+# on_desktop already did for the app window. A second placement path would be a
+# second thing to keep in step with the first, and the failure would be silent:
+# a dock that is merely somewhere else.
+strip_ctl_src = _body_src(strip_controller)
+strip_geom_src = _body_src(strip_geometry)
+strip_place_src = _body_src(strip_place)
+check("the strip is placed by on_desktop.OnDesktop -- the same controller the "
+      "app window uses", "on_desktop.OnDesktop(" in strip_ctl_src,
+      strip_ctl_src)
+check("...pinned TOPMOST rather than to the bottom, because a dock behind "
+      "Chrome is a dock nobody can click and it is the way back to a hidden "
+      "window", "pin=on_desktop.HWND_TOPMOST" in strip_ctl_src, strip_ctl_src)
+check("...and told its height is its content's, so the wndproc's re-dock keeps "
+      "the rail's height instead of stretching to a new work area",
+      "fixed_height=True" in strip_ctl_src, strip_ctl_src)
+check("THE DESKTOP-ROLE SCREEN, resolved by the one resolver the app window "
+      "uses, so the two cannot end up on different panels",
+      "self._desktop_monitor_name()" in strip_ctl_src
+      and "self._desktop_monitor_name()" in strip_geom_src)
+check("the strip's rect is on_desktop.dock_rect with a height -- the gap under "
+      "it is the module's clamp, not a number retyped here",
+      "on_desktop.dock_rect(" in strip_geom_src
+      and "height=self._rail_height()" in strip_geom_src, strip_geom_src)
+check("the app window is placed against the band the strip stands in, so a "
+      "full-width window stops at the dock instead of sliding under it",
+      "reserve=self._strip_reserve()"
+      in _body_src(_method("App", "_desktop_geometry")))
+check("...and that band is the rail's width plus on_desktop's own inset, so "
+      "the two docks are not measured against different air",
+      "self._rail_width() + on_desktop.INSET"
+      in _body_src(_method("App", "_strip_reserve")))
+apply_src = _body_src(_method("App", "_apply_window_placement"))
+check("the strip is placed on every placement pass, BEFORE the app window "
+      "whose rect is computed against it",
+      apply_src.index("self._strip_place()") < apply_src.index("ctl.set_reserve"),
+      apply_src)
+check("float_window frees the APP window and never the dock: nothing releases "
+      "the strip, so there is no state in which the dock is somewhere else",
+      "release" not in strip_place_src, strip_place_src)
+check("the strip states its floor before every placement, for the reason "
+      "on_desktop.set_min_width exists: the wndproc re-docks from cached "
+      "numbers and a stale floor widens the dock on the next shell bar",
+      "set_min_width" in strip_place_src, strip_place_src)
+strip_users = {node.name for node in ast.walk(MODULE)
+               if isinstance(node, ast.FunctionDef)
+               and "self._strip_controller()" in _body_src(node)}
+check("one place reaches the strip's controller, so there is one place the "
+      "dock is put on screen", strip_users == {"_strip_place"},
+      repr(sorted(strip_users)))
+sync_src = _body_src(_method("App", "_sync_desktop_monitor"))
+check("DESKTOP ROLE CHANGED: both windows are re-pointed in the one funnel "
+      "every role change already passes through -- a second watcher is a "
+      "second thing that can disagree with the first",
+      "self._desktop.set_monitor(name)" in sync_src
+      and "self._strip.set_monitor(name)" in sync_src, sync_src)
+check("...and that funnel is the only place either is re-pointed",
+      {node.name for node in ast.walk(MODULE)
+       if isinstance(node, ast.FunctionDef)
+       and "set_monitor(" in _body_src(node)} == {"_sync_desktop_monitor"})
 
 
 print("\n---- one writer, one surface showing ----")
@@ -578,28 +765,37 @@ class FakeChrome:
 
 
 class FakeRail:
-    """A rail wider than DOCK_COLLAPSED_MIN_W, so the max() is a real choice."""
+    """A rail wider than DOCK_STRIP_MIN_W and taller than DOCK_STRIP_MIN_H, so
+    both max() calls are real choices -- and far shorter than a work area,
+    because being shorter than the window is the whole point of it."""
 
     def winfo_reqwidth(self):
         return 130
 
+    def winfo_reqheight(self):
+        return 186
+
 
 RAIL_W = FakeRail().winfo_reqwidth()
+RAIL_H = FakeRail().winfo_reqheight()
 
 
 class FakeRoot:
-    """A top level that really does change size when it is told to.
+    """A top level that really does go away when it is told to.
 
-    geometry() writes the width back, because the whole bug was a window that
-    was TOLD it could be thin and stayed wide: a fake that recorded the request
-    and kept its old width would have passed the old code.
+    shown is written by withdraw/deiconify, because the whole of "collapsed"
+    is now whether this window is on screen: a fake that recorded the call and
+    stayed visible would pass a _dock_place that did nothing. geometry() is
+    still here and still writes the width back, so that a dock which started
+    resizing the window again would be caught rather than ignored.
     """
 
     def __init__(self, width=A.PAGE_PREFERRED_WINDOW_W, height=930):
         self.minimums = [(A.PAGE_MIN_WINDOW_W, 680)]
         self.width = width
         self.height = height
-        self.calls = []       # ("minsize", w) / ("geometry", spec), in order
+        self.shown = True
+        self.calls = []       # every call that matters, in the order it came
 
     def minsize(self, width=None, height=None):
         if width is None:
@@ -615,6 +811,14 @@ class FakeRoot:
         self.width = max(int(wide), self.minimums[-1][0])
         self.height = int(high)
 
+    def withdraw(self):
+        self.shown = False
+        self.calls.append(("withdraw", None))
+
+    def deiconify(self):
+        self.shown = True
+        self.calls.append(("deiconify", None))
+
     def winfo_width(self):
         return self.width
 
@@ -623,13 +827,15 @@ class FakeRoot:
 
 
 class FakeDesktop:
-    """OnDesktop as _dock_place uses it -- and it CLAMPS like the real one.
+    """OnDesktop as _dock_place uses it.
 
-    set_width refusing to go below the cached floor is the shipped behaviour
-    (on_desktop.OnDesktop.set_width), and it is reproduced here rather than
-    waved at, so a dock that asked for a narrow window without first saying why
-    it is allowed to be narrow fails here instead of on the desk. Where the
-    controller then PUTS the window is test_on_desktop's business.
+    show_at_dock is the whole of the desktop half now: a window pinned to
+    HWND_BOTTOM cannot be raised by deiconify alone, because the app's own
+    wndproc sinks every lift, so a dock that only deiconified would put the
+    window up UNDERNEATH whatever was in front of it and look like nothing
+    happened. set_min_width and set_width are kept, clamping exactly as the
+    shipped controller does, so a dock that started resizing the app window
+    again is caught here rather than on the desk.
     """
 
     def __init__(self, active=True):
@@ -638,6 +844,7 @@ class FakeDesktop:
         self.width = None
         self.floors = []
         self.widths = []
+        self.shows = 0
 
     def set_min_width(self, width):
         self.min_width = max(int(width), OD.COLLAPSED_MIN_WIDTH)
@@ -649,6 +856,10 @@ class FakeDesktop:
         self.widths.append(self.width)
         return True
 
+    def show_at_dock(self):
+        self.shows += 1
+        return True
+
 
 def new_app(active="dashboard", collapsed=False, desktop=None,
             width=A.PAGE_PREFERRED_WINDOW_W):
@@ -656,12 +867,13 @@ def new_app(active="dashboard", collapsed=False, desktop=None,
     app.root = FakeRoot(width=width)
     app._desktop = desktop
     app._dock_rail = FakeRail()
+    app._dock_strip = None     # the strip's own placement is asserted apart
+    app._strip = None
     app._dock_surfaces = {key: FakeSurface() for key in A.DOCK_KEYS}
     app._dock_entries = {key: (FakeChrome(), FakeChrome())
                          for key in A.DOCK_KEYS}
     app._dock_active = active
     app._dock_collapsed = collapsed
-    app._dock_expanded_w = None
     app._console_mount = lambda: mounted.append(app._dock_active)
     app._scripts_refresh = lambda: repainted.append(app._dock_active)
     return app
@@ -702,102 +914,92 @@ check("an unknown key changes nothing at all",
       and app._dock_active == "console")
 
 
-print("\n---- collapse, and the rail that survives it ----")
+print("\n---- collapse, and the strip that survives it ----")
 app = new_app()
 app._render_dock()
-before = len(app.root.minimums)
 check("clicking the ACTIVE entry collapses", app._dock_click("dashboard")
       and app._dock_collapsed is True and packed(app) == set(),
       repr(packed(app)))
 check("the active surface is REMEMBERED across the collapse, not cleared",
       app._dock_active == "dashboard")
-check("the rail is untouched: nothing in the collapse path forgets it",
+check("the rail is untouched: nothing in the collapse path forgets it, and it "
+      "is in a window of its own that a collapse does not reach",
       isinstance(app._dock_rail, FakeRail))
-check("collapsed, the window's minimum width drops to the rail",
-      app.root.minimums[-1][0] == RAIL_W
-      and len(app.root.minimums) > before, repr(app.root.minimums))
-check("the height floor is carried through untouched",
-      app.root.minimums[-1][1] == app.root.minimums[0][1],
-      repr(app.root.minimums[-1]))
-check("clicking it again brings the same surface back",
+check("THE WINDOW IS HIDDEN, which is what collapsed means since 2026-08-29 -- "
+      "the rail is not in here any more, so there is nothing left to shrink to",
+      app.root.shown is False, repr(app.root.calls))
+check("...and nothing was resized on the way: the window keeps the size Doug "
+      "left it at, and gets it back by never having been touched",
+      [call for call in app.root.calls if call[0] == "geometry"] == []
+      and app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.calls))
+check("...and no minimum moved either, because no state needs a lower one",
+      app.root.minimums == [(A.PAGE_MIN_WINDOW_W, 680)],
+      repr(app.root.minimums))
+check("clicking it again brings the same surface back, in the same window",
       app._dock_click("dashboard") and packed(app) == {"dashboard"}
-      and app._dock_collapsed is False)
-check("...and the page's width floor comes back with it",
-      app.root.minimums[-1][0] == A.PAGE_MIN_WINDOW_W,
-      repr(app.root.minimums[-1]))
+      and app._dock_collapsed is False and app.root.shown is True)
+check("...at exactly the width it had before the collapse",
+      app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.width))
 app._dock_click("dashboard")
-check("clicking a DIFFERENT entry while collapsed expands onto it, rather "
-      "than staying collapsed",
+check("clicking a DIFFERENT entry while collapsed shows the window on THAT "
+      "surface, rather than staying hidden",
       app._dock_click("scripts") and packed(app) == {"scripts"}
-      and app._dock_collapsed is False)
-check("a rail floor is never narrower than the constant, whatever the rail "
-      "reports", A.DOCK_COLLAPSED_MIN_W > 0
-      and A.PAGE_MIN_WINDOW_W > A.DOCK_COLLAPSED_MIN_W)
-app._dock_rail = None
-app._dock_collapsed = True
-app._render_dock()
-check("a rail that cannot be measured falls back to the constant, never to 0",
-      app.root.minimums[-1][0] == A.DOCK_COLLAPSED_MIN_W,
-      repr(app.root.minimums[-1]))
-
-
-# =========================================================================
-# COLLAPSED MEANS THE WINDOW IS COLLAPSED. Doug, 2026-08-29, on a full-width
-# window holding nothing but the rail: *"This should be fully collapsed, this
-# is not a valid state."* Lowering the Tk minimum only ever PERMITTED a thin
-# dock; these drive the placement that now performs it, in both worlds.
-# =========================================================================
-
-print("\n---- floating: collapse resizes, expand gives the width back ----")
-app = new_app()
-app._render_dock()
-check("a first render of an expanded dock resizes nothing -- the width the "
-      "window opened at is not the dock's to spend",
-      [call for call in app.root.calls if call[0] == "geometry"] == []
-      and app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.calls))
-app.root.calls.clear()
-app._dock_click("dashboard")
-check("COLLAPSING SHRINKS THE WINDOW to the rail, rather than merely allowing "
-      "it to be shrunk", app.root.width == RAIL_W,
-      f"{app.root.width}px wide with nothing packed")
-check("...and the minimum is lowered BEFORE the resize is asked for, because "
-      "Tk clamps a geometry request to the minimum standing at the time",
-      [name for name, _ in app.root.calls] == ["minsize", "geometry"],
-      repr(app.root.calls))
-check("...and the height is carried through the resize untouched: collapsing "
-      "is a width gesture and nothing else", app.root.height == 930,
-      repr(app.root.height))
-app.root.calls.clear()
-check("EXPANDING RESTORES THE PREVIOUS WIDTH EXACTLY, not the floor and not a "
-      "default", app._dock_click("dashboard")
-      and app.root.width == A.PAGE_PREFERRED_WINDOW_W,
-      repr(app.root.width))
-check("...and it raises the minimum back before it asks for that width",
-      [name for name, _ in app.root.calls] == ["minsize", "geometry"]
-      and app.root.minimums[-1][0] == A.PAGE_MIN_WINDOW_W,
-      repr(app.root.calls))
-app.root.calls.clear()
-app._dock_click("console")
-check("switching surfaces without collapsing resizes nothing at all",
-      [call for call in app.root.calls if call[0] == "geometry"] == []
-      and app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.calls))
+      and app._dock_collapsed is False and app.root.shown is True)
 
 app = new_app(width=1503)
 app._dock_click("dashboard")
 app._dock_click("dashboard")
-check("whatever width he had dragged it to is the width he gets back",
-      app.root.width == 1503, repr(app.root.width))
-check("...and the memory is spent, so a second expand does not resize again",
-      app._dock_expanded_w is None)
+check("whatever width he had dragged it to is the width he gets back, and it "
+      "is the same width because nothing ever took it away",
+      app.root.width == 1503 and app.root.shown is True, repr(app.root.width))
+app.root.calls.clear()
+app._dock_click("console")
+check("switching surfaces without collapsing neither hides nor resizes: the "
+      "window was already up and stays exactly as it was",
+      app.root.calls == [("deiconify", None)] and app.root.shown is True,
+      repr(app.root.calls))
 
-app = new_app(width=1)
+# THE STRIP IS NOT TOUCHED BY ANY OF THIS. It is a separate window with its own
+# controller, and a collapse that reached it would put the dock away with the
+# app -- which is the one state from which nothing can be clicked back.
+strip_touchers = {node.name for node in ast.walk(MODULE)
+                  if isinstance(node, ast.FunctionDef)
+                  and ("self._dock_strip" in _body_src(node)
+                       or "self._strip" in _body_src(node))}
+check("nothing in the dock's click, state, render or placement path touches "
+      "the strip: it is placed once and left alone",
+      not (strip_touchers & {"_dock_click", "_dock_show", "_dock_state",
+                             "_render_dock", "_dock_place", "_restore_dock"}),
+      repr(sorted(strip_touchers)))
+
+
+# =========================================================================
+# COLLAPSED MEANS THE WINDOW IS GONE. Doug, 2026-08-29, on a full-width window
+# holding nothing but the rail: *"This should be fully collapsed, this is not
+# a valid state."* That was closed by making the pack and a resize one act.
+# The rail leaving the window closed it harder: there is no width to get wrong
+# any more, only a window that is up or is not.
+# =========================================================================
+
+print("\n---- floating: collapse hides, invoking shows ----")
+app = new_app()
+app._render_dock()
+check("a first render of an expanded dock resizes nothing and leaves the "
+      "window up",
+      [call for call in app.root.calls if call[0] == "geometry"] == []
+      and app.root.shown is True
+      and app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.calls))
+app.root.calls.clear()
 app._dock_click("dashboard")
-app._dock_click("dashboard")
-check("a window that had never been mapped -- Tk reports 1px -- expands to the "
-      "opening width rather than to 1px or to the floor",
-      app.root.width == A.PAGE_PREFERRED_WINDOW_W
-      and A.PAGE_PREFERRED_WINDOW_W > A.PAGE_MIN_WINDOW_W,
-      repr(app.root.width))
+check("COLLAPSING HIDES THE WINDOW, and does exactly that one thing",
+      app.root.calls == [("withdraw", None)] and app.root.shown is False,
+      repr(app.root.calls))
+check("...and the height is untouched too: putting the app away is not a "
+      "layout gesture at all", app.root.height == 930, repr(app.root.height))
+app.root.calls.clear()
+check("SHOWING PUTS IT BACK", app._dock_click("dashboard")
+      and app.root.calls == [("deiconify", None)]
+      and app.root.shown is True, repr(app.root.calls))
 
 # The restore reads settings, and the app is RUNNING on Doug's desk: the real
 # load_setting would read his live openspan_settings.json, so this suite would
@@ -805,69 +1007,62 @@ check("a window that had never been mapped -- Tk reports 1px -- expands to the "
 # for the one call, exactly as the section further down does.
 _restore_stored = {"dock_surface": "dashboard", "dock_collapsed": True}
 A.load_setting = lambda key, default=None: _restore_stored.get(key, default)
-app = new_app(collapsed=True, width=1)
+app = new_app(collapsed=True)
 app._restore_dock()
-check("a session that ended collapsed comes back collapsed AND thin",
+check("a session that ended collapsed comes back collapsed AND hidden -- the "
+      "strip alone on the edge, which is what he left",
       app._dock_collapsed is True and packed(app) == set()
-      and app.root.width == RAIL_W, repr(app.root.width))
-check("...and expanding it, with no earlier width to give back, opens at the "
-      "width the app opens at", app._dock_click("dashboard")
+      and app.root.shown is False, repr(app.root.calls))
+check("...and showing it opens at the width the app opens at, because no "
+      "collapse ever spent it", app._dock_click("dashboard")
+      and app.root.shown is True
       and app.root.width == A.PAGE_PREFERRED_WINDOW_W, repr(app.root.width))
 
 
-print("\n---- on the desktop, where geometry() is refused by design ----")
+print("\n---- on the desktop, where a hidden window cannot simply be raised ----")
 desk = FakeDesktop()
 app = new_app(desktop=desk)
 app._render_dock()
-check("an expanded dock states its floor to the controller even when it is "
-      "asking for no resize -- the wndproc re-docks from that cached number "
-      "and a stale one would widen a collapsed dock on the next shell bar",
-      desk.floors == [A.PAGE_MIN_WINDOW_W] and desk.widths == [],
-      repr((desk.floors, desk.widths)))
+check("showing on the desktop goes through show_at_dock, not deiconify alone: "
+      "the app is pinned to HWND_BOTTOM and its own wndproc sinks every lift, "
+      "so a bare deiconify would put it up UNDER whatever was in front",
+      desk.shows == 1 and app.root.shown is True, repr(desk.shows))
+check("...and the dock resizes nothing on the desktop either: no floor is "
+      "lowered and no width is asked for, because neither exists any more",
+      desk.floors == [] and desk.widths == [], repr((desk.floors, desk.widths)))
 check("...and nothing reaches geometry(), which OnDesktop would refuse anyway",
       [call for call in app.root.calls if call[0] == "geometry"] == [],
       repr(app.root.calls))
 app._dock_click("dashboard")
-check("COLLAPSING ON THE DESKTOP LOWERS THE FLOOR AND THEN ASKS FOR THE RAIL, "
-      "in that order, so the ask is not clamped straight back up",
-      desk.floors[-1] == RAIL_W and desk.widths == [RAIL_W]
-      and desk.width == RAIL_W, repr((desk.floors, desk.widths)))
-check("...and the floor it lowered to is one the controller will accept: above "
-      "the absolute floor, below the ordinary one",
-      OD.COLLAPSED_MIN_WIDTH <= RAIL_W < OD.MIN_WIDTH,
-      f"{OD.COLLAPSED_MIN_WIDTH} <= {RAIL_W} < {OD.MIN_WIDTH}")
-check("...and the desktop path never touches geometry() either",
-      [call for call in app.root.calls if call[0] == "geometry"] == [],
-      repr(app.root.calls))
+check("COLLAPSING ON THE DESKTOP HIDES IT, and does not ask the controller for "
+      "anything at all",
+      app.root.shown is False and desk.shows == 1
+      and desk.widths == [], repr((app.root.calls, desk.widths)))
 app._dock_click("dashboard")
-check("expanding raises the controller's floor back and hands it the width the "
-      "collapse took",
-      desk.floors[-1] == A.PAGE_MIN_WINDOW_W
-      and desk.widths[-1] == A.PAGE_PREFERRED_WINDOW_W, repr(desk.widths))
-check("the Tk minimum was kept in step with the controller's the whole way",
-      app.root.minimums[-1][0] == desk.floors[-1],
-      repr((app.root.minimums[-1], desk.floors[-1])))
+check("...and showing it again is one more show_at_dock",
+      app.root.shown is True and desk.shows == 2)
 
 dormant = FakeDesktop(active=False)
-app = new_app(desktop=dormant)
+app = new_app(desktop=dormant, collapsed=True)
 app._dock_click("dashboard")
 check("a controller that is NOT on the desktop -- float_window is on, or "
-      "placement failed -- is not asked; the window resizes itself instead",
-      dormant.floors == [] and dormant.widths == []
-      and app.root.width == RAIL_W, repr(app.root.width))
-app = new_app()
+      "placement failed -- is not asked; deiconify is the whole of it",
+      dormant.shows == 0 and app.root.shown is True, repr(app.root.calls))
+app = new_app(collapsed=True)
 app._desktop = None
 app._dock_click("dashboard")
 check("...and so does one with no controller built yet, which is every render "
-      "before the 300ms placement", app.root.width == RAIL_W,
-      repr(app.root.width))
+      "before the 300ms placement", app.root.shown is True,
+      repr(app.root.calls))
 
 
 print("\n---- the invalid state is unreachable, not merely unlikely ----")
 # THE INVARIANT, over every sequence the rail can produce: nothing packed IF
-# AND ONLY IF the window is at the rail's width. The screenshot Doug sent was
-# the left half of that biconditional without the right, and no ordering of
-# clicks below can reproduce it, because one method writes both halves.
+# AND ONLY IF the app window is off screen. The screenshot Doug sent was the
+# left half of that biconditional without the right, and no ordering of clicks
+# below can reproduce it, because one method writes both halves. The right half
+# used to be "at the rail's width"; it is "not on screen" now, and the shape of
+# the assertion is deliberately unchanged.
 SEQUENCES = (("dashboard",), ("dashboard", "dashboard"),
              ("console", "console", "console"),
              ("dashboard", "scripts", "scripts", "dashboard"),
@@ -875,63 +1070,74 @@ SEQUENCES = (("dashboard",), ("dashboard", "dashboard"),
              ("console", "scripts", "scripts", "scripts", "dashboard"))
 
 
-def walk_states(probe, keys, width_of):
-    """Every state one click sequence passes through, as (empty, thin)."""
+def walk_states(probe, keys):
+    """Every state one click sequence passes through, as (empty, hidden)."""
     probe._render_dock()
-    seen = [(packed(probe) == set(), width_of() == RAIL_W)]
+    seen = [(packed(probe) == set(), probe.root.shown is False)]
     for key in keys:
         probe._dock_click(key)
-        seen.append((packed(probe) == set(), width_of() == RAIL_W))
+        seen.append((packed(probe) == set(), probe.root.shown is False))
     return seen
 
 
 for start in (False, True):
     for keys in SEQUENCES:
         probe = new_app(collapsed=start)
-        states = walk_states(probe, keys, lambda: probe.root.width)
+        states = walk_states(probe, keys)
         check(f"floating, {'collapsed' if start else 'showing'} then "
-              f"{' > '.join(keys)}: empty exactly when thin, at every step",
-              all(empty == thin for empty, thin in states), repr(states))
+              f"{' > '.join(keys)}: empty exactly when hidden, at every step",
+              all(empty == hidden for empty, hidden in states), repr(states))
         check(f"...and every one of those {len(states)} states is one of the "
-              f"two that exist: a surface at a usable width, or the rail alone",
-              set(states) <= {(False, False), (True, True)}, repr(states))
+              f"two that exist: a surface in a window on screen, or the strip "
+              f"alone", set(states) <= {(False, False), (True, True)},
+              repr(states))
 for start in (False, True):
     for keys in SEQUENCES:
         desk = FakeDesktop()
         probe = new_app(collapsed=start, desktop=desk)
-        states = walk_states(probe, keys, lambda: desk.width)
+        states = walk_states(probe, keys)
         check(f"on the desktop, {'collapsed' if start else 'showing'} then "
-              f"{' > '.join(keys)}: the PLACED width says the same thing the "
-              f"cavity does",
-              all(empty == thin for empty, thin in states), repr(states))
+              f"{' > '.join(keys)}: the same, and the window is never resized "
+              f"on the way",
+              all(empty == hidden for empty, hidden in states)
+              and desk.widths == [], repr(states))
+        check(f"...and every show on that path went through show_at_dock, so "
+              f"none of them raised a window that stayed behind another",
+              desk.shows == len([s for s in states if not s[1]]),
+              f"{desk.shows} shows for {states}")
 
 # ...and the reason it is unreachable, read off the source rather than trusted:
-# ONE resizer, ONE floor, and the pack and the placement in one method.
+# ONE method writes visibility, and it writes it in the same call as the pack.
 place_src = _body_src(_method("App", "_dock_place"))
 resizers = {node.name for node in ast.walk(MODULE)
             if isinstance(node, ast.FunctionDef)
             and "self.root.geometry(" in _body_src(node)}
-check("exactly three methods resize or move the app's own window, and only one "
-      "of them is about the dock",
-      resizers == {"__init__", "_drag_move", "_dock_place"},
-      repr(sorted(resizers)))
-check("...and the drag is a MOVE, with no size in the spec at all, so it can "
-      "never undo a collapse",
+check("exactly two methods resize or move the app's own window, and NEITHER is "
+      "about the dock -- a collapse spends no width, so none can be lost",
+      resizers == {"__init__", "_drag_move"}, repr(sorted(resizers)))
+check("...and the drag is a MOVE, with no size in the spec at all",
       "self.root.geometry(f'+{x}+{y}')" in _body_src(_method("App",
                                                              "_drag_move")))
-check("_dock_place is the only method that asks the controller to resize, and "
-      "it states the floor before it states the width",
-      {node.name for node in ast.walk(MODULE)
-       if isinstance(node, ast.FunctionDef)
-       and (_calls(node, "desktop.set_width")
-            or _calls(node, "desktop.set_min_width"))} == {"_dock_place"}
-      and place_src.index("set_min_width") < place_src.index("set_width("),
+hiders = {node.name for node in ast.walk(MODULE)
+          if isinstance(node, ast.FunctionDef)
+          and ("self.root.withdraw()" in _body_src(node)
+               or "self.root.deiconify()" in _body_src(node))}
+check("ONE METHOD decides whether the app window is on screen, and it is the "
+      "dock's placer -- so 'collapsed' cannot mean two things",
+      hiders == {"_dock_place"}, repr(sorted(hiders)))
+check("...and it hides on collapsed and shows otherwise, in that one branch",
+      "self.root.withdraw()" in place_src
+      and "self.root.deiconify()" in place_src
+      and place_src.index("withdraw") < place_src.index("deiconify"),
       place_src)
+check("...and the desktop's show goes through show_at_dock, the same call the "
+      "tray's Open uses",
+      "desktop.show_at_dock()" in place_src, place_src)
 check("_render_dock places in the same call it packs in, so there is no "
       "ordering in which the two disagree",
       "self._dock_place()" in render_src, render_src)
 check("...and the placement path restates it too, so crossing between the "
-      "desktop and a floating window cannot land expanded while the rail says "
+      "desktop and a floating window cannot land showing while the rail says "
       "collapsed",
       "self._dock_place()" in _body_src(_method("App",
                                                 "_apply_window_placement")))
@@ -941,38 +1147,103 @@ callers = {node.name for node in ast.walk(MODULE)
 check("and those two are its only callers",
       callers == {"_render_dock", "_apply_window_placement"},
       repr(sorted(callers)))
-floor_readers = {node.name for node in ast.walk(MODULE)
-                 if isinstance(node, ast.FunctionDef)
-                 and "self._dock_floor()" in _body_src(node)}
-check("ONE FLOOR, and all three places that need one read it: the Tk minimum, "
-      "the rect the window is placed at, and the clamp the wndproc re-docks "
-      "against",
-      floor_readers == {"_dock_place", "_dock_claim_width",
-                        "_desktop_geometry"}, repr(sorted(floor_readers)))
-check("...and the collapsed floor is the rail while the expanded one is the "
-      "page's, so neither state borrows the other's number",
-      "max(DOCK_COLLAPSED_MIN_W, self._rail_width())"
-      in _body_src(_method("App", "_dock_floor"))
-      and "return PAGE_MIN_WINDOW_W"
-      in _body_src(_method("App", "_dock_floor")))
-check("nothing in the app lowers a minimum without placing the window in the "
-      "same breath: _dock_place is the only writer of the dock's minsize",
+check("the TRAY's Open goes through the dock rather than around it: a bare "
+      "deiconify there would put up a window the rail still said was away",
+      "self._dock_show(self._dock_active)"
+      in _body_src(_method("App", "_from_tray")),
+      _body_src(_method("App", "_from_tray")))
+check("__init__ is the only writer of the window's minimum now: nothing lowers "
+      "it at runtime because no state needs it lowered",
       {node.name for node in ast.walk(MODULE)
        if isinstance(node, ast.FunctionDef)
-       and "self.root.minsize(" in _body_src(node)}
-      == {"__init__", "_dock_place"}, place_src)
+       and "self.root.minsize(" in _body_src(node)} == {"__init__"})
 
-print("\n---- the two floors on_desktop keeps, and why there are two ----")
+print("\n---- what the move deleted, and what it kept ----")
+# HONEST BOOKKEEPING, asserted rather than described. These four existed only
+# because the rail was inside the window and a collapse therefore had to be a
+# resize of it. Asked of the CODE and not of the file: openspan.py keeps a
+# paragraph naming them and why they went, and deleting that record to make a
+# test pass is how a removal comes back as a "missing feature".
+_defined = {node.name for node in ast.walk(MODULE)
+            if isinstance(node, ast.FunctionDef)}
+_attrs = {node.attr for node in ast.walk(MODULE)
+          if isinstance(node, ast.Attribute)}
+for _gone in ("_dock_floor", "_dock_claim_width", "_window_width"):
+    check(f"{_gone} is gone: it answered a question a collapse no longer asks",
+          _gone not in _defined)
+check("_dock_expanded_w is gone with them -- a remembered width would be a "
+      "second, quieter idea of how wide the window should be",
+      "_dock_expanded_w" not in _attrs)
+check("DOCK_COLLAPSED_MIN_W is gone by name: there is no collapsed WIDTH to "
+      "floor, and the constant that replaced it says what it floors",
+      not hasattr(A, "DOCK_COLLAPSED_MIN_W")
+      and A.DOCK_STRIP_MIN_W > 0 and A.DOCK_STRIP_MIN_H > 0)
+check("_rail_width SURVIVED and changed meaning: it was the collapsed window's "
+      "floor, and it is the strip's width",
+      "_rail_width" in _defined
+      and "self._rail_width()" in _body_src(_method("App", "_strip_geometry")))
+check("...and it is floored at the constant, never at 0, for a rail that "
+      "cannot be measured yet",
+      "DOCK_STRIP_MIN_W" in _body_src(_method("App", "_rail_width"))
+      and "DOCK_STRIP_MIN_H" in _body_src(_method("App", "_rail_height")))
+# Driven, not read: an unmeasurable rail is the state at startup and after a
+# teardown, and the strip must still be placeable then.
+blind_app = new_app()
+blind_app._dock_rail = None
+check("a rail that cannot be measured at all falls back to the constants, "
+      "never to 0 -- a 0px strip is a dock nobody can click",
+      blind_app._rail_width() == A.DOCK_STRIP_MIN_W
+      and blind_app._rail_height() == A.DOCK_STRIP_MIN_H,
+      repr((blind_app._rail_width(), blind_app._rail_height())))
+check("...and the band it reserves for itself is still positive, so the app "
+      "window is never placed over a dock that could not be measured",
+      blind_app._strip_reserve() > A.DOCK_STRIP_MIN_W)
+measured = new_app()
+check("a measurable rail reports its own size, and the reserve is that plus "
+      "on_desktop's inset",
+      measured._rail_width() == RAIL_W and measured._rail_height() == RAIL_H
+      and measured._strip_reserve() == RAIL_W + OD.INSET,
+      repr(measured._strip_reserve()))
+
+
+print("\n---- the two floors on_desktop keeps, and who needs them now ----")
 check("the ordinary floor is unchanged: a window with panes in it still may "
       "not go below 560", OD.MIN_WIDTH == 560)
 check("...and the absolute floor beneath it is smaller, positive, and narrower "
-      "than the rail, so it constrains nothing a collapsed dock wants",
+      "than the rail, so it constrains nothing the STRIP wants -- it was built "
+      "for a collapsed dock and the strip is that window now",
       0 < OD.COLLAPSED_MIN_WIDTH < RAIL_W < OD.MIN_WIDTH,
       f"{OD.COLLAPSED_MIN_WIDTH} < {RAIL_W} < {OD.MIN_WIDTH}")
 check("a controller starts at the ordinary floor, so a caller that says "
       "nothing gets the old behaviour exactly",
       OD.OnDesktop(lambda: 0, lambda: (0, 0, 0, 0),
                    bindings=object()).min_width == OD.MIN_WIDTH)
+check("...and the app's controller is one of those callers again: the window "
+      "it places always has a pane in it",
+      "min_width=PAGE_MIN_WINDOW_W"
+      in _body_src(_method("App", "_desktop_geometry")))
+
+print("\n---- the gap the app-icons dock is left ----")
+# THE OTHER DOCK ON THIS EDGE is the shell's, and it is not this process's to
+# place. The contract between them is a band: a strip may never be placed so
+# tall that less than STRIP_GAP is left underneath it. Asserted against the
+# rect function the strip actually uses, at the rail's real size.
+WORK = (0, 0, 1920, 1040)
+strip_rect = OD.dock_rect(WORK, RAIL_W, min_width=A.DOCK_STRIP_MIN_W,
+                          height=RAIL_H)
+check("the strip is as tall as the rail and no taller",
+      strip_rect[3] == RAIL_H, repr(strip_rect))
+check("...and it leaves the whole rest of the edge to the app-icons dock",
+      WORK[3] - OD.INSET - (strip_rect[1] + strip_rect[3])
+      >= OD.STRIP_GAP, f"{strip_rect} on {WORK}")
+check("the gap is a named number and not a fraction of something",
+      OD.STRIP_GAP > 0 and isinstance(OD.STRIP_GAP, int))
+runaway = OD.dock_rect(WORK, RAIL_W, min_width=A.DOCK_STRIP_MIN_W,
+                       height=99999)
+check("A RAIL THAT GREW COULD NOT EAT THE LOWER DOCK: an absurd content height "
+      "is clamped to leave exactly the gap, rather than covering the edge",
+      runaway[1] + runaway[3] + OD.STRIP_GAP == WORK[3] - OD.INSET,
+      repr(runaway))
 
 
 print("\n---- the rail says which surface is showing ----")

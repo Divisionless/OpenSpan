@@ -174,6 +174,21 @@ check("the dock rail builds no scroller: a rail that scrolls could hide an "
       not [n for n in ast.walk(_method("App", "_build_dock_rail"))
            if isinstance(n, ast.Call)
            and _name(n.func) in ("ttk.Scrollbar", "tk.Canvas")])
+# LAW 10 SURVIVED THE RAIL LEAVING THE WINDOW, and the strip is where it could
+# most easily have been broken: a dock window with a scroller in it would be a
+# scrolling surface holding the only controls that reach the other surfaces.
+check("the STRIP does not scroll either -- it builds no scroller, no canvas "
+      "and no text, so nothing in this app's second window can hijack a wheel",
+      not [n for n in ast.walk(_method("App", "_build_dock_strip"))
+           if isinstance(n, ast.Call)
+           and _name(n.func) in ("ttk.Scrollbar", "tk.Canvas", "tk.Text")])
+check("the surfaces are still built on the body, which is in the APP's window "
+      "and not in the strip -- a surface inside the dock would be exactly the "
+      "containment law 10 forbids",
+      all(_name(node.args[0]) != "strip"
+          for node in ast.walk(_method("App", "__init__"))
+          if isinstance(node, ast.Call) and _name(node.func) == "tk.Frame"
+          and node.args))
 check("both scrollbars use the dark named style",
       all(any(keyword.arg == "style"
               and isinstance(keyword.value, ast.Name)
@@ -197,6 +212,17 @@ def _body_src(function):
             and isinstance(clone.body[0].value.value, str)):
         clone.body = clone.body[1:] or [ast.Pass()]
     return ast.unparse(clone)
+
+
+_strip_src = _body_src(_method("App", "_build_dock_strip"))
+check("the strip holds the rail and ONLY the rail: it builds one thing, and "
+      "that thing is the rail, so no surface can end up nested inside the "
+      "dock's own window",
+      _strip_src.count("self._build_") == 1
+      and "self._build_dock_rail(strip)" in _strip_src, _strip_src)
+check("...and the rail is built exactly once in the whole app, into the strip",
+      len([n for n in ast.walk(MODULE) if isinstance(n, ast.Call)
+           and _name(n.func) == "self._build_dock_rail"]) == 1)
 
 
 def _mutators(receiver, verbs=("insert", "delete")):
@@ -356,8 +382,11 @@ check("all four section frames are direct children of the document",
       repr({local: parent.get(local) for local in section_locals}))
 check("there is no fifth section frame left behind",
       "pane_console" not in SOURCE and len(section_locals) == len(A.PAGE_KEYS))
-check("the Dashboard's own cavity is a child of the body, beside the rail",
-      parent.get("main") == "body" and parent.get("body") == "full",
+check("the Dashboard's own cavity is a child of the body, which since "
+      "2026-08-29 holds the surfaces and nothing else -- the rail moved out of "
+      "this window into a strip of its own",
+      parent.get("main") == "body" and parent.get("body") == "full"
+      and "rail" not in parent,
       repr({"main": parent.get("main"), "body": parent.get("body")}))
 check("all sections are registered under PAGE keys",
       "self._page_sections =" in init_src
@@ -586,11 +615,23 @@ class FakeSection:
 
 
 class FakeRoot:
+    """A top level that really does go away when it is told to.
+
+    Invoking a surface SHOWS this window and collapsing the dock HIDES it --
+    see App._dock_place, and test_dock_surfaces for the contract. So withdraw
+    and deiconify are recorded rather than swallowed: _dock_place guards both
+    with `except (tk.TclError, AttributeError)`, and a fake without them would
+    let a broken show/hide pass here as a caught exception. That is the guard
+    that never fires, which is the failure mode this codebase names.
+    """
+
     def __init__(self):
         self.minimums = [(940, 680)]
         self.width = 1120
         self.height = 930
         self.geometries = []
+        self.shown = True
+        self.visibility = []      # every show/hide, in order
 
     def update_idletasks(self):
         pass
@@ -601,10 +642,17 @@ class FakeRoot:
         self.minimums.append((width, height))
         return None
 
-    # Invoking a surface now places the window as well as packing it -- see
-    # App._dock_place, and test_dock_surfaces for the contract. Nothing here
-    # should reach these; they exist so that if something does, it is recorded
-    # rather than raising an AttributeError that reads like a different bug.
+    def withdraw(self):
+        self.shown = False
+        self.visibility.append("withdraw")
+
+    def deiconify(self):
+        self.shown = True
+        self.visibility.append("deiconify")
+
+    # The dock resizes nothing since 2026-08-29. Nothing here should reach
+    # this; it exists so that if something does, it is recorded rather than
+    # raising an AttributeError that reads like a different bug.
     def geometry(self, spec):
         self.geometries.append(spec)
 
@@ -681,6 +729,26 @@ check("...and it invoked the Dashboard first, because a section of a hidden "
       and app._dock_surfaces["dashboard"].packed
       and not app._dock_surfaces["console"].packed,
       repr({k: v.packed for k, v in app._dock_surfaces.items()}))
+# The fake app started collapsed, which since 2026-08-29 means the WINDOW was
+# hidden -- the rail is a strip of its own and the app window is what a
+# collapse puts away. Scrolling to a section of a window that is not on screen
+# would be the quiet no-op this suite exists to catch.
+check("...and it put the window back on screen, not merely packed a frame into "
+      "a window nobody can see",
+      app.root.shown is True and app.root.visibility[-1] == "deiconify",
+      repr(app.root.visibility))
+check("...and it resized nothing on the way: the dock has not been a resizer "
+      "since the rail left the window",
+      app.root.geometries == [], repr(app.root.geometries))
+app._dock_click("dashboard")
+check("clicking the live entry hides the app window and leaves the strip",
+      app.root.shown is False and app._dock_collapsed is True
+      and not any(surface.packed
+                  for surface in app._dock_surfaces.values()),
+      repr(app.root.visibility))
+check("...and clicking it again brings the same window and the same surface "
+      "back", app._dock_click("dashboard") and app.root.shown is True
+      and app._dock_surfaces["dashboard"].packed)
 
 inside = FakeWidget(app._page_canvas)
 result = app._on_page_mousewheel(SimpleNamespace(
