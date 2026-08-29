@@ -117,14 +117,23 @@ pairing, connecting, resetting, or disconnecting the iPad lane must never
 disconnect audio. Keeping the BLE link's airtime modest is what lets both links
 stay clean — see `TECHNICAL_NOTES.md`.
 
-Single-radio operation remains the default and uses the original compatibility
-path. An opt-in **Multiple radios** setting exposes every controller seen by the
-VM, lets the iPad keyboard, managed Mac, and scans choose radios, and adds **Assign to radio**
-to each Bluetooth device's right-click menu. Assignments are stored by
-controller MAC address so they survive `hci0`/`hci1` renumbering. Different
-radios add airtime and hardware-fault isolation; they are not required for
+**A radio is owned by the device that claims it, and there is no mode to set.**
+Right-click a paired device ▸ **Assign to radio** and pick from the controllers
+actually present; a radio another device holds is shown but not selectable, and
+says who holds it. The claim lasts until that device is forgotten, which
+releases it. Assignments are stored by controller MAC address so they survive
+`hci0`/`hci1` renumbering, and the arrangement is derived from those claims —
+one controller behaves as single-radio, several as multi, with nothing to toggle
+and therefore no toggle that can go stale against reality. Different radios add
+airtime and hardware-fault isolation; they are not required for
 connection-lifecycle isolation. Pairing the iPad leaves headphone audio alone
 in either arrangement.
+
+Repair, custody and layout controls are **fault remedies, not settings**: they
+appear above the device list only when an audit finds something wrong — a
+capture that did not land, a driver Windows Update re-bound, three radios not
+laid out on three lanes — each carrying the one action that fixes it. A healthy
+desk shows none of them.
 
 With three radios, the recommended layout is the internal controller for the
 iPad compatibility/backup lane, one external TP-Link controller for the

@@ -1101,11 +1101,13 @@ def _section(parent, title, pady=(PAD_MD, PAD_XS), padx=16):
     the column was paying ~108px to say three words. A bold muted caption over
     a hairline rule says the same three words for ~57px.
 
-    The right column's two LabelFrames (Radio options, Audio & status) are
-    deliberately LEFT ALONE. That column does not bind the window's height, so
-    changing them would buy nothing and cost a visual inconsistency for it.
-    The ttk TLabelframe theming in App._theme therefore now serves only BtPanel
-    -- it is still needed, just no longer by the left column.
+    The right column's LabelFrames were deliberately LEFT ALONE: that column
+    does not bind the window's height, so changing them would buy nothing and
+    cost a visual inconsistency for it. One of the two is now gone anyway --
+    "Radio options" was retired in v3.157, not for its chrome but because it
+    was a settings panel for something that is not a setting (see BtPanel).
+    "Audio & status" remains, so the ttk TLabelframe theming in App._theme
+    still has exactly one consumer and must stay.
 
     `pady` is passed through rather than fixed so the vertical rhythm the
     panels already had survives the swap exactly: the Devices block sat at
@@ -3657,8 +3659,64 @@ def save_bt_prefs(prefs):
 
 
 def multi_radio_enabled(prefs=None):
+    """Does this machine have a multi-radio layout?
+
+    This used to be a stored answer and nothing else: whatever the "Setup"
+    combo in the Radio options panel had last written into ``radio_mode``. That
+    combo is gone (v3.157) because the mode was never a preference -- it is a
+    FACT about how many radios are laid out -- and while it existed the two
+    could disagree silently. They did: bt_prefs.json on this desk held
+    ``"radio_mode": "single"`` beside three distinct lane MACs, so a desk
+    running three radios enumerated none of them, offered no assignment, and
+    printed "Default" in the Radio column. Doug: *"I am using the three radio
+    system right now. It is not possible for it to look like that."*
+
+    A stored "multi" is still honoured verbatim, so nothing that was on the
+    multi path can fall off it. Otherwise the layout is read off the
+    ASSIGNMENTS themselves -- the per-device claims and the three lane slots,
+    all of which are stable controller MACs. Two or more distinct controllers
+    is a multi-radio machine; one or none is not, and a fresh or missing prefs
+    file still lands on the original single-radio path.
+    """
     prefs = prefs if prefs is not None else load_bt_prefs()
-    return prefs.get("radio_mode") == "multi"
+    if prefs.get("radio_mode") == "multi":
+        return True
+    controllers = {str(prefs.get(key, "") or "").upper()
+                   for key in ("hid_radio", "mac_radio", "scan_radio")}
+    controllers.update(
+        str(value or "").upper()
+        for value in dict(prefs.get("radio_assignments", {})).values())
+    controllers.discard("")
+    return len(controllers) >= 2
+
+
+def custody_fault(row, module):
+    """Is this radio's ownership a FAULT, or the normal runtime shape?
+
+    The banner in the Devices list must be silent on a healthy desk, so this
+    is deliberately narrower than "not in custody". Two states qualify:
+
+      * PHANTOM -- the device node is registered but not enumerated, so
+        nothing can bind to it. The radio is unusable.
+      * Windows-owned with its REAL node live, while the VM does not hold it.
+        That is the shape a Windows Update re-bind leaves behind.
+
+    An ordinary runtime capture is NOT a fault even though verdict() calls it
+    WINDOWS-OWNED: VBoxUSBMon tears the real node down (``present`` False) and
+    stands a proxy up in its place, which is exactly how all three radios on
+    this desk read while they are working. Treating that as a fault would put a
+    permanent banner on a machine with nothing wrong with it.
+
+    ABSENT is not here either. It is a real fault, but its remedy is to plug
+    the radio in -- the banner carries an action, and there is no button for
+    that.
+    """
+    state = row.get("verdict")
+    if state == module.PHANTOM:
+        return True
+    if state == module.WINDOWS_OWNED:
+        return bool(row.get("present")) and not row.get("vm_holds")
+    return False
 
 
 def _active_usb_filter_ids(info):
@@ -6038,12 +6096,27 @@ class BtPanel(tk.Frame):
     """Bluetooth & headphones, embedded in the main window (a notebook tab).
     Right-click any device for its actions. Custom names and a blacklist are
     saved locally (bt_prefs.json), so a rename survives re-pairing and
-    blacklisted devices never appear in scans."""
+    blacklisted devices never appear in scans.
+
+    THE DEVICE LIST OWNS THE RADIOS. A paired device is assigned one from its
+    own right-click menu, chosen from the radios actually present; the claim is
+    exclusive, it is shown in the tree's Radio column, and it lasts until the
+    device is unpaired. There is no radio settings panel and no mode to pick.
+    Whether a machine speaks to one radio or several is a fact about how many
+    are laid out (multi_radio_enabled), never a preference.
+
+    The only radio ACTIONS left are the three remedies in the fault banner, and
+    each appears only while its own audit has found the fault it fixes."""
 
     # The boot wait. start_vm_clean() DISCARDS saved state and cold-boots the
     # bridge in about ninety seconds, so the launch radio check can easily ask
     # a machine that is not there yet. These two give it roughly three minutes
     # to get a real answer, sampled once every five seconds and never faster.
+    #
+    # The wait outlived the three status labels it was built for (v3.156). It
+    # now feeds the banner instead, and that is the whole reason a cold boot
+    # can end SILENT: every sample it takes while the VM is still coming up
+    # reports nothing repairable, and nothing repairable shows nothing at all.
     RADIO_WAIT_MS = 5000
     RADIO_WAIT_TRIES = 36        # 36 x 5s = 180s, then it stops for good
 
@@ -6067,14 +6140,7 @@ class BtPanel(tk.Frame):
         self.prefs = load_bt_prefs()
         self._radios = []
         self._device_radios = {}
-        self._radio_choices = {}
         self.show_blk = tk.BooleanVar(value=False)
-        self.radio_mode = tk.StringVar(value=(
-            "Multiple radios" if multi_radio_enabled(self.prefs)
-            else "Single radio (recommended)"))
-        self.hid_radio = tk.StringVar(value="")
-        self.mac_radio = tk.StringVar(value="")
-        self.scan_radio = tk.StringVar(value="")
 
         # wraplength is BOUND, not written down. The literal 500 that stood
         # here was measured against a 1120px window; at this app's own minsize
@@ -6082,110 +6148,76 @@ class BtPanel(tk.Frame):
         _scan_help = tk.Label(
             self, text="Put headphones in pairing mode, Scan, then "
                        "RIGHT-CLICK a device: Connect, Rename, Blacklist, "
-                       "Forget. Renames + blacklist are saved and survive "
-                       "re-pairing.",
+                       "Forget. A device HOLDS the radio you assign it until "
+                       "you unpair it. Renames + blacklist are saved and "
+                       "survive re-pairing.",
             bg=BG, fg=MUTED, font=(FONT_UI, 9), justify="left")
         _scan_help.pack(anchor="w", fill="x", padx=12, pady=(10, 0))
         bind_wraplength(_scan_help)
 
-        options = ttk.LabelFrame(self, text="Radio options", padding=7)
-        options.pack(fill="x", padx=12, pady=(7, 2))
-        mode_row = tk.Frame(options, bg=BG)
-        mode_row.pack(fill="x")
-        tk.Label(mode_row, text="Setup", bg=BG, fg=FG,
-                 font=(FONT_UI, 9)).pack(side="left")
-        self.mode_combo = ttk.Combobox(
-            mode_row, textvariable=self.radio_mode, state="readonly",
-            values=("Single radio (recommended)", "Multiple radios"),
-            width=25)
-        self.mode_combo.pack(side="right")
-        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_changed)
-
-        assign_row = tk.Frame(options, bg=BG)
-        assign_row.pack(fill="x", pady=(6, 0))
-        tk.Label(assign_row, text="iPad keyboard", bg=BG, fg=FG,
-                 font=(FONT_UI, 9)).pack(side="left")
-        self.hid_combo = ttk.Combobox(
-            assign_row, textvariable=self.hid_radio, state="disabled",
-            width=25)
-        self.hid_combo.pack(side="right")
-        self.hid_combo.bind("<<ComboboxSelected>>", self._on_hid_radio)
-
-        mac_row = tk.Frame(options, bg=BG)
-        mac_row.pack(fill="x", pady=(4, 0))
-        tk.Label(mac_row, text="Managed Mac", bg=BG, fg=FG,
-                 font=(FONT_UI, 9)).pack(side="left")
-        self.mac_combo = ttk.Combobox(
-            mac_row, textvariable=self.mac_radio, state="disabled",
-            width=25)
-        self.mac_combo.pack(side="right")
-        self.mac_combo.bind("<<ComboboxSelected>>", self._on_mac_radio)
-
-        scan_row = tk.Frame(options, bg=BG)
-        scan_row.pack(fill="x", pady=(4, 0))
-        tk.Label(scan_row, text="Scan from", bg=BG, fg=FG,
-                 font=(FONT_UI, 9)).pack(side="left")
-        self.scan_combo = ttk.Combobox(
-            scan_row, textvariable=self.scan_radio, state="disabled",
-            width=25)
-        self.scan_combo.pack(side="right")
-        self.scan_combo.bind("<<ComboboxSelected>>", self._on_scan_radio)
-        self.radio_note = tk.StringVar(
-            value="Single-radio compatibility is active.")
-        _note_lbl = tk.Label(options, textvariable=self.radio_note, bg=BG,
-                             fg=MUTED, font=(FONT_UI, 8), anchor="w",
-                             justify="left")
-        _note_lbl.pack(fill="x", pady=(5, 0))
-        bind_wraplength(_note_lbl)
-        # ---- which radios the VM actually holds -------------------------
-        # A dongle that has been unplugged and plugged back in is claimed by
-        # Windows, and VirtualBox only auto-captures at the moment a device
-        # ARRIVES. From in here that was indistinguishable from a device that
-        # simply would not connect -- nothing in the app had ever looked at the
-        # host's USB list. Now it says so, and offers the one action that fixes
-        # it. Nothing about this scans, pairs or connects anything.
-        self.radio_usb = tk.StringVar(value="Checking which radios the VM "
-                                            "holds…")
-        _usb_lbl = tk.Label(options, textvariable=self.radio_usb, bg=BG,
-                            fg=MUTED, font=(FONT_UI, 8), anchor="w",
-                            justify="left")
-        _usb_lbl.pack(fill="x", pady=(6, 0))
-        bind_wraplength(_usb_lbl)
-        # ---- who OWNS each radio, as opposed to who is holding it now ------
-        # Repair radios above is about a capture that did not land. This line
-        # is about the thing underneath: every VM start re-runs the teardown /
-        # re-add race against a live Windows device stack, and the built-in
-        # Intel is the one with no plug to pull when the race is lost. Custody
-        # ends the race by making VBoxUSB the radio's PERSISTENT driver. This
-        # label only ever REPORTS; the button below is the only thing that acts.
-        self.radio_custody_text = tk.StringVar(
-            value="Checking which radios Windows still owns…")
-        _cust_lbl = tk.Label(options, textvariable=self.radio_custody_text,
-                             bg=BG, fg=MUTED, font=(FONT_UI, 8), anchor="w",
-                             justify="left")
-        _cust_lbl.pack(fill="x", pady=(6, 0))
-        bind_wraplength(_cust_lbl)
-        button_row = tk.Frame(options, bg=BG)
-        button_row.pack(fill="x", pady=(5, 0))
-        self.reclaim_btn = ttk.Button(
-            button_row, text="Repair radios", command=self._reclaim_radios)
-        self.reclaim_btn.pack(side="left")
+        # ---- the fault banner, and the panel that used to stand here ---------
+        # THE "Radio options" LabelFrame IS GONE (v3.157). It held a Setup
+        # combo, three assignment combos, three always-on status labels and
+        # three buttons: a machine-level control surface bolted onto a
+        # device-level problem. Doug, running three radios, looking at it:
+        # *"It is not possible for it to look like that. The radios are not
+        # present in the dropdowns... we don't need to even have this section
+        # because the paired device list should handle all of this, claiming a
+        # radio until it is unpaired."*
+        #
+        # Two things replace it, and neither is a settings panel:
+        #
+        #   * ASSIGNMENT is a property of a paired device. The tree's Radio
+        #     column is the only place it lives, and the right-click cascade
+        #     below (_popup -> "Assign to radio") is the only way to set it. A
+        #     device HOLDS its radio until it is unpaired; forget() releases it.
+        #   * THE THREE ACTIONS are fault remedies, not settings. They live in
+        #     this banner, which is packed ONLY while an audit has actually
+        #     found the fault each one fixes. No fault, nothing on screen --
+        #     the three status labels that stood here were the source of a
+        #     recurring class of stale-state bug, because a sentence that is
+        #     always visible is a sentence nobody reads.
+        #
+        # LAW 10: a Frame of Frames. Nothing here scrolls, and the buttons are
+        # built ONCE at construction -- unpacked, but real -- so every existing
+        # reference to them (App.busy, rebase_button_busy, the relabels) keeps
+        # working without any of them having to learn about visibility.
+        # Constructing this touches no radio and starts nothing.
+        self._faults = {}          # key -> True while that fault stands
+        self._fault_rows = {}      # key -> {"row", "text", "button"}
+        self._fault_shown = False
+        self.fault_box = tk.Frame(self, bg=BG)   # NOT packed: see _show_faults
+        # A capture that did not land. A dongle unplugged and plugged back in
+        # is claimed by Windows, and VirtualBox only auto-captures at the moment
+        # a device ARRIVES; from in here that was indistinguishable from a
+        # device that simply would not connect. _radio_usb_check names it and
+        # this is the one action that fixes it.
+        self.reclaim_btn = self._build_fault_row(
+            "usb", "Repair radios", self._reclaim_radios)
+        # Who OWNS each radio, as opposed to who is holding it now. Every VM
+        # start re-runs the teardown/re-add race against a live Windows device
+        # stack, and the built-in Intel is the one with no plug to pull when the
+        # race is lost. Custody ends the race by making VBoxUSB the radio's
+        # PERSISTENT driver.
+        #
         # ONE button. Click once for the dry run (its plan lands in the console
         # below), click again to apply. Never a native dialog -- the second
         # click IS the confirmation, and it is on the button that asked for it.
         self._custody_armed = False
-        self.custody_btn = ttk.Button(
-            button_row, text="Take custody", command=self._take_custody)
-        self.custody_btn.pack(side="left", padx=6)
-        self.recommended_btn = ttk.Button(
-            button_row, text="Use recommended 3-radio layout",
-            command=self._use_recommended_radios)
-        self.recommended_btn.pack(side="right")
+        self.custody_btn = self._build_fault_row(
+            "custody", "Take custody", self._take_custody)
+        self.recommended_btn = self._build_fault_row(
+            "layout", "Use recommended 3-radio layout",
+            self._use_recommended_radios)
 
         self.info = tk.StringVar(value="")
-        tk.Label(self, textvariable=self.info, bg=BG, fg=ACCENT,
-                 font=("Consolas", 9), anchor="w").pack(fill="x", padx=12,
-                                                        pady=(4, 0))
+        # Named, because the banner packs itself BEFORE this label rather than
+        # at the end of the panel: pack order is creation order unless someone
+        # says otherwise, and the banner is created before the tree but shown
+        # long after it.
+        self._info_lbl = tk.Label(self, textvariable=self.info, bg=BG, fg=ACCENT,
+                                  font=("Consolas", 9), anchor="w")
+        self._info_lbl.pack(fill="x", padx=12, pady=(4, 0))
 
         body = tk.Frame(self, bg=BG)
         # expand=False, so body is exactly the tree's requested height and the
@@ -6285,13 +6317,85 @@ class BtPanel(tk.Frame):
         self.out.pack(fill="both", expand=False, padx=12, pady=(4, 10))
         bind_fit_text_height(self.out)
         self._log("Ready. Right-click a device for its actions.")
-        self._set_radio_controls()
+        self._audit_radio_layout()
         self.refresh()
+
+    # ---- the fault banner -------------------------------------------------
+    # Three remedies, each one shown ONLY while the audit that owns it has
+    # found the fault it fixes. The row is built here once and packed later,
+    # so the buttons exist from construction and nothing has to be rebuilt --
+    # a button destroyed and recreated under App.busy()'s parked label is how
+    # a "Repairing radios…" caption survives the job that set it.
+    def _build_fault_row(self, key, button_text, command):
+        """One fault: a sentence naming it and the single action that fixes it.
+
+        Returns the BUTTON, because that is what the rest of the panel already
+        holds by name (self.reclaim_btn, self.custody_btn, self.recommended_btn)
+        and what App.busy() and rebase_button_busy() operate on.
+        """
+        row = tk.Frame(self.fault_box, bg=CARD)
+        button = ttk.Button(row, text=button_text, command=command)
+        # Packed first, from the right: the packer serves it its natural width
+        # before the sentence takes what is left. A squeezed button is
+        # unclickable; a squeezed sentence merely wraps.
+        button.pack(side="right", padx=8, pady=6)
+        text = tk.StringVar(value="")
+        label = tk.Label(row, textvariable=text, bg=CARD, fg=WARN,
+                         font=(FONT_UI, 9), anchor="w", justify="left")
+        label.pack(side="left", fill="x", expand=True, padx=(8, 4), pady=6)
+        bind_wraplength(label)
+        self._fault_rows[key] = {"row": row, "text": text, "button": button}
+        return button
+
+    def _set_fault(self, key, sentence):
+        """Raise one fault: its sentence, and its remedy. UI THREAD ONLY."""
+        row = self._fault_rows[key]
+        row["text"].set(sentence)
+        if key not in self._faults:
+            self._faults[key] = True
+            row["row"].pack(fill="x", pady=(0, PAD_XS))
+        self._show_faults()
+
+    def _clear_fault(self, key):
+        """Drop one fault. Idempotent, and UI THREAD ONLY.
+
+        A row whose own remedy is RUNNING is never taken away underneath it.
+        _reclaim_radios reports its progress through _radio_usb_apply with a
+        repairable count of 0 ("Auditing ownership; 2 radio(s) permit one
+        attach attempt…"), which is a progress line and not a verdict -- and
+        obeying it literally would unpack the banner, and the button being
+        waited on, halfway through the repair.
+        """
+        row = self._fault_rows[key]
+        if button_is_busy(row["button"]):
+            return
+        if self._faults.pop(key, None):
+            row["row"].pack_forget()
+            row["text"].set("")
+        self._show_faults()
+
+    def _show_faults(self):
+        """Pack the banner iff something is wrong. UI THREAD ONLY.
+
+        No fault renders NOTHING -- not an empty frame, not a reassuring
+        sentence. A cold boot on a healthy desk ends here, with the banner
+        never having been packed at all.
+        """
+        want = bool(self._faults)
+        if want == self._fault_shown:
+            return
+        self._fault_shown = want
+        if want:
+            # before=, because this frame was created ahead of the tree but is
+            # shown long after it; pack order is creation order otherwise.
+            self.fault_box.pack(fill="x", padx=12, pady=(7, 0),
+                                before=self._info_lbl)
+        else:
+            self.fault_box.pack_forget()
 
     # ---- radios the VM has lost ------------------------------------------
     def _radio_usb_apply(self, text, repairable):
         def apply():
-            self.radio_usb.set(text)
             want = (f"Repair {repairable} radio"
                     + ("s" if repairable != 1 else "")
                     if repairable else "Repair radios")
@@ -6301,6 +6405,14 @@ class BtPanel(tk.Frame):
             # instead means the button comes back with the fresh count.
             if not rebase_button_busy(self.reclaim_btn, want):
                 self.reclaim_btn.config(text=want)
+            # THE FAULT IS THE REPAIRABLE COUNT, not the sentence. A VM that
+            # has not finished booting, a VM that is off, and a desk where
+            # every radio is attached all report 0 and all show nothing --
+            # which is what makes a cold boot end silent.
+            if repairable:
+                self._set_fault("usb", text)
+            else:
+                self._clear_fault("usb")
         if self.app:
             self.app.ui(apply)      # workers never touch Tk, not even after()
 
@@ -6403,34 +6515,56 @@ class BtPanel(tk.Frame):
 
     # ---- radio custody ---------------------------------------------------
     def _custody_apply_text(self, text):
+        """Raise the custody fault, or drop it when `text` is empty.
+
+        The always-on label this used to write is gone. Every audit still
+        produces its full report -- into the console, where a history belongs
+        -- and only a NAMED FAULT reaches the banner.
+        """
+        def apply():
+            if text:
+                self._set_fault("custody", text)
+            else:
+                self._clear_fault("custody")
         if self.app:
-            self.app.ui(lambda: self.radio_custody_text.set(text))
+            self.app.ui(apply)
 
     def _custody_check(self):
         """Audit who persistently owns each radio. REPORTS, never acts.
 
         Runs at launch and after every custody action. Two SetupAPI sweeps and
         two VBoxManage reads, on a worker -- the UI must not wait on either.
+
+        What reaches the banner is narrower than what reaches the log:
+        custody_fault() picks out the phantom and the Windows-Update re-bind
+        and lets an ordinary runtime capture past, because that is what a
+        healthy radio on this desk looks like and a banner nobody can clear is
+        a banner nobody reads.
         """
         def work():
+            if not vm_running():
+                # Windows legitimately owns every radio while the bridge is
+                # down. That is the machine at rest, not a fault -- and this
+                # sample fires 1.8s after launch, in front of a cold boot.
+                self._custody_apply_text("")
+                return
             try:
                 import radio_custody
                 custody = radio_custody.RadioCustody()
                 rows = custody.rows()
-            except Exception as exc:  # noqa: BLE001 -- a status line, not a
+            except Exception as exc:  # noqa: BLE001 -- a report, not a
                 # feature anything else depends on: it must never take the
-                # Bluetooth panel down with it.
-                self._custody_apply_text(f"Custody audit unavailable: {exc}")
+                # Bluetooth panel down with it. It is not a radio fault
+                # either, and it has no remedy button, so it stays in the log.
+                self._log(f"custody: audit unavailable: {exc}")
+                self._custody_apply_text("")
                 return
-            if not rows:
-                self._custody_apply_text(
-                    "No radios are configured, so there is nothing to take "
-                    "custody of.")
-                return
-            self._custody_apply_text(
-                "\n".join(radio_custody.custody_line(row) for row in rows))
             for row in rows:
                 self._log("custody: " + radio_custody.custody_line(row))
+            faulted = [row for row in rows
+                       if custody_fault(row, radio_custody)]
+            self._custody_apply_text(
+                "\n".join(radio_custody.custody_line(row) for row in faulted))
         threading.Thread(target=work, daemon=True).start()
 
     def _take_custody(self):
@@ -6787,8 +6921,24 @@ class BtPanel(tk.Frame):
                 return self._radio_display(radio)
         return f"Unavailable ({controller[-5:]})"
 
-    def _selected_controller(self, variable):
-        return self._radio_choices.get(variable.get(), "")
+    def _radio_holder(self, controller, ignore=""):
+        """Which paired device HOLDS this radio, "" if none.
+
+        A claim is exclusive and it lasts until the device is unpaired. That is
+        the whole ownership model: forget() releases, nothing else does.
+        """
+        controller = str(controller or "").upper()
+        if not controller:
+            return ""
+        for mac, held in self.prefs["radio_assignments"].items():
+            if mac != ignore and str(held or "").upper() == controller:
+                return mac
+        return ""
+
+    def _device_name(self, mac):
+        """The name this device is shown under, for a sentence about it."""
+        seen = self._seen.get(mac)
+        return self.prefs["renames"].get(mac) or (seen[0] if seen else "") or mac
 
     def _controller_for(self, mac):
         return (self.prefs["radio_assignments"].get(mac)
@@ -6797,168 +6947,61 @@ class BtPanel(tk.Frame):
                 or self.prefs.get("hid_radio")
                 or (self._radios[0]["address"] if self._radios else ""))
 
-    def _set_radio_controls(self):
-        enabled = self._multi()
-        available = bool(self._radios)
-        state = "readonly" if enabled and available else "disabled"
-        self.hid_combo.configure(state=state)
-        self.mac_combo.configure(state=state)
-        self.scan_combo.configure(state=state)
-        self.recommended_btn.state(
-            ["!disabled"] if enabled and len(self._radios) >= 3
-            else ["disabled"])
-        if not enabled:
-            self.radio_note.set(
-                "Single-radio compatibility is active. Existing behavior is "
-                "unchanged.")
-        elif available:
-            self.radio_note.set(
-                f"{len(self._radios)} radio"
-                f"{'s' if len(self._radios) != 1 else ''} available. "
-                "Right-click a device to assign it.")
+    def _lanes_laid_out(self):
+        """Are the three lanes on three DISTINCT radios that are present?"""
+        present = {str(radio.get("address", "")).upper()
+                   for radio in self._radios}
+        lanes = [str(self.prefs.get(key, "") or "").upper()
+                 for key in ("hid_radio", "mac_radio", "scan_radio")]
+        if "" in lanes or len(set(lanes)) != 3:
+            return False
+        return set(lanes) <= present
+
+    def _audit_radio_layout(self):
+        """The third fault: radios present, but two lanes sharing one.
+
+        This replaces _set_radio_controls, whose whole job was to grey out four
+        widgets that no longer exist and to keep a note saying which mode was
+        on. There is no mode any more, so there is nothing to say -- until the
+        machine has three radios and is not using them as three, which is a
+        fault with exactly one button behind it. UI THREAD ONLY.
+        """
+        if len(self._radios) >= 3 and not self._lanes_laid_out():
+            self._set_fault(
+                "layout",
+                f"{len(self._radios)} radios are present, but the iPad "
+                "keyboard, the managed Mac and scanning are not on three "
+                "separate ones — so two of them are sharing a radio.")
         else:
-            self.radio_note.set(
-                "No guest radios are available yet. The host restart is still "
-                "required before the three-radio bench test.")
+            self._clear_fault("layout")
 
     def _refresh_radio_choices(self):
-        self._radio_choices = {
-            self._radio_display(radio): radio["address"]
-            for radio in self._radios
-        }
-        values = tuple(self._radio_choices)
-        self.hid_combo.configure(values=values)
-        self.mac_combo.configure(values=values)
-        self.scan_combo.configure(values=values)
-        addresses = {radio["address"] for radio in self._radios}
-        if self._multi() and addresses:
+        """Settle the lane slots against the radios now known. UI THREAD ONLY.
+
+        The combo values this used to fill are gone; the DEFAULTING is not.
+        _controller_for still falls back through scan_radio and hid_radio, and
+        _use_recommended_radios still writes all three, so a machine that has
+        never had a lane assigned must still end up with one.
+        """
+        if self._multi() and self._radios:
             first = self._radios[0]["address"]
             hid = self.prefs.get("hid_radio")
-            mac = self.prefs.get("mac_radio")
-            scan = self.prefs.get("scan_radio")
             if not hid:
                 hid = first
                 self.prefs["hid_radio"] = hid
-            if not scan:
-                scan = hid
-                self.prefs["scan_radio"] = scan
+            if not self.prefs.get("scan_radio"):
+                self.prefs["scan_radio"] = hid
             save_bt_prefs(self.prefs)
-            reverse = {address: label
-                       for label, address in self._radio_choices.items()}
-            self.hid_radio.set(
-                reverse.get(hid, self._radio_label(hid)))
-            self.mac_radio.set(
-                reverse.get(mac, self._radio_label(mac)) if mac else "")
-            self.scan_radio.set(
-                reverse.get(scan, self._radio_label(scan)))
-        else:
-            self.hid_radio.set("")
-            self.mac_radio.set("")
-            self.scan_radio.set("")
-        self._set_radio_controls()
+        self._audit_radio_layout()
 
-    def _on_mode_changed(self, _event=None):
-        enabled = self.radio_mode.get() == "Multiple radios"
-        self.prefs["radio_mode"] = "multi" if enabled else "single"
-        save_bt_prefs(self.prefs)
-        self._refresh_radio_choices()
-        if enabled:
-            self._log("multiple-radio mode enabled — assignments are now "
-                      "controller-specific.")
-        else:
-            self._log("single-radio compatibility restored.")
-        self.refresh(quiet=True)
-
-        def apply():
-            if not self._reachable():
-                return
-            if enabled:
-                controller = self.prefs.get("hid_radio")
-                if not controller:
-                    return
-                command = ("bash /opt/openspan/set-hid-radio.sh "
-                           f"{controller}")
-            else:
-                command = ("bash /opt/openspan/set-hid-radio.sh "
-                           "--default")
-            r = ssh_guest(command, timeout=35, show_result=False)
-            if r.returncode:
-                detail = (r.stderr or r.stdout or "guest command failed").strip()
-                self._log("could not apply radio mode — " + detail[-220:])
-            else:
-                self._log("keyboard radio mode applied.")
-        threading.Thread(target=apply, daemon=True).start()
-
-    def _on_hid_radio(self, _event=None):
-        controller = self._selected_controller(self.hid_radio)
-        if not controller:
-            return
-        if controller == self.prefs.get("mac_radio"):
-            dark_alert(
-                self, "Choose another radio",
-                "The iPad and managed Mac each need an independent Bluetooth "
-                "radio. Assign one of them to a different radio.")
-            self._refresh_radio_choices()
-            return
-        self.prefs["hid_radio"] = controller
-        save_bt_prefs(self.prefs)
-        self._log("assigning the iPad keyboard to "
-                  f"{self._radio_label(controller)}…")
-
-        def apply():
-            r = ssh_guest(
-                "bash /opt/openspan/set-hid-radio.sh " + controller,
-                timeout=35, show_result=False)
-            if r.returncode:
-                detail = (r.stderr or r.stdout or "guest command failed").strip()
-                self._log("keyboard radio assignment FAILED — "
-                          + detail[-220:])
-            else:
-                self._log("iPad keyboard radio assigned.")
-            if self.app:
-                self.app._refresh_all_device_paired()
-        threading.Thread(target=apply, daemon=True).start()
-
-    def _on_mac_radio(self, _event=None):
-        controller = self._selected_controller(self.mac_radio)
-        if not controller:
-            return
-        if controller == self.prefs.get("hid_radio"):
-            dark_alert(
-                self, "Choose another radio",
-                "The managed Mac and iPad cannot share a radio. Move the iPad "
-                "to the internal backup radio first, then assign this external "
-                "TP-Link radio to the Mac.")
-            self._refresh_radio_choices()
-            return
-        self.prefs["mac_radio"] = controller
-        save_bt_prefs(self.prefs)
-        self._log("assigning the managed Mac to "
-                  f"{self._radio_label(controller)}…")
-
-        def apply():
-            r = ssh_guest(
-                "bash /opt/openspan/set-hid-target.sh mac " + controller,
-                timeout=45, show_result=False)
-            if r.returncode:
-                detail = (r.stderr or r.stdout or "guest command failed").strip()
-                self._log("managed Mac radio assignment FAILED — "
-                          + detail[-220:])
-            else:
-                self._log("managed Mac radio assigned and ready.")
-            if self.app:
-                self.app._refresh_all_device_paired()
-        threading.Thread(target=apply, daemon=True).start()
-
-    def _on_scan_radio(self, _event=None):
-        controller = self._selected_controller(self.scan_radio)
-        if not controller:
-            return
-        self.prefs["scan_radio"] = controller
-        save_bt_prefs(self.prefs)
-        self._log("future scans will use "
-                  f"{self._radio_label(controller)}.")
-
+    # _on_mode_changed, _on_hid_radio, _on_mac_radio and _on_scan_radio are GONE
+    # with the four combos that were their only callers. Every one of them wrote
+    # a lane slot and then ran set-hid-radio.sh / set-hid-target.sh on the guest
+    # straight out of a <<ComboboxSelected>> event -- a radio acted on by a
+    # keystroke in a dropdown. The lane slots are still written (by
+    # _use_recommended_radios below, and by _refresh_radio_choices's defaulting)
+    # and the guest is still told; the difference is that it now happens behind
+    # a button Doug pressed on purpose.
     def _use_recommended_radios(self):
         if len(self._radios) < 3:
             return
@@ -7008,13 +7051,32 @@ class BtPanel(tk.Frame):
         threading.Thread(target=apply, daemon=True).start()
 
     def _assign_radio(self, controller):
+        """Give the selected device a radio, or release the one it holds.
+
+        THE ONE PLACE AN ASSIGNMENT IS WRITTEN. It is stored against the
+        DEVICE's MAC and holds a stable CONTROLLER MAC, so it survives a reboot,
+        a re-pair and an hci renumber; the tree's Radio column reads it back.
+
+        The claim is exclusive. A radio another device is holding is already
+        greyed out in the menu that got here, so this refusal is the second
+        line rather than the first -- but the menu is built from a snapshot and
+        this is the write, so the check belongs here too.
+        """
         mac = self._sel_mac()
         if not mac:
             return
         if controller:
+            holder = self._radio_holder(controller, ignore=mac)
+            if holder:
+                self._log(
+                    f"{self._radio_label(controller)} is held by "
+                    f"“{self._device_name(holder)}” — unpair that device to "
+                    "release it.")
+                return
             self.prefs["radio_assignments"][mac] = controller
             self._device_radios[mac] = controller
-            self._log(f"{mac} assigned to {self._radio_label(controller)}.")
+            self._log(f"{mac} holds {self._radio_label(controller)} until it "
+                      "is unpaired.")
         else:
             self.prefs["radio_assignments"].pop(mac, None)
             self._log(f"{mac} radio assignment set to automatic.")
@@ -7038,7 +7100,12 @@ class BtPanel(tk.Frame):
             else:
                 m.add_command(label="🎧  Connect", command=self.connect)
             m.add_command(label="Rename…", command=self.rename)
-            if self._multi() and self._radios:
+            # ASSIGNMENT LIVES HERE AND NOWHERE ELSE. The gate is the radios
+            # actually PRESENT -- not a stored mode, which is what the deleted
+            # Setup combo was. With one radio there is nothing to choose and no
+            # cascade appears; with two or more it does. Nothing about opening
+            # this menu touches a radio.
+            if self._radios:
                 assign = tk.Menu(
                     m, tearoff=0, bg=CARD, fg=FG,
                     activebackground=ACCENT_DIM,
@@ -7051,10 +7118,18 @@ class BtPanel(tk.Frame):
                 for radio in self._radios:
                     controller = radio["address"]
                     label = self._radio_display(radio)
-                    if controller == current:
+                    # A radio another paired device is holding is shown, named
+                    # by its holder, and not selectable. Hiding it would make
+                    # the list look short for no stated reason; the whole point
+                    # of a held radio is that you can see who has it.
+                    holder = self._radio_holder(controller, ignore=mac)
+                    if holder:
+                        label += f"   — held by {self._device_name(holder)}"
+                    elif controller == current:
                         label = "✓ " + label
                     assign.add_command(
                         label=label,
+                        state=("disabled" if holder else "normal"),
                         command=lambda value=controller:
                             self._assign_radio(value))
                 self.assign_menu = assign
@@ -7422,6 +7497,18 @@ class BtPanel(tk.Frame):
             return
         self._log(f"forgetting {mac}…")
         self._seen.pop(mac, None)  # don't let it reappear as "available"
+        # UNPAIRING RELEASES THE CLAIM. A device holds its radio for exactly as
+        # long as it is paired; leaving the assignment behind would keep the
+        # radio reserved for a device that no longer exists, and the next
+        # device to want it would be told it was taken by a name nobody
+        # recognises. Released HERE, on the UI thread, and not in the worker:
+        # `controller` is already captured above, so the guest command is
+        # unaffected, and a release that depended on the guest answering would
+        # strand the radio whenever the guest did not.
+        if self.prefs["radio_assignments"].pop(mac, None):
+            self._device_radios.pop(mac, None)
+            save_bt_prefs(self.prefs)
+            self._log(f"{mac} released its radio.")
         def work():
             if self.app:
                 self.app._manual_bt_begin()
@@ -11315,8 +11402,8 @@ class App:
         if not controller:
             dark_alert(
                 self.root, f"Assign a radio to {label}",
-                f"Every device needs its OWN Bluetooth radio. Open Radio "
-                f"options and assign one to “{label}” first.")
+                f"Every device needs its OWN Bluetooth radio. Right-click "
+                f"“{label}” in Devices (or press ⋯) and choose Radio… first.")
             return
         clash = next(
             (other for other in self.canvas.devices()
@@ -12882,7 +12969,8 @@ class App:
         self._dev_state(device["id"])
         self._rebuild_device_rows()
         _emit("event", f"added device “{device['name']}” on port "
-                       f"{device['port']} — assign it a radio in Radio options.")
+                       f"{device['port']} — right-click it (or press ⋯) and "
+                       f"choose Radio… to give it one.")
 
     def _rename_device(self, device_id):
         record = self.device_record(device_id)

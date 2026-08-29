@@ -152,14 +152,22 @@ for _cls in [node for node in ast.walk(MODULE)
                       and _name(n.func) == "ttk.Scrollbar"])
         if _count:
             scroll_owners[f"{_cls.name}.{_item.name}"] = _count
-check("law 10: exactly two scrollbars, one per surface",
-      len(scrollbars) == 2, f"{len(scrollbars)} Scrollbar calls")
+# ONE PER SURFACE, and the count moves when a surface is added -- it has been
+# 3, then 1, then 2, now 3 again, and each change was a law-10 decision rather
+# than drift. So this asserts OWNERSHIP, not a number in isolation: every
+# scroller belongs to exactly one surface, and no method owns two.
+check("law 10: exactly three scrollbars, one per surface",
+      len(scrollbars) == 3, f"{len(scrollbars)} Scrollbar calls")
 check("the Dashboard owns exactly one, built in App.__init__",
       scroll_owners.get("App.__init__") == 1, repr(scroll_owners))
 check("the Console owns exactly one, built in _console_mount",
       scroll_owners.get("App._console_mount") == 1, repr(scroll_owners))
-check("no third owner: nothing else in the module builds a scroller",
-      set(scroll_owners) == {"App.__init__", "App._console_mount"},
+check("Scripts owns exactly one, built in _build_scripts_surface",
+      scroll_owners.get("App._build_scripts_surface") == 1,
+      repr(scroll_owners))
+check("no fourth owner: nothing else in the module builds a scroller",
+      set(scroll_owners) == {"App.__init__", "App._console_mount",
+                             "App._build_scripts_surface"},
       repr(scroll_owners))
 check("the dock rail builds no scroller: a rail that scrolls could hide an "
       "entry, and every entry must always be reachable",
@@ -231,6 +239,18 @@ for where, body in tree_mutators:
           "fit_tree_height(self.tree)" in body, where)
 check("the device tree declares no fixed row count",
       "height=8" not in bt_init and "height=TREE_MIN_ROWS" in bt_init)
+# LAW 10 AND THE FAULT BANNER (v3.157). The Radio options panel it replaced was
+# a stack of packed widgets; this is a Frame of Frames that appears only while
+# an audit has found a fault. Nothing in it scrolls, so it cannot be a second
+# scroller inside the page's one scroller -- and it is shown and hidden by the
+# packer, never by moving a viewport over hidden content.
+_fault_row_src = _body_src(_method("BtPanel", "_build_fault_row"))
+check("the fault banner introduces no scrolling surface of its own",
+      not any(token in _fault_row_src for token in
+              ("Scrollbar", "yscrollcommand", "xscrollcommand", "tk.Text",
+               "tk.Canvas", "Treeview", "tk.Listbox")), _fault_row_src)
+check("it is shown and hidden by the packer, not by a scroll position",
+      "pack_forget()" in _body_src(_method("BtPanel", "_show_faults")))
 
 # self.out (the Bluetooth panel's log) is the ONE Text left on the page, so it
 # is still the one that must fit its content and must never chase its own tail.

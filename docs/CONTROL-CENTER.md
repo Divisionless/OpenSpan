@@ -201,6 +201,33 @@ Consequently:
 - **The "dark-scrollbar contract" clause** in §Acceptance criteria continues to refer to the
   page's own scrollbar, which remains dark-styled.
 
+---
+
+## Amendment 2026-08-29 — two Phase 2 interpretations, determined
+
+*Doug: "determine what is correct .. this is technical jargon and not something I can rule on."
+Both are confirmed as built; the reasoning is recorded here so Phase 3 builds on a stated
+decision rather than an assumption.*
+
+**1. Elevation is orthogonal to route, not a fifth route. CORRECT AS BUILT.** Elevation is a
+property of the *destination*, read from the catalog — not a way of reaching it. The same route
+(`control.exe /name <canonical>`) needs elevation for some items and not others, so a fifth
+"elevated route" would duplicate every existing route rather than add one. §Activation
+architecture lists "explicit elevated route when genuinely required" as a *branch in dispatch*,
+which is exactly what a route plus an elevation flag produces. The safety property §Acceptance
+criteria actually demands — "items requiring elevation are visibly marked; nothing silently
+elevates" — is better served this way: the flag comes from the catalog, the response carries it,
+the log records it, and a caller who tries to *supply* elevation is rejected as `schema-invalid`.
+
+**2. The disarmed activation seam. CORRECT, with one obligation.** The gate is not in the frozen
+spec; it was added by the implementation. It is nonetheless right: §Delivery phases gates Phase 6
+live acceptance on Doug's word, and a seam that cannot fire without an explicit arming token is
+that gate made mechanical instead of remembered. Phase 2's own gate — "No Explorer launch path;
+hostile-request tests pass" — is provable *because* nothing can launch.
+**The obligation:** Phase 6 must have a documented, reachable way to arm it. A safety gate with
+no key is a defect deferred, not a defect avoided. Phase 6 does not begin until that path is
+written down here.
+
 ### Longer horizon
 
 After the launch surface is proven:

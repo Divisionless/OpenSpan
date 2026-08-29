@@ -617,6 +617,26 @@ check("a wedged radio's explanation is not overwritten by a bare count",
 check("every Tk call in the worker goes through app.ui, including after()",
       "self.app.ui(lambda: self.after(" in reclaim_src)
 
+# ---- where that outcome now LANDS (v3.157) ---------------------------------
+# The always-on "Checking which radios the VM holds…" label is gone with the
+# rest of the Radio options panel. The same sentence is still produced, and it
+# is still the one being read -- it now reaches an inline fault banner in the
+# device list, and only when there is something to repair. The repairable
+# COUNT is the fault; the sentence is only what it says.
+apply_src = inspect.getsource(A.BtPanel._radio_usb_apply)
+check("the status label the panel used to carry is gone",
+      "self.radio_usb" not in src and "radio_usb.set(" not in src)
+check("a repairable count raises the fault and carries the sentence with it",
+      "self._set_fault('usb', text)" in ast.unparse(
+          ast.parse(textwrap.dedent(apply_src))))
+check("nothing repairable clears it, so a booting VM shows nothing",
+      "self._clear_fault('usb')" in ast.unparse(
+          ast.parse(textwrap.dedent(apply_src))))
+clear_src = textwrap.dedent(inspect.getsource(A.BtPanel._clear_fault))
+check("a remedy that is RUNNING is never unpacked underneath itself -- "
+      "_reclaim_radios reports progress with a repairable count of 0",
+      "button_is_busy" in clear_src)
+
 # ---- the launch check has to outlast a cold boot ----------------------------
 # Doug, after a cold restart: all three radios genuinely Captured, the VM up,
 # the app's own status line saying vm: up / devices 3/3 / READY -- and this

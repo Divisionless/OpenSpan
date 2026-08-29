@@ -354,7 +354,10 @@ with open(os.path.join(_project_root, "create-vm.ps1"),
 check("new VMs pre-expose a second daemon lane",
       f'tcp,,{_PORT + 1},,{_PORT + 1}' in _vm_source)
 
-# Multi-radio UI is opt-in and keeps stable controller identities.
+# RADIO OWNERSHIP IS A PROPERTY OF A PAIRED DEVICE (v3.157). The "Radio
+# options" panel and its four combos are gone; what is exercised here is the
+# tree's Radio column, which is now the only place an assignment is shown, and
+# the lane defaulting that survived the panel.
 panel = app.bt_panel
 _original_save_prefs = openspan.save_bt_prefs
 openspan.save_bt_prefs = lambda _prefs: None
@@ -366,27 +369,54 @@ panel.prefs = {
     "radio_mode": "single",
     "radio_assignments": {},
     "hid_radio": "",
+    "mac_radio": "",
     "scan_radio": "",
     "radio_labels": {},
 }
-panel.radio_mode.set("Single radio (recommended)")
 panel._radios = []
 panel._refresh_radio_choices()
-check("radio UI: single-radio compatibility is the default",
-      str(panel.hid_combo.cget("state")) == "disabled"
-      and str(panel.mac_combo.cget("state")) == "disabled"
-      and "Single-radio compatibility" in panel.radio_note.get())
+check("radio UI: the settings panel is gone, widgets and all",
+      not any(hasattr(panel, name) for name in
+              ("mode_combo", "hid_combo", "mac_combo", "scan_combo",
+               "radio_note", "radio_usb", "radio_custody_text")))
+check("radio UI: a machine with no assignments at all is single-radio",
+      not openspan.multi_radio_enabled(panel.prefs))
+# The banner, driven rather than observed: a real launch audit may legitimately
+# have found something on this desk, so the no-fault case is MADE and then
+# checked. winfo_manager() is "" for a widget no geometry manager owns, and
+# unlike winfo_ismapped() it still says so under a withdrawn root.
+for _key in ("usb", "custody", "layout"):
+    panel._clear_fault(_key)
+check("radio UI: no fault renders nothing — the banner is not packed at all",
+      panel._faults == {} and panel._fault_shown is False
+      and panel.fault_box.winfo_manager() == "")
+panel._set_fault("usb", "2 radios are Busy on Windows.")
+check("radio UI: a fault packs the banner and names itself",
+      panel._fault_shown is True
+      and panel.fault_box.winfo_manager() == "pack"
+      and panel._fault_rows["usb"]["text"].get()
+      == "2 radios are Busy on Windows."
+      and panel._fault_rows["usb"]["row"].winfo_manager() == "pack"
+      and panel._fault_rows["custody"]["row"].winfo_manager() == "")
+panel._clear_fault("usb")
+check("radio UI: clearing the last fault takes the banner away again",
+      panel._faults == {} and panel.fault_box.winfo_manager() == "")
 panel.prefs = {
     "renames": {},
     "blacklist": set(),
-    "radio_mode": "multi",
+    "radio_mode": "single",          # the STALE toggle, deliberately
     "radio_assignments": {
         "AA:BB:CC:00:00:20": "AA:BB:CC:00:00:02"},
     "hid_radio": "AA:BB:CC:00:00:01",
+    "mac_radio": "",
     "scan_radio": "AA:BB:CC:00:00:02",
     "radio_labels": {},
 }
-panel.radio_mode.set("Multiple radios")
+# The bug Doug hit: three radios in use, "single" in the file, and therefore no
+# radios in the dropdowns and "Default" in every row. The mode is now read off
+# the assignments, which are the thing that is actually true.
+check("radio UI: a stale single-radio toggle no longer hides real radios",
+      openspan.multi_radio_enabled(panel.prefs))
 panel._apply_rows(
     [("AA:BB:CC:00:00:20", "Onn", True, True, "audio-card",
       "AA:BB:CC:00:00:02")],
@@ -394,18 +424,19 @@ panel._apply_rows(
       "hardware": "Intel Bluetooth", "alias": "Intel"},
      {"address": "AA:BB:CC:00:00:02", "hci": "hci1",
       "hardware": "TP-Link Bluetooth", "alias": "TP-Link"}])
-check("radio UI: all guest controllers are exposed",
-      len(panel._radios) == 2
-      and len(panel.hid_combo.cget("values")) == 2)
-check("radio UI: saved iPad and scan assignments are restored",
-      panel._selected_controller(panel.hid_radio) == "AA:BB:CC:00:00:01"
-      and panel._selected_controller(panel.scan_radio)
-      == "AA:BB:CC:00:00:02")
-check("radio UI: device row identifies its assigned controller",
+check("radio UI: all guest controllers are exposed", len(panel._radios) == 2)
+check("radio UI: the Radio column names the controller the device HOLDS",
       "TP-Link Bluetooth" in panel.tree.item(
           "AA:BB:CC:00:00:20", "values")[3])
+check("radio UI: the held radio is attributed to its holder",
+      panel._radio_holder("AA:BB:CC:00:00:02") == "AA:BB:CC:00:00:20"
+      and panel._radio_holder("AA:BB:CC:00:00:02",
+                              ignore="AA:BB:CC:00:00:20") == "")
+check("radio UI: an unheld radio is free",
+      panel._radio_holder("AA:BB:CC:00:00:01") == "")
+check("radio UI: two radios is not the three-radio layout fault",
+      "layout" not in panel._faults)
 panel.prefs = openspan.load_bt_prefs()
-panel.radio_mode.set("Single radio (recommended)")
 panel._radios = []
 panel._refresh_radio_choices()
 openspan.save_bt_prefs = _original_save_prefs

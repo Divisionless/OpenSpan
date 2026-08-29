@@ -1,0 +1,23 @@
+# 10-example.eos -- written by EsotericOS the first time the scripts
+# directory was created. Delete it; it will not come back.
+#
+# Every *.eos file in this directory is loaded, in filename order. A # starts
+# a comment. The whole format -- scopes, chords, verbs, and every error it can
+# report -- is in docs\SCRIPTS-FORMAT.md.
+#
+# NOTHING HERE FIRES until native scripts are switched on from the Scripts
+# surface. The engine ships disabled, so a file sitting in this directory
+# binds nothing at all until you say so.
+
+# `scope os` is the widest scope: it matches wherever the focus is.
+scope os
+  # Centre the focused window on the work area it is already on. Harmless and
+  # reversible, and it proves the chord reached the engine.
+  Ctrl+Alt+Shift+C -> window center
+
+# A narrower scope beats a wider one whatever the priority says. This one
+# matches only while Notepad has the focus, and it hands the chord straight
+# back to Windows instead of acting -- which is how an exception is carved out
+# of a wider binding.
+scope window process=notepad
+  Ctrl+Alt+Shift+C -> pass

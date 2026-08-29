@@ -618,12 +618,35 @@ APP = MODULE.parent / "openspan.py"
 app_source = APP.read_text(encoding="utf-8")
 app_tree = ast.parse(app_source)
 
-check("the panel has a custody status line", "radio_custody_text" in app_source)
-check("there is exactly ONE custody button",
-      app_source.count("self.custody_btn = ttk.Button") == 1,
-      str(app_source.count("self.custody_btn = ttk.Button")))
-check("its command is the take-custody handler",
-      "command=self._take_custody" in app_source)
+# THE ALWAYS-ON CUSTODY LABEL IS GONE (v3.157). It said something on every
+# launch of every machine, which is exactly how a status line stops being read.
+# The audit now feeds a fault banner: it reports in full to the console every
+# time, and reaches the screen only when custody_fault() names a fault it has a
+# button for.
+check("the always-on custody status line is gone",
+      "radio_custody_text" not in app_source)
+check("there is exactly ONE custody button, and it is a fault-banner row",
+      app_source.count("self.custody_btn = self._build_fault_row(") == 1
+      and "self.custody_btn = ttk.Button" not in app_source,
+      str(app_source.count("self.custody_btn = self._build_fault_row(")))
+check("its command is still the take-custody handler",
+      "\"custody\", \"Take custody\", self._take_custody" in app_source)
+import openspan as OPENSPAN  # noqa: E402
+check("the fault predicate is a pure function, separate from the audit",
+      callable(getattr(OPENSPAN, "custody_fault", None)))
+check("a phantom radio is a fault",
+      OPENSPAN.custody_fault({"verdict": RC.PHANTOM}, RC))
+check("a driver re-bound onto a radio the VM does not hold is a fault",
+      OPENSPAN.custody_fault(
+          {"verdict": RC.WINDOWS_OWNED, "present": True,
+           "vm_holds": False}, RC))
+check("an ORDINARY runtime capture is not — the real node is torn down and a "
+      "proxy stands in, and that is what a working radio looks like",
+      not OPENSPAN.custody_fault(
+          {"verdict": RC.WINDOWS_OWNED, "present": False,
+           "proxy_present": True, "vm_holds": True}, RC))
+check("a radio already in custody is not a fault",
+      not OPENSPAN.custody_fault({"verdict": RC.CUSTODY, "present": True}, RC))
 
 funcs = {n.name: n for n in ast.walk(app_tree)
          if isinstance(n, ast.FunctionDef)}
@@ -662,6 +685,18 @@ if audit_fn:
     check("the launch audit only reports: it never takes custody",
           ".take(" not in src and "apply=True" not in src
           and "give_back" not in src, src[:0])
+    # This sample fires 1.8s after launch, in front of a cold boot. With the
+    # bridge down Windows legitimately owns every radio, and reporting that as
+    # a fault would put a banner on every launch of a machine with nothing
+    # wrong with it -- which is precisely what the three deleted status labels
+    # did.
+    check("it is silent while the VM is down, so a cold boot shows nothing",
+          "if not vm_running():" in src, src[:0])
+    check("every audit still reports IN FULL to the console; only a named "
+          "fault reaches the screen",
+          "self._log('custody: ' + radio_custody.custody_line(row))"
+          in ast.unparse(audit_fn)
+          and "custody_fault(row, radio_custody)" in src, src[:0])
 
 
 # ---- 12. bake-in.ps1 and the docs ------------------------------------------

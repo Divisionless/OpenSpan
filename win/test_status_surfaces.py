@@ -657,10 +657,18 @@ check("all three left-column LabelFrames are gone",
       and "ttk.LabelFrame(\n" not in init_src
       and init_src.count("ttk.LabelFrame") == 0,
       f"{init_src.count('ttk.LabelFrame')} remain")
-check("...and the right column's two are deliberately untouched — that column "
-      "does not bind the window's height",
-      SOURCE.count("ttk.LabelFrame(self, text=\"Radio options\"") == 1
-      and SOURCE.count("ttk.LabelFrame(parent, text=\"Audio & status\"") == 1)
+check("...and the right column's remaining one is deliberately untouched — "
+      "that column does not bind the window's height",
+      SOURCE.count("ttk.LabelFrame(parent, text=\"Audio & status\"") == 1)
+# "Radio options" did not lose its frame for chrome. It lost the whole panel:
+# a settings surface for something that is not a setting. Doug, running three
+# radios while it claimed single-radio mode was active: *"It is not possible
+# for it to look like that... we don't need to even have this section because
+# the paired device list should handle all of this."* The assertion is that no
+# LabelFrame is built for it anywhere, under any parent.
+check("the Radio options panel is gone, frame and all",
+      "Radio options\"" not in SOURCE
+      and "ttk.LabelFrame(self," not in SOURCE)
 check("the ttk TLabelframe theming therefore still has a consumer and must "
       "stay",
       'st.configure("TLabelframe"' in SOURCE)

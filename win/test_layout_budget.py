@@ -169,6 +169,25 @@ check("Bluetooth body keeps its declared row height",
 check("Bluetooth tree still expands to fill its row (law 10: no scrollbar beside it)",
       bt_packs.get("self.tree", {}).get("expand") is True,
       repr(bt_packs.get("self.tree")))
+# THE FAULT BANNER COSTS THE PAGE NOTHING AT REST. It replaced a LabelFrame
+# holding four combos, three status labels and three buttons -- all of which
+# were packed unconditionally, on every launch, whether or not anything was
+# wrong. This one is built in __init__ and packed by _show_faults, only while
+# an audit has actually found a fault, so a healthy desk spends zero pixels on
+# it. Its absence from bt_packs IS the assertion.
+check("the fault banner is not packed while the panel is built",
+      "self.fault_box" not in bt_packs, repr(sorted(bt_packs)))
+show_packs = _packs(_method("BtPanel", "_show_faults"))
+check("and when a fault does pack it, it takes width and never surplus height",
+      show_packs.get("self.fault_box", {}).get("fill") == "x"
+      and not show_packs.get("self.fault_box", {}).get("expand"),
+      repr(show_packs.get("self.fault_box")))
+# The rows are subscripts (row['row']), which _packs cannot name, so this one
+# is read off the source of the method that packs them.
+_row_src = ast.unparse(_method("BtPanel", "_set_fault"))
+check("each fault row is width-only too",
+      "row['row'].pack(fill='x'" in _row_src and "expand" not in _row_src,
+      _row_src)
 
 
 print("\n---- arrangement remains width-fitted and bounded ----")
